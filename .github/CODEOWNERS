@@ -1,0 +1,39 @@
+# SafeSOC — Code Owners
+#
+# This repo has no GitHub remote configured yet, so the real GitHub
+# usernames for the team below are unknown. Replace every @TODO-* handle
+# with the correct @username once the repo is pushed to GitHub — until
+# then, GitHub will not actually enforce any of these rules.
+#
+# Team (Phase 1 report):
+#   Shreyas Satish     [1JB23CS146]
+#   Sohan Kanna D.      [1JB23CS152]
+#   Tanush Somani       [1JB23CS167]
+#   Vishwas Adhikari    [1JB23CS187]
+#   Guide: Dr. Krishna A N
+
+# Default owners for everything not matched below
+*                           @TODO-github-handle-1 @TODO-github-handle-2 @TODO-github-handle-3 @TODO-github-handle-4
+
+# SafeSOC backend
+/backend/                   @TODO-github-handle
+
+# SafeSOC frontend (not started)
+/frontend/                  @TODO-github-handle
+
+# CloudLens (cloud security module)
+/cloud/                     @TODO-github-handle
+
+# ML / anomaly detection
+/ml/                        @TODO-github-handle
+
+# Synthetic data / injector
+/injector/                  @TODO-github-handle
+
+# Documentation
+/docs/                      @TODO-github-handle
+README.md                   @TODO-github-handle
+CLAUDE.md                   @TODO-github-handle
+
+# CI / repo configuration
+/.github/                   @TODO-github-handle

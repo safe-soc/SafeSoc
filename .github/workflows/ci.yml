@@ -1,0 +1,81 @@
+name: CI
+
+# Kept intentionally minimal: this repo has no automated test suite yet
+# (see docs/testing.md). These jobs are smoke checks using only the
+# dependencies already declared in each subproject — nothing extra installed.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  safesoc-backend:
+    name: SafeSOC Backend — install & import check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Import smoke test
+        run: python -c "from app.main import app; print('SafeSOC backend imports OK')"
+
+      # No pytest step: backend/tests/ currently has no test cases
+      # (only empty __init__.py / conftest.py). Add one here once
+      # real tests exist.
+
+  cloudlens-backend:
+    name: CloudLens Backend — Django check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloud/AWS-IAM-backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Django system check
+        run: python manage.py check
+
+  cloudlens-frontend:
+    name: CloudLens Frontend — lint, typecheck, build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloud/AWS-IAM-frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: cloud/AWS-IAM-frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
