@@ -1,8 +1,9 @@
 name: CI
 
-# Kept intentionally minimal: this repo has no automated test suite yet
-# (see docs/testing.md). These jobs are smoke checks using only the
-# dependencies already declared in each subproject — nothing extra installed.
+# Kept intentionally minimal (see docs/testing.md). The backend job runs
+# its real pytest suite; the CloudLens jobs remain smoke checks (no test
+# suite exists there yet), using only dependencies already declared in
+# each subproject — nothing extra installed.
 
 on:
   push:
@@ -12,7 +13,7 @@ on:
 
 jobs:
   safesoc-backend:
-    name: SafeSOC Backend — install & import check
+    name: SafeSOC Backend — install, import check & tests
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -30,9 +31,8 @@ jobs:
       - name: Import smoke test
         run: python -c "from app.main import app; print('SafeSOC backend imports OK')"
 
-      # No pytest step: backend/tests/ currently has no test cases
-      # (only empty __init__.py / conftest.py). Add one here once
-      # real tests exist.
+      - name: Run tests
+        run: pytest
 
   cloudlens-backend:
     name: CloudLens Backend — Django check

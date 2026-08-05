@@ -11,7 +11,7 @@ pytest
 
 All 31 pass, offline — no live OpenSearch, Docker, or network access required. OpenSearch interactions are mocked (`mock_bulk_index_logs`, `mock_opensearch_unreachable` fixtures in `conftest.py`) rather than hitting a real cluster.
 
-**Not yet true:** these tests don't run automatically. `.github/workflows/ci.yml` still only runs the import smoke-check job described in §6 below — wiring `pytest` into CI is a separate, not-yet-done issue (`docs/roadmap-issues.md` SS-003).
+**Now automatic:** `.github/workflows/ci.yml`'s `safesoc-backend` job runs this suite (`pytest`, after the install and import-check steps) on every push/PR — a failing test fails the build (SS-003).
 
 This should still be read carefully: the Phase 1 report's "end-to-end tested ingestion pipelines with full schema compliance" (Abstract, §6.2) referred to **manual verification**, not this suite (which postdates the report). The two are separate claims.
 
@@ -52,7 +52,7 @@ The SRS's throughput target (≥100 events/sec) and latency targets (<500ms aler
 
 | Test type | Status |
 |---|---|
-| Unit/integration tests (backend) | **31 tests, passing** (`schemas`, `services/ingestion`, `db/opensearch`, `routers/health`) — not yet run in CI (SS-003) |
+| Unit/integration tests (backend) | **31 tests, passing** (`schemas`, `services/ingestion`, `db/opensearch`, `routers/health`) — **runs in CI** on every push/PR |
 | Unit/integration tests (CloudLens) | None exist |
-| CI pipeline | Runs smoke-check jobs (backend import check, CloudLens Django check, CloudLens frontend lint/typecheck/build) — does not yet run the backend `pytest` suite |
+| CI pipeline | `safesoc-backend` job runs install → import check → `pytest`; `cloudlens-*` jobs remain smoke checks (Django check, frontend lint/typecheck/build) — no CloudLens test suite exists yet |
 | Manual verification | Performed for Phase 1 ingestion pipeline (per report), not reproducible from repo alone |

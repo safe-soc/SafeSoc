@@ -72,12 +72,13 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `docs/testing.md` (doc accuracy sync)
 
 #### SS-003 — Wire pytest into CI
+**Status:** ✅ Done (2026-08-05)
 **Description:** Add a `pytest` step to the existing `safesoc-backend` job in `.github/workflows/ci.yml` (currently only an import smoke test), now that real tests exist.
 **Priority:** High · **Effort:** XS · **Dependencies:** SS-002
 **Acceptance Criteria:**
-- CI fails if any backend test fails
-- `docs/testing.md` updated to reflect that a real suite now runs in CI
-**Files likely to change:**
+- [x] CI fails if any backend test fails (added `- name: Run tests / run: pytest` step, after install and import check)
+- [x] `docs/testing.md` updated to reflect that a real suite now runs in CI
+**Files changed:**
 - `.github/workflows/ci.yml`
 - `docs/testing.md`
 
