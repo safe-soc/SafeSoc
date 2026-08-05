@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
+from app.core.exceptions import SafeSOCError, safesoc_exception_handler
 from app.routers import health
 from app.routers.v1 import ingest
 
@@ -24,6 +25,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Error handling: catches SafeSOCError and every subclass (IngestionError,
+# OpenSearchError, ...), producing a consistent {"error", "status_code"} body.
+app.add_exception_handler(SafeSOCError, safesoc_exception_handler)
 
 # Register routers
 app.include_router(health.router)

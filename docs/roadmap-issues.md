@@ -83,16 +83,20 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `docs/testing.md`
 
 #### SS-004 — Register the `SafeSOCError` exception handler
+**Status:** ✅ Done (2026-08-05)
 **Description:** `backend/app/core/exceptions.py` defines `SafeSOCError`/`IngestionError`/`OpenSearchError` and a handler, but `main.py` never calls `app.add_exception_handler(...)`, and the ingest router raises inline `HTTPException` instead of the typed exceptions — two disconnected error-handling patterns exist today (see `docs/coding-standards.md` §8). Pick one and make it consistent.
 **Priority:** Medium · **Effort:** S · **Dependencies:** none
 **Acceptance Criteria:**
-- `SafeSOCError` handler is registered in `main.py`, or the unused handler/exception classes are removed — one coherent pattern, not two
-- Existing endpoints raise the typed exceptions where applicable
-- A regression test confirms the handler produces the documented `{"error": ..., "status_code": ...}` shape
-**Files likely to change:**
+- [x] `SafeSOCError` handler is registered in `main.py` (`app.add_exception_handler(SafeSOCError, safesoc_exception_handler)` — registering the base class catches all subclasses)
+- [x] Existing endpoints raise the typed exceptions where applicable (`ingest.py`'s two inline `HTTPException`s → `IngestionError`)
+- [x] A regression test confirms the handler produces the documented `{"error": ..., "status_code": ...}` shape (`test_exceptions.py`, 4 new tests)
+**Files changed:**
 - `backend/app/main.py`
 - `backend/app/routers/v1/ingest.py`
-- `backend/app/core/exceptions.py`
+- `backend/tests/test_exceptions.py` (new)
+- `docs/coding-standards.md`, `docs/api-design.md`, `docs/testing.md` (doc accuracy sync)
+
+**Scoped out (not this issue):** `OpenSearchError` is registered and handler-ready but has no raise site yet — the ingestion path's OpenSearch I/O failures still surface as an unhandled 500. `core/exceptions.py`'s "Files likely to change" listing didn't call for touching `services/ingestion.py`/`db/opensearch.py`, and doing so wasn't necessary to satisfy this issue's acceptance criteria — left as a clearly-documented follow-on (see `docs/coding-standards.md` §8) rather than folded in here.
 
 #### SS-005 — Enforce the 1,000-log ingestion batch cap
 **Description:** The SRS specifies a max batch size of 1,000 logs per `/api/v1/ingest` request; `INGEST_BATCH_SIZE=500` exists in config but nothing currently rejects an oversized request.

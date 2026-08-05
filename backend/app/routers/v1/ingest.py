@@ -3,8 +3,9 @@ SafeSOC — Ingestion API Endpoint
 POST /api/v1/ingest — accepts single or batch security logs.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
+from app.core.exceptions import IngestionError
 from app.schemas.log import NormalizedLog
 from app.services.ingestion import process_ingest_batch
 from app.utils.logger import get_logger
@@ -31,13 +32,10 @@ async def ingest_logs(payload: dict):
     elif "logs" in payload:
         logs = payload["logs"]
     else:
-        raise HTTPException(
-            status_code=422,
-            detail="Request must contain 'log' (single) or 'logs' (batch)",
-        )
+        raise IngestionError("Request must contain 'log' (single) or 'logs' (batch)")
 
     if not isinstance(logs, list):
-        raise HTTPException(status_code=422, detail="'logs' must be a list")
+        raise IngestionError("'logs' must be a list")
 
     # Extract tenant_id from payload or default (auth middleware handles this later)
     tenant_id = payload.get("tenant_id", "default-tenant")

@@ -73,7 +73,7 @@ logger.info("Batch ingested", accepted=len(accepted), rejected=len(rejected))
 
 ## 8. Error Handling
 
-`backend/app/core/exceptions.py` defines a `SafeSOCError` base exception with `IngestionError` (422) and `OpenSearchError` (503) subclasses, plus a `safesoc_exception_handler` FastAPI handler. **Observed inconsistency:** this handler is defined but not currently registered in `main.py` (`app.add_exception_handler(...)` is never called), and the implemented ingestion path uses inline `HTTPException` in the router instead of raising `IngestionError`/`OpenSearchError`. Anyone touching error handling should either wire up `safesoc_exception_handler` and switch to raising the typed exceptions, or remove the unused handler — right now the codebase has two parallel, disconnected error-handling patterns.
+`backend/app/core/exceptions.py` defines a `SafeSOCError` base exception with `IngestionError` (422) and `OpenSearchError` (503) subclasses, plus a `safesoc_exception_handler` FastAPI handler, registered once in `main.py` via `app.add_exception_handler(SafeSOCError, safesoc_exception_handler)` — registering the base class is sufficient to catch every subclass too, since Starlette walks the exception's MRO to find a handler. Routers raise the typed exceptions directly (e.g. `ingest.py` raises `IngestionError` for a malformed payload) rather than ad-hoc `HTTPException`s, so every SafeSOC-specific error produces the same `{"error": <message>, "status_code": <code>}` body. `OpenSearchError` is defined and wired into the handler but has no raise site yet — the ingestion path's OpenSearch I/O failures still propagate as an unhandled 500 rather than a clean 503; wiring that up is a natural follow-on, not yet done.
 
 ## 9. Validation Philosophy
 

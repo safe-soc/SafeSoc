@@ -62,7 +62,7 @@ Each log is validated against `NormalizedLog` (see `database-schema.md` for the 
 On partial failure, `errors` is a list of `{ "index": <int>, "error": "<pydantic message>", "raw": {...truncated fields...} }`.
 
 **Error responses**
-- `422` — payload has neither `"log"` nor `"logs"` key, or `"logs"` is not a list.
+- `422` — payload has neither `"log"` nor `"logs"` key, or `"logs"` is not a list. Body: `{"error": "<message>", "status_code": 422}` (via the registered `SafeSOCError`/`IngestionError` handler, not FastAPI's default `{"detail": ...}` shape — SS-004).
 
 ### `GET /api/v1/alerts`
 
