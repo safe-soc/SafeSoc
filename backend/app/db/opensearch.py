@@ -1,0 +1,170 @@
+"""
+SafeSOC — OpenSearch Client
+Connection management, index setup, bulk writes, and search queries.
+"""
+
+from datetime import datetime
+from typing import Optional
+
+from opensearchpy import OpenSearch, exceptions
+
+from app.core.config import settings
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+# Index pattern with monthly rotation
+INDEX_PATTERN = "safesoc-alerts-{YYYY}.{MM}"
+
+
+def _build_index_name(timestamp: Optional[datetime] = None) -> str:
+    """Generate monthly index name: safesoc-alerts-2026.05"""
+    ts = timestamp or datetime.utcnow()
+    return f"safesoc-alerts-{ts.year}.{ts.month:02d}"
+
+
+def get_client() -> OpenSearch:
+    """Create and return an OpenSearch client instance."""
+    return OpenSearch(
+        hosts=[{"host": settings.OPENSEARCH_HOST, "port": settings.OPENSEARCH_PORT}],
+        http_auth=(settings.OPENSEARCH_USER, settings.OPENSEARCH_PASSWORD),
+        use_ssl=settings.OPENSEARCH_USE_SSL,
+        verify_certs=settings.OPENSEARCH_VERIFY_CERTS,
+        ssl_show_warn=False,
+    )
+
+
+async def check_connection() -> bool:
+    """Check if OpenSearch is reachable. Returns True if healthy."""
+    try:
+        client = get_client()
+        return client.ping()
+    except Exception:
+        return False
+
+
+async def ensure_index_exists(client: OpenSearch, index_name: str) -> None:
+    """Create index with mapping if it doesn't already exist."""
+    from app.db.mappings.alert_mapping import ALERT_MAPPING
+
+    if not client.indices.exists(index=index_name):
+        client.indices.create(index=index_name, body=ALERT_MAPPING)
+        logger.info("Created index", index=index_name)
+
+
+async def bulk_index_logs(logs: list[dict]) -> int:
+    """
+    Write a batch of normalized logs to OpenSearch.
+    Returns the number of successfully indexed documents.
+    """
+    if not logs:
+        return 0
+
+    client = get_client()
+    success_count = 0
+    failed_count = 0
+
+    # Group logs by their monthly index
+    batches: dict[str, list[dict]] = {}
+    for log in logs:
+        ts = log.get("timestamp")
+        if isinstance(ts, str):
+            ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        index_name = _build_index_name(ts)
+        batches.setdefault(index_name, []).append(log)
+
+    # Bulk write per index
+    for index_name, batch in batches.items():
+        await ensure_index_exists(client, index_name)
+
+        body = []
+        for doc in batch:
+            body.append({"index": {"_index": index_name, "_id": doc.get("alert_id")}})
+            body.append(doc)
+
+        try:
+            response = client.bulk(body=body, refresh=True)
+            if response.get("errors"):
+                for item in response["items"]:
+                    if "error" in item.get("index", {}):
+                        failed_count += 1
+                        logger.error(
+                            "Bulk index error",
+                            error=item["index"]["error"],
+                            doc_id=item["index"].get("_id"),
+                        )
+                    else:
+                        success_count += 1
+            else:
+                success_count += len(batch)
+
+        except exceptions.OpenSearchException as e:
+            logger.error("Bulk index failed", error=str(e))
+            failed_count += len(batch)
+
+    logger.info("Bulk index complete", success=success_count, failed=failed_count)
+    return success_count
+
+
+async def search_alerts(
+    tenant_id: str,
+    severity: Optional[str] = None,
+    log_type: Optional[str] = None,
+    source: Optional[str] = None,
+    host_id: Optional[str] = None,
+    timerange_hours: int = 24,
+    page: int = 1,
+    size: int = 50,
+) -> dict:
+    """
+    Search alerts with mandatory tenant_id filter.
+    Returns paginated results with total count.
+    """
+    client = get_client()
+
+    must_filters = [{"term": {"tenant_id": tenant_id}}]
+
+    if severity:
+        must_filters.append({"term": {"severity": severity}})
+    if log_type:
+        must_filters.append({"term": {"log_type": log_type}})
+    if source:
+        must_filters.append({"term": {"source": source}})
+    if host_id:
+        must_filters.append({"term": {"host_id": host_id}})
+
+    range_filter = {
+        "range": {
+            "timestamp": {
+                "gte": f"now-{timerange_hours}h",
+                "lte": "now",
+            }
+        }
+    }
+
+    query = {
+        "query": {
+            "bool": {
+                "must": must_filters,
+                "filter": [range_filter],
+            }
+        },
+        "sort": [{"timestamp": {"order": "desc"}}],
+        "from": (page - 1) * size,
+        "size": size,
+        "track_total_hits": True,
+    }
+
+    # Search across all monthly indices
+    response = client.search(index="safesoc-alerts-*", body=query)
+
+    total = response["hits"]["total"]["value"]
+    hits = [hit["_source"] for hit in response["hits"]["hits"]]
+
+    return {
+        "total": total,
+        "page": page,
+        "size": size,
+        "pages": (total + size - 1) // size,
+        "alerts": hits,
+    }
