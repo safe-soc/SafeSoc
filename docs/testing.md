@@ -1,17 +1,19 @@
 # SafeSOC — Testing
 
-## 1. Current State: No Automated Tests Exist
+## 1. Current State: Automated Backend Tests Exist (SS-002)
 
-`backend/tests/` contains exactly two files:
+`backend/tests/` now contains a real suite: 31 tests across `test_schemas.py`, `test_ingestion.py`, and `test_opensearch.py`, plus shared fixtures in `conftest.py`. `pytest`, `pytest-asyncio`, and `httpx` are in `backend/requirements.txt`. Run it:
 
-| File | Contents |
-|---|---|
-| `__init__.py` | Empty |
-| `conftest.py` | Empty — no pytest fixtures defined |
+```bash
+cd backend
+pytest
+```
 
-There are **zero test cases** in the repository for the SafeSOC backend. `pytest` (or any test runner) is not in `backend/requirements.txt`. `.github/workflows/ci.yml` exists but is empty, so no tests run automatically on push/PR either.
+All 31 pass, offline — no live OpenSearch, Docker, or network access required. OpenSearch interactions are mocked (`mock_bulk_index_logs`, `mock_opensearch_unreachable` fixtures in `conftest.py`) rather than hitting a real cluster.
 
-This should be read plainly: the Phase 1 report's "end-to-end tested ingestion pipelines with full schema compliance" (Abstract, §6.2) refers to **manual verification**, not an automated test suite. That distinction matters for anyone extending the code — there is no regression safety net yet.
+**Not yet true:** these tests don't run automatically. `.github/workflows/ci.yml` still only runs the import smoke-check job described in §6 below — wiring `pytest` into CI is a separate, not-yet-done issue (`docs/roadmap-issues.md` SS-003).
+
+This should still be read carefully: the Phase 1 report's "end-to-end tested ingestion pipelines with full schema compliance" (Abstract, §6.2) referred to **manual verification**, not this suite (which postdates the report). The two are separate claims.
 
 ## 2. How Phase 1 Was Actually Verified (Manual)
 
@@ -28,20 +30,19 @@ None of this is captured as code that can be re-run to catch a regression.
 
 `cloud/AWS-IAM-backend` and `cloud/AWS-IAM-frontend` also have no dedicated test directories or test dependencies declared. The report states CloudLens was "validated against a live AWS environment" (§6.3) — again, this describes manual validation, not an automated suite.
 
-## 4. What Should Exist (Planned)
+## 4. Current Coverage vs. Remaining Gaps
 
-Given the implemented surface area (ingestion, alerts, health, OpenSearch client, schema validation), the following are the natural first automated tests once a test runner is added:
+| Area | Status | Notes |
+|---|---|---|
+| `schemas/log.py` | **Covered** | Valid construction, defaults, auto-generated `alert_id`, rejection of each of the 9 required fields individually, invalid enum values, the schema's own documented example |
+| `services/ingestion.py` | **Covered** | All-valid batch, mixed valid/invalid (partial failure), all-invalid (no write attempted), empty batch, `tenant_id`/`source` default injection |
+| `db/opensearch.py` (`_build_index_name`) | **Covered** | Month padding, December/January year boundaries, default-to-current-time |
+| `db/opensearch.py` (`check_connection`) | **Covered** | Ping succeeds, ping returns `False`, client construction raises |
+| `routers/health.py` (`GET /health`) | **Covered** | Both degraded (OpenSearch unreachable) and healthy (connected) responses, via `TestClient` |
+| `routers/v1/ingest.py` | Not covered | `422` on payload missing both `log`/`logs`; `422` when `logs` isn't a list — not required by SS-002, left for a follow-up test issue |
+| `routers/v1/alerts.py` | Not covered | Query parameter bounds (`timerange_hours` 1–720, `size` 1–500) — same as above |
 
-| Area | Suggested coverage |
-|---|---|
-| `schemas/log.py` | Valid `NormalizedLog` construction; rejection of missing required fields (`tenant_id`, `host_id`, `severity`, etc.) |
-| `services/ingestion.py` | Batch with mixed valid/invalid logs → correct `accepted`/`rejected` counts; `tenant_id`/`source` default injection |
-| `routers/v1/ingest.py` | `422` on payload missing both `log` and `logs`; `422` when `logs` is not a list |
-| `db/opensearch.py` | Monthly index name generation (`_build_index_name`) across month/year boundaries; mocked bulk-write error handling |
-| `routers/v1/alerts.py` | Query parameter validation bounds (`timerange_hours` 1–720, `size` 1–500) |
-| `routers/health.py` | Degraded status when OpenSearch is unreachable |
-
-Recommended (not yet decided): `pytest` + `pytest-asyncio` + `httpx` (FastAPI `TestClient`) for the backend; a mocked/ephemeral OpenSearch (e.g. `testcontainers`) for integration-level tests against `db/opensearch.py`.
+`pytest` + `pytest-asyncio` + `httpx` (FastAPI `TestClient`) is now the actual stack, not just a recommendation.
 
 ## 5. Non-Functional Testing (Planned)
 
@@ -51,8 +52,7 @@ The SRS's throughput target (≥100 events/sec) and latency targets (<500ms aler
 
 | Test type | Status |
 |---|---|
-| Unit tests (backend) | None exist |
-| Integration tests (backend) | None exist |
+| Unit/integration tests (backend) | **31 tests, passing** (`schemas`, `services/ingestion`, `db/opensearch`, `routers/health`) — not yet run in CI (SS-003) |
 | Unit/integration tests (CloudLens) | None exist |
-| CI pipeline | Workflow file present, empty — no steps configured |
+| CI pipeline | Runs smoke-check jobs (backend import check, CloudLens Django check, CloudLens frontend lint/typecheck/build) — does not yet run the backend `pytest` suite |
 | Manual verification | Performed for Phase 1 ingestion pipeline (per report), not reproducible from repo alone |

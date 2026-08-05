@@ -56,18 +56,20 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `docs/deployment.md`, `docs/decisions.md`, `docs/project-roadmap.md`, `docs/requirements.md`, `docs/tech-stack.md`, `CLAUDE.md`, `README.md` (doc accuracy sync)
 
 #### SS-002 — Bootstrap backend automated test suite
+**Status:** ✅ Done (2026-08-05)
 **Description:** Add `pytest`, `pytest-asyncio`, and `httpx` to `backend/requirements.txt`, populate `backend/tests/conftest.py` with reusable fixtures (test client, mocked/ephemeral OpenSearch), and write the first real tests for the code that already exists.
 **Priority:** Critical · **Effort:** M · **Dependencies:** none
 **Acceptance Criteria:**
-- `pytest` runs from `backend/` and collects >0 tests
-- Coverage includes: `NormalizedLog` validation (valid + missing-required-field cases), `process_ingest_batch` partial-failure behavior, `_build_index_name` month/year boundaries, `/health` degraded-state behavior
-- `conftest.py` no longer empty; fixtures documented with a one-line docstring each
-**Files likely to change:**
+- [x] `pytest` runs from `backend/` and collects >0 tests (31 collected)
+- [x] Coverage includes: `NormalizedLog` validation (valid + missing-required-field cases), `process_ingest_batch` partial-failure behavior, `_build_index_name` month/year boundaries, `/health` degraded-state behavior
+- [x] `conftest.py` no longer empty; fixtures documented with a one-line docstring each
+**Files changed:**
 - `backend/requirements.txt`
 - `backend/tests/conftest.py`
 - `backend/tests/test_ingestion.py` (new)
 - `backend/tests/test_schemas.py` (new)
 - `backend/tests/test_opensearch.py` (new)
+- `docs/testing.md` (doc accuracy sync)
 
 #### SS-003 — Wire pytest into CI
 **Description:** Add a `pytest` step to the existing `safesoc-backend` job in `.github/workflows/ci.yml` (currently only an import smoke test), now that real tests exist.
