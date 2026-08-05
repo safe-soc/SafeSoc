@@ -6,6 +6,7 @@ Returns status of all connected services.
 from fastapi import APIRouter
 
 from app.db.opensearch import check_connection as check_opensearch
+from app.db.postgresql import check_connection as check_postgres
 
 router = APIRouter(tags=["health"])
 
@@ -14,10 +15,12 @@ router = APIRouter(tags=["health"])
 async def health_check():
     """Check connectivity to all dependent services."""
     opensearch_ok = await check_opensearch()
+    postgres_ok = await check_postgres()
 
-    # PostgreSQL and Redis checks added when those services are connected
+    # Redis check added when that service is connected
     checks = {
         "opensearch": "connected" if opensearch_ok else "unavailable",
+        "postgresql": "connected" if postgres_ok else "unavailable",
     }
 
     all_healthy = all(v == "connected" for v in checks.values())

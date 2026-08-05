@@ -78,6 +78,7 @@ def test_health_degraded_when_opensearch_unreachable(client, mock_opensearch_unr
 
 def test_health_healthy_when_opensearch_reachable(client, monkeypatch):
     monkeypatch.setattr("app.routers.health.check_opensearch", AsyncMock(return_value=True))
+    monkeypatch.setattr("app.routers.health.check_postgres", AsyncMock(return_value=True))
 
     response = client.get("/health")
 
@@ -85,6 +86,20 @@ def test_health_healthy_when_opensearch_reachable(client, monkeypatch):
     body = response.json()
     assert body["status"] == "healthy"
     assert body["checks"]["opensearch"] == "connected"
+    assert body["checks"]["postgresql"] == "connected"
+
+
+def test_health_degraded_when_postgres_unreachable(client, monkeypatch):
+    monkeypatch.setattr("app.routers.health.check_opensearch", AsyncMock(return_value=True))
+    monkeypatch.setattr("app.routers.health.check_postgres", AsyncMock(return_value=False))
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "degraded"
+    assert body["checks"]["opensearch"] == "connected"
+    assert body["checks"]["postgresql"] == "unavailable"
 
 
 # ── ILM policy (SS-006) ────────────────────────────────────────
