@@ -1,0 +1,6 @@
+[submodule "AWS-IAM-backend"]
+	path = AWS-IAM-backend
+	url = https://github.com/vishwas-adhikari/AWS-IAM-backend.git
+[submodule "AWS-IAM-frontend"]
+	path = AWS-IAM-frontend
+	url = https://github.com/vishwas-adhikari/AWS-IAM-frontend.git
