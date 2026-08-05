@@ -43,16 +43,17 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 **Why first:** every other milestone assumes the backend is easy to run locally and has a place to put tests. Nothing here depends on Phase 2 features, so it can start immediately and in parallel.
 
 #### SS-001 — Add root `docker-compose.yml` for backend + OpenSearch
+**Status:** ✅ Done (2026-08-05)
 **Description:** Create a `docker-compose.yml` at the repository root that runs `opensearch` (single-node, security plugin disabled) and `backend` (building `backend/Dockerfile`) together, with a health check gating backend startup on OpenSearch readiness, matching what `docs/deployment.md` and the Phase 1 report describe but which doesn't exist yet.
 **Priority:** Critical · **Effort:** M · **Dependencies:** none
 **Acceptance Criteria:**
-- `docker compose up` from repo root starts both services with no manual steps beyond `.env` values
-- `backend` container waits for `opensearch` healthcheck before starting (matches report §4.5)
-- `GET /health` returns `"opensearch": "connected"` within a reasonable startup window
-- `docs/deployment.md` updated to remove the "missing" callout for this file
-**Files likely to change:**
+- [x] `docker compose up` from repo root starts both services with no manual steps beyond `.env` values
+- [x] `backend` container waits for `opensearch` healthcheck before starting (matches report §4.5)
+- [x] `GET /health` returns `"opensearch": "connected"` within a reasonable startup window
+- [x] `docs/deployment.md` updated to remove the "missing" callout for this file
+**Files changed:**
 - `docker-compose.yml` (new)
-- `docs/deployment.md`
+- `docs/deployment.md`, `docs/decisions.md`, `docs/project-roadmap.md`, `docs/requirements.md`, `docs/tech-stack.md`, `CLAUDE.md`, `README.md` (doc accuracy sync)
 
 #### SS-002 — Bootstrap backend automated test suite
 **Description:** Add `pytest`, `pytest-asyncio`, and `httpx` to `backend/requirements.txt`, populate `backend/tests/conftest.py` with reusable fixtures (test client, mocked/ephemeral OpenSearch), and write the first real tests for the code that already exists.

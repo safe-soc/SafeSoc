@@ -14,6 +14,10 @@ Per the report and confirmed in code:
 - [x] Backend Dockerfile
 - [x] CloudLens (AWS IAM analyzer) — fully functional standalone application
 
+## Phase 2 — In Progress
+
+- [x] Root `docker-compose.yml` for single-command SafeSOC backend deployment (SS-001) — see `docs/deployment.md`
+
 ## Phase 2 — Planned
 
 Each item lists the report's stated goal alongside what scaffolding (if any) already exists for it.
@@ -36,15 +40,13 @@ Each item lists the report's stated goal alongside what scaffolding (if any) alr
 - Automated PDF reporting (`services/reporting.py`, `tasks/reporting.py` — empty; WeasyPrint not installed)
 - Notifications (`services/notifications.py`, `workers/notification_worker.py`, `clients/telegram.py` — empty)
 - Index Lifecycle Management for OpenSearch (90-day retention)
-- CI pipeline (`.github/workflows/ci.yml` is empty)
-- Automated test suite (`backend/tests/` has no test cases)
-- Root `docker-compose.yml` for single-command SafeSOC backend deployment
+- Automated backend test suite wired into CI (`.github/workflows/ci.yml` runs smoke checks only, not a real test suite; `backend/tests/` has no test cases yet)
 
 ## Immediate Next Steps (suggested ordering, not yet committed)
 
 Given dependency order (later Phase 2 items depend on earlier infrastructure), a reasonable build sequence is:
 
-1. Root `docker-compose.yml` + populated `.env.example` — unblocks reliable local development for everyone.
+1. ~~Root `docker-compose.yml` + populated `.env.example`~~ — **done** (SS-001), unblocking reliable local development.
 2. PostgreSQL + Redis wiring (drivers, models, migrations) — required by almost everything else in Phase 2.
 3. JWT auth + tenant enforcement — required before any multi-tenant feature can be trusted.
 4. Threat intel enrichment — self-contained, doesn't depend on correlation or the NL assistant.

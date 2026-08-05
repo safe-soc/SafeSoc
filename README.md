@@ -45,33 +45,28 @@ assets/           Architecture and ER diagrams
 | Authentication / RBAC / enforced multi-tenancy | ⏳ Planned |
 | CloudLens ↔ SafeSOC integration | ⏳ Planned |
 | React frontend | ⏳ Planned |
-| Single-command Docker Compose deployment | ⏳ Planned (no root `docker-compose.yml` yet) |
+| Single-command Docker Compose deployment | ✅ Implemented (`docker compose up --build`) |
 
 Full detail, file-by-file, is in [`docs/architecture.md`](docs/architecture.md), [`docs/requirements.md`](docs/requirements.md), and [`docs/project-roadmap.md`](docs/project-roadmap.md).
 
-## Running the Backend (Today)
+## Running the Backend
 
-There is no single-command deployment yet (see [`docs/deployment.md`](docs/deployment.md)). To run the implemented ingestion pipeline locally:
+```bash
+docker compose up --build
+```
 
-1. Start an OpenSearch instance reachable from your machine (security plugin disabled for local dev), e.g.:
-   ```
-   docker run -p 9200:9200 -e "discovery.type=single-node" -e "DISABLE_SECURITY_PLUGIN=true" opensearchproject/opensearch:2
-   ```
-2. Copy `.env.example` to `backend/.env` and adjust `OPENSEARCH_*` values if needed.
-3. Install and run the backend:
-   ```
-   cd backend
-   pip install -r requirements.txt
-   uvicorn app.main:app --reload
-   ```
-4. Confirm it's healthy:
-   ```
-   curl http://localhost:8000/health
-   ```
-5. Generate some test data:
-   ```
-   python injector/injector.py http://localhost:8000/api/v1/ingest 20
-   ```
+That's it — no `.env` required. This starts OpenSearch and the SafeSOC backend together, with the backend waiting for OpenSearch to report healthy before it starts. If ports `9200`/`8000` are already in use on your machine, override them: `OPENSEARCH_PORT=9201 BACKEND_PORT=8001 docker compose up --build`.
+
+Confirm it's healthy:
+```
+curl http://localhost:8000/health
+```
+Generate some test data:
+```
+python injector/injector.py http://localhost:8000/api/v1/ingest 20
+```
+
+See [`docs/deployment.md`](docs/deployment.md) for the non-Docker/manual alternative, useful for local debugging.
 
 ### Example: ingest a log directly
 

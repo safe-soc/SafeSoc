@@ -44,7 +44,7 @@ This is a config-first codebase: settings were scaffolded ahead of the code that
 | Component | Status |
 |---|---|
 | `backend/Dockerfile` | Implemented — `python:3.12-slim`, installs `requirements.txt`, runs `uvicorn app.main:app --reload` |
-| Root `docker-compose.yml` (backend + OpenSearch) | **Not present in this repo** — see `deployment.md` |
+| Root `docker-compose.yml` (backend + OpenSearch) | Implemented — `docker compose up --build`, see `deployment.md` |
 
 ## 2. CloudLens (`cloud/`)
 
@@ -85,4 +85,4 @@ React + TypeScript + Vite, with Tailwind CSS (`tailwind.config.js`, `postcss.con
 | Real-time/cache state | Redis | ❌ not installed |
 | LLM inference | Ollama (local) / Groq (cloud) | ❌ neither installed |
 | Endpoint detection | Wazuh | ❌ no integration code |
-| Deployment | Docker Compose (single command) | ⚠️ Dockerfile only, no compose file |
+| Deployment | Docker Compose (single command) | ✅ `docker compose up --build` |

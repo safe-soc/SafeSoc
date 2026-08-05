@@ -40,7 +40,7 @@ Full status tables: `docs/architecture.md`, `docs/requirements.md`, `docs/projec
 ## Known gaps to keep in mind
 
 - **No authentication.** `tenant_id` is caller-supplied on every request, unauthenticated. Don't describe multi-tenancy as "secured" — the filtering logic is real, the trust boundary isn't.
-- **No root `docker-compose.yml`.** Only `backend/Dockerfile` and `cloud/docker-compose.yml` (CloudLens-only) exist. See `docs/deployment.md` for how to actually run the backend today.
+- **Root `docker-compose.yml` exists** (backend + OpenSearch, healthcheck-gated startup) — `docker compose up --build` from repo root. `cloud/docker-compose.yml` remains a separate, CloudLens-only stack, not orchestrated together with the root one. See `docs/deployment.md`.
 - **No automated tests.** `backend/tests/` has empty `__init__.py`/`conftest.py` only. `.github/workflows/ci.yml` runs import/build smoke checks, not a test suite.
 - **`.env.example`** documents every setting `core/config.py` defines — most of it isn't consumed by any running code yet. Don't assume a documented env var implies a working integration.
 - CloudLens (`cloud/`) is real and working but **not integrated** — its findings don't flow into SafeSOC's ingestion pipeline yet. `routers/v1/cloud.py` (the intended bridge) is an empty stub.

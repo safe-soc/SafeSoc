@@ -32,7 +32,7 @@ Format: each entry records a decision, its rationale, and its current implementa
 
 **Decision:** The platform should run identically on dev laptops and cloud VMs via containerization, with no vendor-specific cloud services required.
 **Rationale:** SMB target customers and academic reviewers need zero-friction, single-command deployment.
-**Status: Partial.** `backend/Dockerfile` exists and builds correctly. The report's specific claim of single-command startup via a root `docker-compose.yml` is **not yet true** — no such file exists in this repo (see `deployment.md`). The intent is validated (Dockerfile works, no cloud-vendor lock-in in the code), but the "single command" deliverable is not yet real.
+**Status: Implemented.** `backend/Dockerfile` builds correctly, and a root `docker-compose.yml` (SS-001) now provides the single-command startup the report describes — `docker compose up --build` runs `opensearch` and `backend` together, with the backend gated on OpenSearch's healthcheck. Verified end-to-end: both containers build, OpenSearch reports healthy before the backend starts, and all four implemented endpoints (`/`, `/health`, `/api/v1/ingest`, `/api/v1/alerts`) respond correctly through the compose-managed stack.
 
 ---
 

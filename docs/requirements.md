@@ -41,9 +41,9 @@ SafeSOC is intended to sit between expensive enterprise SIEMs and unmanaged open
 | ≥100 log events/sec ingestion | **Unverified** | No load test exists in the repo (see `testing.md`). The report cites ~50ms for 10-log batches as an informal observation, not an automated benchmark. |
 | Alert queries < 500ms | **Unverified** | Same as above — no automated performance test. |
 | NL assistant responds within 15s | **Not applicable yet** | Feature not implemented. |
-| Docker services restart automatically on failure | **Planned** | No root `docker-compose.yml` exists yet to define restart policies (see `deployment.md`). |
-| Single-command startup (`docker compose up`) | **Planned** | No compose file at the project root. `backend/Dockerfile` exists but there is nothing to orchestrate it with OpenSearch. |
-| Cross-platform (Ubuntu/macOS/Windows + Docker) | **Unverified** | Plausible given the stack choices, but untested since there's no compose setup to run. |
+| Docker services restart automatically on failure | **Implemented** | `docker-compose.yml` sets `restart: unless-stopped` on both services (see `deployment.md`). |
+| Single-command startup (`docker compose up`) | **Implemented** | `docker compose up --build` from repo root; verified end-to-end — OpenSearch reaches healthy, backend starts after it, all four implemented endpoints respond correctly. |
+| Cross-platform (Ubuntu/macOS/Windows + Docker) | **Partially verified** | Verified working on Windows + Docker Desktop. Not yet tested on Ubuntu/macOS. |
 | No vendor-specific cloud services required | **Implemented** (by design) | Stack is OpenSearch/FastAPI/Docker; no cloud-managed services are referenced in code. |
 | Graceful handling of external API failures (cached fallback) | **Planned** | No external API integrations are implemented yet to exhibit this behavior. |
 
