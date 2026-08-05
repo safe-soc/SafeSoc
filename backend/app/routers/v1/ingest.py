@@ -5,6 +5,7 @@ POST /api/v1/ingest — accepts single or batch security logs.
 
 from fastapi import APIRouter
 
+from app.core.config import settings
 from app.core.exceptions import IngestionError
 from app.schemas.log import NormalizedLog
 from app.services.ingestion import process_ingest_batch
@@ -36,6 +37,11 @@ async def ingest_logs(payload: dict):
 
     if not isinstance(logs, list):
         raise IngestionError("'logs' must be a list")
+
+    if len(logs) > settings.INGEST_BATCH_SIZE:
+        raise IngestionError(
+            f"Batch size {len(logs)} exceeds maximum of {settings.INGEST_BATCH_SIZE} logs per request"
+        )
 
     # Extract tenant_id from payload or default (auth middleware handles this later)
     tenant_id = payload.get("tenant_id", "default-tenant")

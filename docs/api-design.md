@@ -46,7 +46,7 @@ Root info. Defined inline in `backend/app/main.py`.
 
 - `tenant_id` and `source` at the top level are fallback defaults injected into each log if the log itself doesn't already carry them; if omitted entirely, `tenant_id` defaults to `"default-tenant"` and `source` to `"synthetic"`.
 - **No authentication.** `tenant_id` is fully caller-controlled — see `architecture.md` §4.
-- **No 1,000-log batch cap** is enforced, despite the SRS specifying one.
+- **Batch size cap enforced** at `settings.INGEST_BATCH_SIZE` (500 by default, not the SRS's stated 1,000 — the cap is config-driven, see `core/config.py`). A request with more logs than that returns `422` before any processing or writes happen (SS-005).
 
 Each log is validated against `NormalizedLog` (see `database-schema.md` for the full field list). Invalid entries are rejected individually; valid entries in the same request still get written.
 
@@ -61,8 +61,9 @@ Each log is validated against `NormalizedLog` (see `database-schema.md` for the 
 ```
 On partial failure, `errors` is a list of `{ "index": <int>, "error": "<pydantic message>", "raw": {...truncated fields...} }`.
 
-**Error responses**
-- `422` — payload has neither `"log"` nor `"logs"` key, or `"logs"` is not a list. Body: `{"error": "<message>", "status_code": 422}` (via the registered `SafeSOCError`/`IngestionError` handler, not FastAPI's default `{"detail": ...}` shape — SS-004).
+**Error responses** (all via the registered `SafeSOCError`/`IngestionError` handler: `{"error": "<message>", "status_code": 422}`, not FastAPI's default `{"detail": ...}` shape — SS-004)
+- `422` — payload has neither `"log"` nor `"logs"` key, or `"logs"` is not a list.
+- `422` — `logs` exceeds `settings.INGEST_BATCH_SIZE` (500 by default) — SS-005.
 
 ### `GET /api/v1/alerts`
 

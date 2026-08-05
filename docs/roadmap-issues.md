@@ -99,14 +99,18 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 **Scoped out (not this issue):** `OpenSearchError` is registered and handler-ready but has no raise site yet — the ingestion path's OpenSearch I/O failures still surface as an unhandled 500. `core/exceptions.py`'s "Files likely to change" listing didn't call for touching `services/ingestion.py`/`db/opensearch.py`, and doing so wasn't necessary to satisfy this issue's acceptance criteria — left as a clearly-documented follow-on (see `docs/coding-standards.md` §8) rather than folded in here.
 
 #### SS-005 — Enforce the 1,000-log ingestion batch cap
+**Status:** ✅ Done (2026-08-05)
 **Description:** The SRS specifies a max batch size of 1,000 logs per `/api/v1/ingest` request; `INGEST_BATCH_SIZE=500` exists in config but nothing currently rejects an oversized request.
 **Priority:** Medium · **Effort:** XS · **Dependencies:** none
 **Acceptance Criteria:**
-- A request with more than `INGEST_BATCH_SIZE` logs returns `422` with a clear error message, none of the batch is written
-- Test covers exactly-at-limit and one-over-limit
-**Files likely to change:**
+- [x] A request with more than `INGEST_BATCH_SIZE` logs returns `422` with a clear error message, none of the batch is written (check runs before `process_ingest_batch` is ever called, raising the SS-004 `IngestionError`)
+- [x] Test covers exactly-at-limit (accepted) and one-over-limit (rejected, no write attempted)
+**Files changed:**
 - `backend/app/routers/v1/ingest.py`
 - `backend/tests/test_ingestion.py`
+- `docs/api-design.md`, `docs/requirements.md`, `docs/testing.md` (doc accuracy sync)
+
+**Note:** enforces `settings.INGEST_BATCH_SIZE` (500 by default), not a hardcoded 1,000 — the cap is config-driven, matching the AC's own wording rather than the SRS's specific figure. See `docs/requirements.md` §3 for the discrepancy.
 
 #### SS-006 — OpenSearch Index Lifecycle Management (90-day retention)
 **Description:** Implement the ILM policy described in the report (§4.4) so `safesoc-alerts-*` indices older than 90 days are automatically deleted, bounding storage growth as designed.

@@ -2,14 +2,14 @@
 
 ## 1. Current State: Automated Backend Tests Exist (SS-002)
 
-`backend/tests/` now contains a real suite: 35 tests across `test_schemas.py`, `test_ingestion.py`, `test_opensearch.py`, and `test_exceptions.py`, plus shared fixtures in `conftest.py`. `pytest`, `pytest-asyncio`, and `httpx` are in `backend/requirements.txt`. Run it:
+`backend/tests/` now contains a real suite: 37 tests across `test_schemas.py`, `test_ingestion.py`, `test_opensearch.py`, and `test_exceptions.py`, plus shared fixtures in `conftest.py`. `pytest`, `pytest-asyncio`, and `httpx` are in `backend/requirements.txt`. Run it:
 
 ```bash
 cd backend
 pytest
 ```
 
-All 35 pass, offline — no live OpenSearch, Docker, or network access required. OpenSearch interactions are mocked (`mock_bulk_index_logs`, `mock_opensearch_unreachable` fixtures in `conftest.py`) rather than hitting a real cluster.
+All 37 pass, offline — no live OpenSearch, Docker, or network access required. OpenSearch interactions are mocked (`mock_bulk_index_logs`, `mock_opensearch_unreachable` fixtures in `conftest.py`) rather than hitting a real cluster.
 
 **Now automatic:** `.github/workflows/ci.yml`'s `safesoc-backend` job runs this suite (`pytest`, after the install and import-check steps) on every push/PR — a failing test fails the build (SS-003).
 
@@ -40,7 +40,7 @@ None of this is captured as code that can be re-run to catch a regression.
 | `db/opensearch.py` (`check_connection`) | **Covered** | Ping succeeds, ping returns `False`, client construction raises |
 | `routers/health.py` (`GET /health`) | **Covered** | Both degraded (OpenSearch unreachable) and healthy (connected) responses, via `TestClient` |
 | `core/exceptions.py` (`safesoc_exception_handler`) | **Covered** | Documented `{"error", "status_code"}` shape for both `IngestionError` (422) and `OpenSearchError` (503), via an isolated test app; end-to-end wiring proven via the two `routers/v1/ingest.py` cases below (SS-004) |
-| `routers/v1/ingest.py` | **Covered** | `422` on payload missing both `log`/`logs`; `422` when `logs` isn't a list — both now assert the typed-exception response body, not just the status code |
+| `routers/v1/ingest.py` | **Covered** | `422` on payload missing both `log`/`logs`; `422` when `logs` isn't a list; `INGEST_BATCH_SIZE` cap — exactly-at-limit accepted, one-over-limit rejected with no write attempted (SS-005) — all assert the typed-exception response body, not just the status code |
 | `routers/v1/alerts.py` | Not covered | Query parameter bounds (`timerange_hours` 1–720, `size` 1–500) — left for a follow-up test issue |
 
 `pytest` + `pytest-asyncio` + `httpx` (FastAPI `TestClient`) is now the actual stack, not just a recommendation.
@@ -53,7 +53,7 @@ The SRS's throughput target (≥100 events/sec) and latency targets (<500ms aler
 
 | Test type | Status |
 |---|---|
-| Unit/integration tests (backend) | **35 tests, passing** (`schemas`, `services/ingestion`, `db/opensearch`, `routers/health`, `core/exceptions` + `routers/v1/ingest` error paths) — **runs in CI** on every push/PR |
+| Unit/integration tests (backend) | **37 tests, passing** (`schemas`, `services/ingestion`, `db/opensearch`, `routers/health`, `core/exceptions` + `routers/v1/ingest` error paths incl. batch-size cap) — **runs in CI** on every push/PR |
 | Unit/integration tests (CloudLens) | None exist |
 | CI pipeline | `safesoc-backend` job runs install → import check → `pytest`; `cloudlens-*` jobs remain smoke checks (Django check, frontend lint/typecheck/build) — no CloudLens test suite exists yet |
 | Manual verification | Performed for Phase 1 ingestion pipeline (per report), not reproducible from repo alone |

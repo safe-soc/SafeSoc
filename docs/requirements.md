@@ -19,7 +19,7 @@ SafeSOC is intended to sit between expensive enterprise SIEMs and unmanaged open
 
 | Requirement | Status | Evidence |
 |---|---|---|
-| **Log ingestion & normalization** — REST endpoint, single + batch (up to 1,000/request), universal `NormalizedLog` schema, per-batch partial failure handling, UUID `alert_id` + dual timestamps | **Implemented** | `routers/v1/ingest.py`, `schemas/log.py`, `services/ingestion.py`. Note: the report specifies a 1,000-log batch cap; no such limit is enforced in code today — batches of any size are accepted. |
+| **Log ingestion & normalization** — REST endpoint, single + batch (up to 1,000/request), universal `NormalizedLog` schema, per-batch partial failure handling, UUID `alert_id` + dual timestamps | **Implemented** | `routers/v1/ingest.py`, `schemas/log.py`, `services/ingestion.py`. Batch cap is enforced (SS-005), but at `settings.INGEST_BATCH_SIZE` — 500 by default, not the report's stated 1,000; the cap is config-driven rather than hardcoded to the SRS figure. |
 | Source-specific adapters (Wazuh, CloudTrail, GuardDuty, synthetic) | **Partial** | Only the synthetic path is exercised. `adapters/` is an empty package; Wazuh/AWS log formats are never parsed or transformed. |
 | Monthly OpenSearch index partitioning | **Implemented** | `db/opensearch.py` (`_build_index_name`), mapping in `db/mappings/alert_mapping.py`. |
 | Index Lifecycle Management (auto-delete after 90 days) | **Planned** | No ILM policy is defined or applied anywhere in the code. |
