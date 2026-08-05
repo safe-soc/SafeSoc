@@ -43,6 +43,15 @@ async def startup():
     logger = get_logger(__name__)
     logger.info("SafeSOC starting", env=settings.ENV)
 
+    from app.db.opensearch import ensure_ilm_policy
+    try:
+        await ensure_ilm_policy()
+    except Exception as e:
+        # Non-fatal: OpenSearch may not be reachable yet (e.g. manual/non-compose
+        # startup ordering). The app should still come up; /health already
+        # reports OpenSearch connectivity separately.
+        logger.warning("Could not ensure ILM policy at startup", error=str(e))
+
 
 @app.get("/")
 async def root():

@@ -113,16 +113,22 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 **Note:** enforces `settings.INGEST_BATCH_SIZE` (500 by default), not a hardcoded 1,000 — the cap is config-driven, matching the AC's own wording rather than the SRS's specific figure. See `docs/requirements.md` §3 for the discrepancy.
 
 #### SS-006 — OpenSearch Index Lifecycle Management (90-day retention)
+**Status:** ✅ Done (2026-08-05)
 **Description:** Implement the ILM policy described in the report (§4.4) so `safesoc-alerts-*` indices older than 90 days are automatically deleted, bounding storage growth as designed.
 **Priority:** Low · **Effort:** S · **Dependencies:** SS-001 (needs a running OpenSearch to apply the policy against)
 **Acceptance Criteria:**
-- ILM policy applied automatically on backend startup (or documented as a one-time setup script)
-- Policy is idempotent — reapplying on restart doesn't error
-- `docs/database-schema.md` updated to remove the "not implemented" callout
-**Files likely to change:**
-- `backend/app/db/opensearch.py`
-- `backend/app/db/mappings/alert_mapping.py` (or a new `ilm_policy.py`)
-- `docs/database-schema.md`
+- [x] ILM policy applied automatically on backend startup (`ensure_ilm_policy()` called from `main.py`'s startup event, non-fatal if OpenSearch isn't reachable yet)
+- [x] Policy is idempotent — reapplying on restart doesn't error (get-then-put: skips creation if the policy already exists; verified live via container restart — logged "ILM policy already exists", no error)
+- [x] `docs/database-schema.md` updated to remove the "not implemented" callout
+**Files changed:**
+- `backend/app/core/config.py` (new `OPENSEARCH_ILM_RETENTION_DAYS` setting, default 90)
+- `backend/app/db/opensearch.py` (new `ensure_ilm_policy()`)
+- `backend/app/db/mappings/ilm_policy.py` (new)
+- `backend/app/main.py` (wired into startup)
+- `backend/tests/test_opensearch.py` (3 new tests)
+- `docs/database-schema.md`, `docs/decisions.md`, `docs/deployment.md`, `docs/project-roadmap.md`, `docs/requirements.md` (doc accuracy sync)
+
+**Implementation note:** uses OpenSearch 2.x's ISM `ism_template` mechanism (`opensearch-py`'s native `client.index_management` wrapper) so the policy auto-attaches to any new `safesoc-alerts-*` index at creation time — no per-index wiring needed in `ensure_index_exists()`. Verified end-to-end against a real `docker compose` stack: policy visible via `GET _plugins/_ism/policies/safesoc-alerts-retention-policy` with the expected 90-day condition, and confirmed idempotent across a container restart.
 
 ---
 

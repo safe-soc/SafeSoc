@@ -79,10 +79,8 @@ OPENSEARCH_PORT=9201 BACKEND_PORT=8001 docker compose up --build
 
 ## 6. CI/CD
 
-`.github/workflows/ci.yml` runs three smoke-check jobs on every push/PR (backend import check, CloudLens Django `manage.py check`, CloudLens frontend lint/typecheck/build) — see `docs/testing.md`. It does not yet run a real backend test suite (`backend/tests/` has no test cases beyond empty fixtures — see `docs/roadmap-issues.md` SS-002/SS-003).
+`.github/workflows/ci.yml` runs on every push/PR: the `safesoc-backend` job installs deps, runs an import smoke check, then runs the real backend `pytest` suite (40 tests as of SS-006); the two `cloudlens-*` jobs remain smoke checks (Django `manage.py check`, frontend lint/typecheck/build) — see `docs/testing.md`.
 
 ## 7. Planned (not yet built)
 
-- Index Lifecycle Management for OpenSearch (90-day retention) — `docs/roadmap-issues.md` SS-006.
 - A production compose/deployment path once PostgreSQL, Redis, and the Processing-layer services exist — SS-007 onward.
-- Automated backend test suite wired into CI — SS-002/SS-003.

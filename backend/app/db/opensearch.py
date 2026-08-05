@@ -52,6 +52,24 @@ async def ensure_index_exists(client: OpenSearch, index_name: str) -> None:
         logger.info("Created index", index=index_name)
 
 
+async def ensure_ilm_policy() -> None:
+    """
+    Create the safesoc-alerts-* retention (ISM) policy if it doesn't already
+    exist. Idempotent: safe to call on every startup. New indices matching
+    the policy's ism_template pick it up automatically; indices created
+    before this policy existed are not retroactively affected.
+    """
+    from app.db.mappings.ilm_policy import ILM_POLICY, ILM_POLICY_ID
+
+    client = get_client()
+    try:
+        client.index_management.get_policy(policy=ILM_POLICY_ID)
+        logger.info("ILM policy already exists", policy_id=ILM_POLICY_ID)
+    except exceptions.NotFoundError:
+        client.index_management.put_policy(policy=ILM_POLICY_ID, body=ILM_POLICY)
+        logger.info("Created ILM policy", policy_id=ILM_POLICY_ID)
+
+
 async def bulk_index_logs(logs: list[dict]) -> int:
     """
     Write a batch of normalized logs to OpenSearch.

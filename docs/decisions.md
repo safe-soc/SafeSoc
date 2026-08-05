@@ -24,7 +24,7 @@ Format: each entry records a decision, its rationale, and its current implementa
 
 **Decision:** Logs are stored in indices named `safesoc-alerts-{YYYY}.{MM}`, auto-created on first write to a new month.
 **Rationale:** Bounds per-index size, allows time-range queries to skip irrelevant indices, and simplifies retention (deleting old indices vs. deleting documents).
-**Status: Implemented** for index creation and querying (`backend/app/db/opensearch.py`). **Not implemented:** the retention half of the rationale — no Index Lifecycle Management policy exists to actually delete indices older than 90 days, so the stated storage-bounding benefit isn't realized yet.
+**Status: Implemented**, including retention (SS-006): index creation and querying in `backend/app/db/opensearch.py`, plus an idempotent ISM policy (`ensure_ilm_policy()`) that auto-deletes indices older than `settings.OPENSEARCH_ILM_RETENTION_DAYS` (90 by default), applied via an `ism_template` so it covers new indices automatically without per-index wiring. The storage-bounding benefit the rationale describes is now realized, not just designed for.
 
 ---
 

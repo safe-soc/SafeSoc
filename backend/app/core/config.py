@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     OPENSEARCH_PASSWORD: str = "admin"
     OPENSEARCH_USE_SSL: bool = False
     OPENSEARCH_VERIFY_CERTS: bool = False
+    OPENSEARCH_ILM_RETENTION_DAYS: int = 90
 
     # ──────────────────────────────────────────────
     # PostgreSQL

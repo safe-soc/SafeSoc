@@ -16,7 +16,14 @@ Per the report and confirmed in code:
 
 ## Phase 2 — In Progress
 
+Milestone 1 (Deployment Foundation & Test Bootstrap) is complete — SS-001 through SS-006, see `docs/roadmap-issues.md`:
+
 - [x] Root `docker-compose.yml` for single-command SafeSOC backend deployment (SS-001) — see `docs/deployment.md`
+- [x] Automated backend test suite, 40 tests (SS-002) — see `docs/testing.md`
+- [x] Test suite wired into CI (SS-003)
+- [x] `SafeSOCError` exception handler registered and used (SS-004)
+- [x] Ingestion batch-size cap enforced (SS-005)
+- [x] OpenSearch ISM retention policy, 90-day default (SS-006) — see `docs/database-schema.md`
 
 ## Phase 2 — Planned
 
@@ -39,8 +46,6 @@ Each item lists the report's stated goal alongside what scaffolding (if any) alr
 - Anomaly detection / Isolation Forest (`services/anomaly.py` — empty; `ml/` directory empty; `scikit-learn` not installed)
 - Automated PDF reporting (`services/reporting.py`, `tasks/reporting.py` — empty; WeasyPrint not installed)
 - Notifications (`services/notifications.py`, `workers/notification_worker.py`, `clients/telegram.py` — empty)
-- Index Lifecycle Management for OpenSearch (90-day retention)
-- Automated backend test suite wired into CI (`.github/workflows/ci.yml` runs smoke checks only, not a real test suite; `backend/tests/` has no test cases yet)
 
 ## Immediate Next Steps (suggested ordering, not yet committed)
 

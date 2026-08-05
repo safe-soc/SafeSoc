@@ -7,8 +7,11 @@ from datetime import datetime
 from unittest.mock import AsyncMock
 
 import pytest
+from opensearchpy import exceptions
 
-from app.db.opensearch import _build_index_name, check_connection
+from app.core.config import settings
+from app.db.mappings.ilm_policy import ILM_POLICY, ILM_POLICY_ID
+from app.db.opensearch import _build_index_name, check_connection, ensure_ilm_policy
 
 
 # ── _build_index_name ────────────────────────────────────────
@@ -82,3 +85,52 @@ def test_health_healthy_when_opensearch_reachable(client, monkeypatch):
     body = response.json()
     assert body["status"] == "healthy"
     assert body["checks"]["opensearch"] == "connected"
+
+
+# ── ILM policy (SS-006) ────────────────────────────────────────
+
+def test_ilm_policy_targets_alert_indices_with_configured_retention():
+    assert ILM_POLICY["policy"]["ism_template"][0]["index_patterns"] == ["safesoc-alerts-*"]
+    transitions = ILM_POLICY["policy"]["states"][0]["transitions"]
+    assert transitions[0]["conditions"]["min_index_age"] == f"{settings.OPENSEARCH_ILM_RETENTION_DAYS}d"
+
+
+class _FakeIndexManagement:
+    """Fake index_management client tracking put_policy calls."""
+
+    def __init__(self, policy_exists: bool):
+        self._policy_exists = policy_exists
+        self.put_calls: list[tuple] = []
+
+    def get_policy(self, policy):
+        if not self._policy_exists:
+            raise exceptions.NotFoundError(404, "not_found", {})
+        return {"policy": {}}
+
+    def put_policy(self, policy, body):
+        self.put_calls.append((policy, body))
+
+
+@pytest.mark.asyncio
+async def test_ensure_ilm_policy_creates_when_missing(monkeypatch):
+    fake_im = _FakeIndexManagement(policy_exists=False)
+    fake_client = type("FakeClient", (), {"index_management": fake_im})()
+    monkeypatch.setattr("app.db.opensearch.get_client", lambda: fake_client)
+
+    await ensure_ilm_policy()
+
+    assert len(fake_im.put_calls) == 1
+    policy_id, body = fake_im.put_calls[0]
+    assert policy_id == ILM_POLICY_ID
+    assert body == ILM_POLICY
+
+
+@pytest.mark.asyncio
+async def test_ensure_ilm_policy_skips_when_already_exists(monkeypatch):
+    fake_im = _FakeIndexManagement(policy_exists=True)
+    fake_client = type("FakeClient", (), {"index_management": fake_im})()
+    monkeypatch.setattr("app.db.opensearch.get_client", lambda: fake_client)
+
+    await ensure_ilm_policy()  # must not raise
+
+    assert fake_im.put_calls == []

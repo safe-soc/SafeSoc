@@ -6,6 +6,8 @@ SafeSOC's target storage layer is three-tier (OpenSearch + PostgreSQL + Redis, p
 
 Index pattern: one index per calendar month, e.g. `safesoc-alerts-2026.05`. Created automatically on first write to a new month (`ensure_index_exists()` in `backend/app/db/opensearch.py`). Mapping source: `backend/app/db/mappings/alert_mapping.py`. Settings: 1 shard, 0 replicas, 5s refresh interval (single-node dev configuration — not tuned for production replica/shard counts).
 
+**Retention (ISM policy, SS-006):** an Index State Management policy (`safesoc-alerts-retention-policy`, defined in `backend/app/db/mappings/ilm_policy.py`) is created idempotently on backend startup (`ensure_ilm_policy()` in `db/opensearch.py`) if it doesn't already exist. It targets any index matching `safesoc-alerts-*` via an `ism_template` — new indices pick up the policy automatically at creation time — and deletes them once they exceed `settings.OPENSEARCH_ILM_RETENTION_DAYS` (90 by default). Indices created before this policy existed are not retroactively affected.
+
 The mapping mirrors the `NormalizedLog` Pydantic schema (`backend/app/schemas/log.py`) field-for-field:
 
 | Category | Field | OpenSearch type | Notes |
@@ -41,8 +43,7 @@ The mapping mirrors the `NormalizedLog` Pydantic schema (`backend/app/schemas/lo
 | Enrichment | `anomaly_score` | `float` | Optional; no anomaly service writes to it |
 
 **Not implemented despite being described in the report:**
-- Index Lifecycle Management (90-day auto-delete) — no ILM policy exists in code.
-- Bulk write batching at 500 docs/request — `bulk_index_logs()` sends one bulk request per monthly-index group with no internal chunking; a single oversized batch is sent as one request to OpenSearch rather than split into 500-doc chunks.
+- Bulk write batching at 500 docs/request — `bulk_index_logs()` sends one bulk request per monthly-index group with no internal chunking; a single oversized batch is sent as one request to OpenSearch rather than split into 500-doc chunks. (Note: `SS-005` caps the *total* logs per ingest request at `INGEST_BATCH_SIZE`, which is a different thing from chunking a single bulk write into sub-batches.)
 
 ## 2. PostgreSQL (Planned)
 
