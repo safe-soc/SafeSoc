@@ -25,6 +25,12 @@ class OpenSearchError(SafeSOCError):
         super().__init__(message, status_code=503)
 
 
+class DuplicateEmailError(SafeSOCError):
+    """Raised when a tenant already has a user registered with the given email."""
+    def __init__(self, email: str):
+        super().__init__(f"A user with email '{email}' already exists for this tenant.", status_code=409)
+
+
 async def safesoc_exception_handler(request: Request, exc: SafeSOCError):
     return JSONResponse(
         status_code=exc.status_code,
