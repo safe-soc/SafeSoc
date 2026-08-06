@@ -7,7 +7,7 @@ from unittest.mock import Mock
 import pytest
 import requests
 
-from app.clients import virustotal
+from app.clients import abuseipdb, virustotal
 from app.schemas.log import TIResult
 
 
@@ -17,6 +17,14 @@ def _reset_vt_rate_limiter():
     virustotal._call_timestamps.clear()
     yield
     virustotal._call_timestamps.clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_abuseipdb_rate_limiter():
+    """Each test starts with a clean rate-limit window, regardless of test order."""
+    abuseipdb._call_timestamps.clear()
+    yield
+    abuseipdb._call_timestamps.clear()
 
 
 def _fake_response(stats: dict) -> Mock:
@@ -109,3 +117,69 @@ def test_http_error_status_raises_typed_exception(monkeypatch):
 
     with pytest.raises(virustotal.VirusTotalError):
         virustotal._get("ip_addresses/45.33.32.156")
+
+
+# ── SS-023: AbuseIPDB client (same shape/behavior contract as SS-022) ──
+
+def _fake_abuseipdb_response(confidence: int, total_reports: int) -> Mock:
+    response = Mock()
+    response.raise_for_status = Mock()
+    response.json.return_value = {
+        "data": {"abuseConfidenceScore": confidence, "totalReports": total_reports}
+    }
+    return response
+
+
+@pytest.mark.asyncio
+async def test_abuseipdb_lookup_ip_returns_normalized_ti_result_for_a_malicious_ip(monkeypatch):
+    monkeypatch.setattr(abuseipdb.requests, "get", Mock(return_value=_fake_abuseipdb_response(90, 15)))
+
+    result = await abuseipdb.lookup_ip("45.33.32.156")
+
+    assert isinstance(result, TIResult)
+    assert result.source_ip == "45.33.32.156"
+    assert result.abuse_confidence == 90
+    assert result.abuse_total_reports == 15
+    assert result.is_malicious is True
+
+
+@pytest.mark.asyncio
+async def test_abuseipdb_lookup_ip_returns_not_malicious_for_a_clean_ip(monkeypatch):
+    monkeypatch.setattr(abuseipdb.requests, "get", Mock(return_value=_fake_abuseipdb_response(0, 0)))
+
+    result = await abuseipdb.lookup_ip("8.8.8.8")
+
+    assert result.abuse_confidence == 0
+    assert result.is_malicious is False
+
+
+@pytest.mark.asyncio
+async def test_abuseipdb_confidence_below_threshold_is_not_malicious(monkeypatch):
+    monkeypatch.setattr(
+        abuseipdb.requests, "get",
+        Mock(return_value=_fake_abuseipdb_response(abuseipdb.MALICIOUS_CONFIDENCE_THRESHOLD - 1, 1)),
+    )
+
+    result = await abuseipdb.lookup_ip("1.2.3.4")
+
+    assert result.is_malicious is False
+
+
+def test_abuseipdb_daily_rate_limit_is_tracked_and_raises_once_exhausted(monkeypatch):
+    monkeypatch.setattr(abuseipdb.settings, "ABUSEIPDB_RATE_LIMIT_PER_DAY", 2)
+
+    abuseipdb._check_rate_limit()  # 1st call: fine
+    abuseipdb._check_rate_limit()  # 2nd call: fine, quota now exhausted
+
+    with pytest.raises(abuseipdb.AbuseIPDBError):
+        abuseipdb._check_rate_limit()  # 3rd call: over the daily limit
+
+
+def test_abuseipdb_network_failure_raises_typed_exception(monkeypatch):
+    def _raise(*args, **kwargs):
+        raise requests.exceptions.ConnectionError("connection refused")
+
+    monkeypatch.setattr(abuseipdb.requests, "get", _raise)
+
+    with pytest.raises(abuseipdb.AbuseIPDBError):
+        abuseipdb._get("check", {"ipAddress": "45.33.32.156"})
