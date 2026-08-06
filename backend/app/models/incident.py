@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import JSON, DateTime, ForeignKey, func
+from sqlalchemy import JSON, DateTime, ForeignKey, Text, func
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -45,6 +45,7 @@ class Incident(Base):
     transitions: Mapped[list["IncidentStateTransition"]] = relationship(
         back_populates="incident", order_by="IncidentStateTransition.created_at"
     )
+    notes: Mapped[list["IncidentNote"]] = relationship(back_populates="incident", order_by="IncidentNote.created_at")
 
 
 class IncidentStateTransition(Base):
@@ -65,3 +66,21 @@ class IncidentStateTransition(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     incident: Mapped["Incident"] = relationship(back_populates="transitions")
+
+
+class IncidentNote(Base):
+    """
+    A timestamped analyst note attached to an incident (SS-037), per
+    SRS §3.3. Append-only: no update or delete path is exposed anywhere
+    — once posted, a note is immutable.
+    """
+
+    __tablename__ = "incident_notes"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    incident_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("incidents.id"), nullable=False)
+    author_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    incident: Mapped["Incident"] = relationship(back_populates="notes")

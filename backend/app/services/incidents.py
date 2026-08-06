@@ -5,7 +5,8 @@ Turns a detected correlation chain (SS-028) into exactly one Incident
 references any of the chain's alert_ids, rather than creating a
 duplicate every time the same chain re-fires as more alerts join it.
 Also provides manual incident creation, listing, retrieval, and
-lifecycle-transition enforcement (SS-036) for routers/v1/incidents.py.
+lifecycle-transition enforcement (SS-036), plus post-creation alert
+linking and investigation notes (SS-037), for routers/v1/incidents.py.
 """
 
 import uuid
@@ -16,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.enums import IncidentStatus
 from app.core.exceptions import IncidentNotFoundError, InvalidStateTransitionError
-from app.models.incident import Incident, IncidentStateTransition
+from app.models.incident import Incident, IncidentNote, IncidentStateTransition
 from app.services.correlation import DetectedChain
 
 # Incidents in either of these statuses are still "live" and eligible to
@@ -174,3 +175,58 @@ async def transition_incident(
     await db.commit()
     await db.refresh(incident)
     return incident
+
+
+async def link_alert(db: AsyncSession, tenant_id: uuid.UUID, incident_id: uuid.UUID, alert_id: str) -> Incident:
+    """
+    Link an additional alert to an already-created incident (SS-037).
+
+    Idempotent: linking an alert_id that's already present is a no-op
+    (no duplicate entry, no commit), matching the AC exactly.
+
+    Raises:
+        IncidentNotFoundError: via get_incident.
+    """
+    incident = await get_incident(db, tenant_id, incident_id)
+
+    if alert_id not in incident.alert_ids:
+        incident.alert_ids = incident.alert_ids + [alert_id]
+        await db.commit()
+        await db.refresh(incident)
+
+    return incident
+
+
+async def add_note(
+    db: AsyncSession, tenant_id: uuid.UUID, incident_id: uuid.UUID, author_user_id: uuid.UUID, body: str
+) -> IncidentNote:
+    """
+    Append a timestamped analyst note to an incident (SS-037), per SRS
+    §3.3. Append-only: nothing here or elsewhere updates or deletes a
+    note once posted.
+
+    Raises:
+        IncidentNotFoundError: via get_incident (also enforces the note
+        is attached to a tenant-owned incident).
+    """
+    incident = await get_incident(db, tenant_id, incident_id)
+
+    note = IncidentNote(incident_id=incident.id, author_user_id=author_user_id, body=body)
+    db.add(note)
+    await db.commit()
+    await db.refresh(note)
+    return note
+
+
+async def list_notes(db: AsyncSession, tenant_id: uuid.UUID, incident_id: uuid.UUID) -> list[IncidentNote]:
+    """List an incident's notes, oldest first.
+
+    Raises:
+        IncidentNotFoundError: via get_incident.
+    """
+    incident = await get_incident(db, tenant_id, incident_id)
+
+    result = await db.execute(
+        select(IncidentNote).where(IncidentNote.incident_id == incident.id).order_by(IncidentNote.created_at)
+    )
+    return list(result.scalars().all())

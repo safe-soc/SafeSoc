@@ -1,6 +1,7 @@
 """
 SafeSOC — Incident Schemas
-Request/response models for incident CRUD and lifecycle transitions.
+Request/response models for incident CRUD, lifecycle transitions
+(SS-036), and post-creation alert linking + investigation notes (SS-037).
 """
 
 import uuid
@@ -48,3 +49,31 @@ class IncidentListResponse(BaseModel):
     size: int
     pages: int
     incidents: list[IncidentResponse]
+
+
+class AlertLinkRequest(BaseModel):
+    alert_id: str
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {"alert_id": "alert-3"},
+        }
+    }
+
+
+class IncidentNoteCreateRequest(BaseModel):
+    body: str
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {"body": "Confirmed lateral movement to FINANCE-DB-01; escalating."},
+        }
+    }
+
+
+class IncidentNoteResponse(BaseModel):
+    id: uuid.UUID
+    incident_id: uuid.UUID
+    author_user_id: uuid.UUID
+    body: str
+    created_at: datetime

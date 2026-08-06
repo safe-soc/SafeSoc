@@ -2,7 +2,9 @@
 SafeSOC — Incidents API
 POST /api/v1/incidents, GET /api/v1/incidents, GET /api/v1/incidents/{id},
 POST /api/v1/incidents/{id}/transitions — incident CRUD and lifecycle
-transitions (SS-036).
+transitions (SS-036). POST /api/v1/incidents/{id}/alerts and
+POST|GET /api/v1/incidents/{id}/notes — post-creation alert linking
+and investigation notes (SS-037).
 
 Auto-created incidents come from correlation-chain detection (SS-031,
 services/incidents.py:create_or_merge_incident); this adds manual
@@ -19,14 +21,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import CurrentUser, get_current_user, require_role
 from app.core.enums import IncidentStatus, UserRole
 from app.db.postgresql import get_db
-from app.models.incident import Incident
+from app.models.incident import Incident, IncidentNote
 from app.schemas.incidents import (
+    AlertLinkRequest,
     IncidentCreateRequest,
     IncidentListResponse,
+    IncidentNoteCreateRequest,
+    IncidentNoteResponse,
     IncidentResponse,
     IncidentTransitionRequest,
 )
-from app.services.incidents import create_incident, get_incident, list_incidents, transition_incident
+from app.services.incidents import (
+    add_note,
+    create_incident,
+    get_incident,
+    link_alert,
+    list_incidents,
+    list_notes,
+    transition_incident,
+)
 
 router = APIRouter(prefix="/api/v1/incidents", tags=["incidents"])
 
@@ -40,6 +53,16 @@ def _to_response(incident: Incident) -> IncidentResponse:
         assigned_analyst_id=incident.assigned_analyst_id,
         created_at=incident.created_at,
         updated_at=incident.updated_at,
+    )
+
+
+def _note_to_response(note: IncidentNote) -> IncidentNoteResponse:
+    return IncidentNoteResponse(
+        id=note.id,
+        incident_id=note.incident_id,
+        author_user_id=note.author_user_id,
+        body=note.body,
+        created_at=note.created_at,
     )
 
 
@@ -100,3 +123,38 @@ async def transition(
         db, current_user.tenant_id, incident_id, payload.to_status, current_user.user_id
     )
     return _to_response(incident)
+
+
+@router.post("/{incident_id}/alerts", response_model=IncidentResponse)
+async def link_alert_route(
+    incident_id: uuid.UUID,
+    payload: AlertLinkRequest,
+    current_user: CurrentUser = Depends(require_role(UserRole.ANALYST)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Link an additional alert to an incident. Idempotent: linking the same alert_id twice is a no-op."""
+    incident = await link_alert(db, current_user.tenant_id, incident_id, payload.alert_id)
+    return _to_response(incident)
+
+
+@router.post("/{incident_id}/notes", response_model=IncidentNoteResponse, status_code=201)
+async def add_note_route(
+    incident_id: uuid.UUID,
+    payload: IncidentNoteCreateRequest,
+    current_user: CurrentUser = Depends(require_role(UserRole.ANALYST)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Append an immutable, timestamped analyst note to an incident."""
+    note = await add_note(db, current_user.tenant_id, incident_id, current_user.user_id, payload.body)
+    return _note_to_response(note)
+
+
+@router.get("/{incident_id}/notes", response_model=list[IncidentNoteResponse])
+async def list_notes_route(
+    incident_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List an incident's notes, oldest first."""
+    notes = await list_notes(db, current_user.tenant_id, incident_id)
+    return [_note_to_response(note) for note in notes]

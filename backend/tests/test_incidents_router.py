@@ -10,7 +10,7 @@ import pytest
 from app.core.enums import IncidentStatus, UserRole
 from app.db.postgresql import get_db
 from app.main import app
-from app.models.incident import Incident
+from app.models.incident import Incident, IncidentNote
 
 
 class _FakeResult:
@@ -33,11 +33,17 @@ class _FakeResult:
 class _FakeSession:
     """Fake AsyncSession standing in for a real DB round-trip (mirrors tests/test_incidents.py)."""
 
-    def __init__(self, existing_incidents=None):
+    def __init__(self, existing_incidents=None, existing_notes=None):
         self.existing_incidents: list[Incident] = list(existing_incidents or [])
+        self.existing_notes: list[IncidentNote] = list(existing_notes or [])
         self.added: list = []
 
     async def execute(self, stmt, params=None):
+        # select(IncidentNote) is routed to existing_notes by inspecting
+        # what entity the statement targets (mirrors tests/test_incidents.py).
+        target = getattr(stmt, "column_descriptions", [{}])[0].get("type") if hasattr(stmt, "column_descriptions") else None
+        if target is IncidentNote:
+            return _FakeResult(self.existing_notes)
         return _FakeResult(self.existing_incidents)
 
     def add(self, obj):
@@ -53,6 +59,13 @@ class _FakeSession:
                     obj.updated_at = datetime.now(timezone.utc)
                 if obj not in self.existing_incidents:
                     self.existing_incidents.append(obj)
+            elif isinstance(obj, IncidentNote):
+                if obj.id is None:
+                    obj.id = uuid.uuid4()
+                if obj.created_at is None:
+                    obj.created_at = datetime.now(timezone.utc)
+                if obj not in self.existing_notes:
+                    self.existing_notes.append(obj)
         self.added = []
 
     async def refresh(self, obj):
@@ -195,3 +208,99 @@ def test_transition_returns_200_and_the_updated_incident(client, db_session, mak
     assert response.status_code == 200
     assert response.json()["status"] == "investigating"
     assert incident.status == IncidentStatus.INVESTIGATING
+
+
+# ── SS-037: post-creation alert linking + investigation notes ──
+
+
+def test_link_alert_requires_analyst_role(client, db_session, make_auth_headers):
+    incident = _seeded_incident()
+    db_session.existing_incidents = [incident]
+    headers = make_auth_headers(role=UserRole.VIEWER)
+
+    response = client.post(f"/api/v1/incidents/{incident.id}/alerts", json={"alert_id": "a1"}, headers=headers)
+
+    assert response.status_code == 403
+
+
+def test_link_alert_adds_the_alert_id(client, db_session, make_auth_headers):
+    tenant_id = uuid.uuid4()
+    incident = _seeded_incident(tenant_id=tenant_id, alert_ids=["a1"])
+    db_session.existing_incidents = [incident]
+    headers = make_auth_headers(tenant_id=tenant_id, role=UserRole.ANALYST)
+
+    response = client.post(f"/api/v1/incidents/{incident.id}/alerts", json={"alert_id": "a2"}, headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["alert_ids"] == ["a1", "a2"]
+
+
+def test_link_alert_is_idempotent(client, db_session, make_auth_headers):
+    tenant_id = uuid.uuid4()
+    incident = _seeded_incident(tenant_id=tenant_id, alert_ids=["a1"])
+    db_session.existing_incidents = [incident]
+    headers = make_auth_headers(tenant_id=tenant_id, role=UserRole.ANALYST)
+
+    response = client.post(f"/api/v1/incidents/{incident.id}/alerts", json={"alert_id": "a1"}, headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["alert_ids"] == ["a1"]
+
+
+def test_add_note_requires_analyst_role(client, db_session, make_auth_headers):
+    incident = _seeded_incident()
+    db_session.existing_incidents = [incident]
+    headers = make_auth_headers(role=UserRole.VIEWER)
+
+    response = client.post(f"/api/v1/incidents/{incident.id}/notes", json={"body": "note"}, headers=headers)
+
+    assert response.status_code == 403
+
+
+def test_add_note_returns_201_with_author_and_timestamp(client, db_session, make_auth_headers):
+    tenant_id = uuid.uuid4()
+    incident = _seeded_incident(tenant_id=tenant_id)
+    db_session.existing_incidents = [incident]
+    headers = make_auth_headers(tenant_id=tenant_id, role=UserRole.ANALYST)
+
+    response = client.post(
+        f"/api/v1/incidents/{incident.id}/notes", json={"body": "Confirmed lateral movement."}, headers=headers
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["incident_id"] == str(incident.id)
+    assert body["body"] == "Confirmed lateral movement."
+    assert body["author_user_id"] is not None
+    assert body["created_at"] is not None
+
+
+def test_list_notes_is_readable_by_a_viewer(client, db_session, make_auth_headers):
+    tenant_id = uuid.uuid4()
+    incident = _seeded_incident(tenant_id=tenant_id)
+    db_session.existing_incidents = [incident]
+    db_session.existing_notes = [
+        IncidentNote(
+            id=uuid.uuid4(),
+            incident_id=incident.id,
+            author_user_id=uuid.uuid4(),
+            body="First note.",
+            created_at=datetime.now(timezone.utc),
+        )
+    ]
+    headers = make_auth_headers(tenant_id=tenant_id, role=UserRole.VIEWER)
+
+    response = client.get(f"/api/v1/incidents/{incident.id}/notes", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["body"] == "First note."
+
+
+def test_notes_endpoints_return_404_for_a_missing_incident(client, db_session, make_auth_headers):
+    headers = make_auth_headers(role=UserRole.ANALYST)
+
+    response = client.post(f"/api/v1/incidents/{uuid.uuid4()}/notes", json={"body": "note"}, headers=headers)
+
+    assert response.status_code == 404

@@ -3,18 +3,22 @@ SafeSOC — Incident Creation Service Tests
 """
 
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 
 from app.core.enums import CorrelationPattern, IncidentStatus
 from app.core.exceptions import IncidentNotFoundError, InvalidStateTransitionError
-from app.models.incident import Incident, IncidentStateTransition
+from app.models.incident import Incident, IncidentNote, IncidentStateTransition
 from app.services.correlation import DetectedChain
 from app.services.incidents import (
+    add_note,
     create_incident,
     create_or_merge_incident,
     get_incident,
+    link_alert,
     list_incidents,
+    list_notes,
     transition_incident,
 )
 
@@ -53,8 +57,9 @@ class _FakeSession:
     same as a real DB round-trip would.
     """
 
-    def __init__(self, existing_incidents=None):
+    def __init__(self, existing_incidents=None, existing_notes=None):
         self.existing_incidents: list[Incident] = list(existing_incidents or [])
+        self.existing_notes: list[IncidentNote] = list(existing_notes or [])
         self.added: list = []
         self.all_added: list = []  # never cleared, for test inspection
         self.commit_count = 0
@@ -63,8 +68,14 @@ class _FakeSession:
     async def execute(self, stmt, params=None):
         # Also receives the pg_advisory_xact_lock() call; this fake has no
         # real concurrency to serialize, so it's a no-op that still returns
-        # a result shaped like the incidents SELECT for the real query.
+        # a result shaped like the incidents/notes SELECT for the real
+        # query. select(IncidentNote) is routed to existing_notes so
+        # list_notes sees notes, not incidents, by inspecting what entity
+        # the statement targets (a real query has no such ambiguity).
         self.execute_params.append(params)
+        target = getattr(stmt, "column_descriptions", [{}])[0].get("type") if hasattr(stmt, "column_descriptions") else None
+        if target is IncidentNote:
+            return _FakeResult(self.existing_notes)
         return _FakeResult(self.existing_incidents)
 
     def add(self, obj):
@@ -79,6 +90,13 @@ class _FakeSession:
                     obj.id = uuid.uuid4()
                 if obj not in self.existing_incidents:
                     self.existing_incidents.append(obj)
+            elif isinstance(obj, IncidentNote):
+                if obj.id is None:
+                    obj.id = uuid.uuid4()
+                if obj.created_at is None:
+                    obj.created_at = datetime.now(timezone.utc)
+                if obj not in self.existing_notes:
+                    self.existing_notes.append(obj)
         self.added = []
 
     async def refresh(self, obj):
@@ -367,3 +385,89 @@ async def test_transition_raises_not_found_for_a_missing_incident():
 
     with pytest.raises(IncidentNotFoundError):
         await transition_incident(session, tenant_id, uuid.uuid4(), IncidentStatus.INVESTIGATING)
+
+
+# ── SS-037: post-creation alert linking + investigation notes ──
+
+
+@pytest.mark.asyncio
+async def test_link_alert_adds_a_new_alert_id():
+    tenant_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1"])
+    session = _FakeSession(existing_incidents=[existing])
+
+    incident = await link_alert(session, tenant_id, existing.id, "a2")
+
+    assert incident.alert_ids == ["a1", "a2"]
+
+
+@pytest.mark.asyncio
+async def test_link_alert_is_idempotent_when_already_linked():
+    """The AC: linking an alert twice must not produce a duplicate entry."""
+    tenant_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1", "a2"])
+    session = _FakeSession(existing_incidents=[existing])
+
+    incident = await link_alert(session, tenant_id, existing.id, "a2")
+
+    assert incident.alert_ids == ["a1", "a2"]  # unchanged, not ["a1", "a2", "a2"]
+    assert session.commit_count == 0  # no-op: nothing changed, nothing committed
+
+
+@pytest.mark.asyncio
+async def test_link_alert_raises_not_found_for_a_missing_incident():
+    session = _FakeSession()
+    tenant_id = uuid.uuid4()
+
+    with pytest.raises(IncidentNotFoundError):
+        await link_alert(session, tenant_id, uuid.uuid4(), "a1")
+
+
+@pytest.mark.asyncio
+async def test_add_note_creates_a_note_with_author_and_body():
+    tenant_id = uuid.uuid4()
+    author_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=[])
+    session = _FakeSession(existing_incidents=[existing])
+
+    note = await add_note(session, tenant_id, existing.id, author_id, "Confirmed lateral movement.")
+
+    assert note.incident_id == existing.id
+    assert note.author_user_id == author_id
+    assert note.body == "Confirmed lateral movement."
+    assert note.created_at is not None
+
+
+@pytest.mark.asyncio
+async def test_add_note_raises_not_found_for_a_missing_incident():
+    session = _FakeSession()
+    tenant_id = uuid.uuid4()
+
+    with pytest.raises(IncidentNotFoundError):
+        await add_note(session, tenant_id, uuid.uuid4(), uuid.uuid4(), "unreachable")
+
+
+@pytest.mark.asyncio
+async def test_list_notes_returns_all_notes_for_the_incident():
+    tenant_id = uuid.uuid4()
+    incident_id = uuid.uuid4()
+    existing = Incident(id=incident_id, tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=[])
+    notes = [
+        IncidentNote(id=uuid.uuid4(), incident_id=incident_id, author_user_id=uuid.uuid4(), body="First."),
+        IncidentNote(id=uuid.uuid4(), incident_id=incident_id, author_user_id=uuid.uuid4(), body="Second."),
+    ]
+    session = _FakeSession(existing_incidents=[existing], existing_notes=notes)
+
+    result = await list_notes(session, tenant_id, incident_id)
+
+    assert len(result) == 2
+    assert {note.body for note in result} == {"First.", "Second."}
+
+
+@pytest.mark.asyncio
+async def test_list_notes_raises_not_found_for_a_missing_incident():
+    session = _FakeSession()
+    tenant_id = uuid.uuid4()
+
+    with pytest.raises(IncidentNotFoundError):
+        await list_notes(session, tenant_id, uuid.uuid4())
