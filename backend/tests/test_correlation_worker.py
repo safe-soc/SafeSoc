@@ -2,14 +2,24 @@
 SafeSOC — Correlation Worker Tests
 """
 
+import uuid
 from unittest.mock import AsyncMock
 
 import pytest
 
 from app.core.enums import CorrelationPattern
+from app.models.incident import Incident, IncidentStatus
 from app.services.correlation import DetectedChain
 from app.tasks.celery_app import celery_app
 from app.workers import correlation_worker
+
+
+class _FakeSessionCM:
+    async def __aenter__(self):
+        return "fake-db-session"
+
+    async def __aexit__(self, *args):
+        return False
 
 
 def test_evaluate_correlation_task_is_registered_with_celery():
@@ -46,10 +56,11 @@ async def test_evaluate_correlation_async_adds_the_event_then_evaluates_the_wind
 
 
 @pytest.mark.asyncio
-async def test_evaluate_correlation_async_logs_each_detected_chain(monkeypatch):
+async def test_evaluate_correlation_async_creates_an_incident_and_logs_each_detected_chain(monkeypatch):
+    tenant_id = uuid.uuid4()
     doc = {
         "alert_id": "abc-123",
-        "tenant_id": "acme-corp",
+        "tenant_id": str(tenant_id),
         "host_id": "DESKTOP-042",
         "log_type": "authentication",
         "action": "failed_login",
@@ -62,20 +73,28 @@ async def test_evaluate_correlation_async_logs_each_detected_chain(monkeypatch):
         mitre_technique_ids=("T1110",),
         mitre_tactic="Credential Access",
     )
+    incident = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1", "a2"])
+
     monkeypatch.setattr(correlation_worker, "get_alert_by_id", AsyncMock(return_value=doc))
     monkeypatch.setattr(correlation_worker, "add_event", AsyncMock())
     monkeypatch.setattr(correlation_worker, "evaluate_host", AsyncMock(return_value=[chain]))
+    monkeypatch.setattr(correlation_worker, "async_session_factory", lambda: _FakeSessionCM())
+    mock_create_or_merge = AsyncMock(return_value=incident)
+    monkeypatch.setattr(correlation_worker, "create_or_merge_incident", mock_create_or_merge)
 
     logged = []
     monkeypatch.setattr(correlation_worker.logger, "info", lambda msg, **kw: logged.append((msg, kw)))
 
     await correlation_worker._evaluate_correlation_async("abc-123")
 
+    mock_create_or_merge.assert_called_once_with("fake-db-session", tenant_id, "DESKTOP-042", chain)
+
     assert len(logged) == 1
     message, fields = logged[0]
     assert "chain" in message.lower()
     assert fields["pattern"] == "credential_brute_force"
     assert fields["alert_ids"] == ["a1", "a2"]
+    assert fields["incident_id"] == str(incident.id)
 
 
 @pytest.mark.asyncio
