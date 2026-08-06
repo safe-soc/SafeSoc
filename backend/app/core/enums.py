@@ -14,6 +14,11 @@ class LogSource(str, Enum):
     SYNTHETIC = "synthetic"
     AWS_CLOUDTRAIL = "aws_cloudtrail"
     AWS_GUARDDUTY = "aws_guardduty"
+    # A CloudLens Finding (IAM risk-scan result) is a materially different
+    # kind of record from a CloudTrail API-call log — a static
+    # misconfiguration finding, not a runtime event — so it gets its own
+    # source value (SS-038) rather than being mislabeled as CloudTrail.
+    CLOUDLENS = "cloudlens"
 
 
 class LogType(str, Enum):

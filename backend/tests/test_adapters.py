@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from app.adapters import cloudtrail, guardduty, wazuh
+from app.adapters import cloudlens, cloudtrail, guardduty, wazuh
 from app.core.enums import LogType, Severity
 from app.schemas.log import NormalizedLog
 
@@ -297,5 +297,99 @@ def test_guardduty_severity_boundaries(score, expected):
     finding = {**GUARDDUTY_SSH_BRUTE_FORCE_FINDING, "Severity": score}
 
     result = guardduty.transform(finding)
+
+    assert result["severity"] == expected.value
+
+
+# ── SS-038: CloudLens adapter ─────────────────────────────────────
+
+# Shape matches FindingSerializer exactly (cloud/AWS-IAM-backend/core/serializers.py):
+# id, category, title, description, severity, affected_resource, remediation.
+CLOUDLENS_PRIVILEGE_ESCALATION_FINDING = {
+    "id": 42,
+    "category": "Privilege Escalation",
+    "title": "User has AdministratorAccess",
+    "description": "IAM user 'dave' is directly attached to the AdministratorAccess managed policy.",
+    "severity": "HIGH",
+    "affected_resource": "user-dave",
+    "remediation": "Remove the AdministratorAccess policy and apply least-privilege permissions instead.",
+}
+
+# A finding with no remediation text — exercises the graceful-degradation path.
+CLOUDLENS_MISCONFIGURATION_FINDING = {
+    "id": 7,
+    "category": "Misconfiguration",
+    "title": "S3 bucket is publicly readable",
+    "description": "Bucket 'acme-backups' has a public-read ACL.",
+    "severity": "CRITICAL",
+    "affected_resource": "acme-backups",
+    "remediation": "",
+}
+
+
+def test_privilege_escalation_finding_produces_a_valid_normalized_log():
+    result = cloudlens.transform(CLOUDLENS_PRIVILEGE_ESCALATION_FINDING)
+    log = NormalizedLog(tenant_id="acme-corp", **result)
+
+    assert log.log_type == LogType.CLOUD
+    assert log.source.value == "cloudlens"
+    assert log.host_id == "user-dave"
+    assert log.host_ip == "0.0.0.0"
+    assert log.action == "Privilege Escalation"
+    assert log.severity == Severity.HIGH
+    assert log.rule_id == "42"
+    assert "AdministratorAccess" in log.description
+
+
+def test_remediation_text_is_preserved_on_the_normalized_record():
+    """AC: remediation text must be preserved somewhere on the normalized record."""
+    result = cloudlens.transform(CLOUDLENS_PRIVILEGE_ESCALATION_FINDING)
+
+    assert "Remove the AdministratorAccess policy" in result["description"]
+
+
+def test_finding_without_remediation_still_produces_a_valid_normalized_log():
+    result = cloudlens.transform(CLOUDLENS_MISCONFIGURATION_FINDING)
+    log = NormalizedLog(tenant_id="acme-corp", **result)
+
+    assert log.log_type == LogType.CLOUD
+    assert log.severity == Severity.CRITICAL
+    assert "publicly readable" in log.description
+    assert "Remediation:" not in log.description  # nothing to append
+
+
+def test_cloudlens_raw_log_preserves_the_original_payload_as_json():
+    result = cloudlens.transform(CLOUDLENS_PRIVILEGE_ESCALATION_FINDING)
+
+    assert json.loads(result["raw_log"]) == CLOUDLENS_PRIVILEGE_ESCALATION_FINDING
+
+
+def test_empty_finding_still_produces_a_valid_normalized_log():
+    result = cloudlens.transform({})
+    log = NormalizedLog(tenant_id="acme-corp", **result)
+
+    assert log.log_type == LogType.CLOUD
+    assert log.host_id == "unknown-resource"
+    assert log.severity == Severity.LOW
+    assert log.rule_id is None
+
+
+@pytest.mark.parametrize(
+    "raw_severity,expected",
+    [
+        ("CRITICAL", Severity.CRITICAL),
+        ("HIGH", Severity.HIGH),
+        ("MEDIUM", Severity.MEDIUM),
+        ("LOW", Severity.LOW),
+        ("critical", Severity.CRITICAL),  # lowercase input still maps correctly
+        ("unknown-value", Severity.LOW),  # unmappable -> safe default
+        (None, Severity.LOW),  # missing
+    ],
+)
+def test_cloudlens_severity_mapping(raw_severity, expected):
+    """AC: CRITICAL/HIGH/MEDIUM/LOW must map explicitly, not be assumed to already match."""
+    finding = {**CLOUDLENS_PRIVILEGE_ESCALATION_FINDING, "severity": raw_severity}
+
+    result = cloudlens.transform(finding)
 
     assert result["severity"] == expected.value
