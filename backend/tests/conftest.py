@@ -14,6 +14,7 @@ from app.core.enums import UserRole
 from app.core.security import create_access_token
 from app.main import app
 from app.tasks.enrichment import enrich_alert
+from app.workers.correlation_worker import evaluate_correlation
 
 
 @pytest.fixture
@@ -33,6 +34,17 @@ def _mock_enrichment_queueing(monkeypatch) -> Mock:
     """
     mock = Mock()
     monkeypatch.setattr(enrich_alert, "delay", mock)
+    return mock
+
+
+@pytest.fixture(autouse=True)
+def _mock_correlation_queueing(monkeypatch) -> Mock:
+    """
+    Same rationale as _mock_enrichment_queueing, for the second Celery
+    task POST /api/v1/ingest queues per accepted log (SS-030).
+    """
+    mock = Mock()
+    monkeypatch.setattr(evaluate_correlation, "delay", mock)
     return mock
 
 

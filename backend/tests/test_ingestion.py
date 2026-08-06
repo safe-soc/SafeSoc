@@ -218,3 +218,26 @@ def test_ingest_succeeds_even_if_enrichment_queueing_fails(
 
     assert response.status_code == 200  # ingestion succeeds regardless of queueing outcome
     assert response.json()["accepted"] == 1
+
+
+# ── Async correlation queuing (SS-030) ─────────────────────────
+
+def test_ingest_queues_correlation_for_each_accepted_alert(
+    client, base_log_fields, mock_bulk_index_logs, auth_headers, _mock_correlation_queueing
+):
+    response = client.post("/api/v1/ingest", json={"log": base_log_fields}, headers=auth_headers)
+
+    assert response.status_code == 200
+    alert_id = response.json()["alert_ids"][0]
+    _mock_correlation_queueing.assert_called_once_with(alert_id)
+
+
+def test_ingest_succeeds_even_if_correlation_queueing_fails(
+    client, base_log_fields, mock_bulk_index_logs, auth_headers, _mock_correlation_queueing
+):
+    _mock_correlation_queueing.side_effect = ConnectionError("broker unreachable")
+
+    response = client.post("/api/v1/ingest", json={"log": base_log_fields}, headers=auth_headers)
+
+    assert response.status_code == 200  # ingestion succeeds regardless of queueing outcome
+    assert response.json()["accepted"] == 1

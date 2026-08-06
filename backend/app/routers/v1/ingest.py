@@ -16,29 +16,30 @@ from app.schemas.log import NormalizedLog
 from app.services.ingestion import process_ingest_batch
 from app.tasks.enrichment import enrich_alert
 from app.utils.logger import get_logger
+from app.workers.correlation_worker import evaluate_correlation
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["ingestion"])
 
 # Queuing a Celery task means publishing to the broker, which is a blocking
-# call — cap it, so a slow/unreachable broker degrades to "enrichment
-# wasn't queued this time" instead of hanging (the exact failure mode
-# ADR-005 exists to prevent). This runs as a FastAPI background task
-# (after the response is already sent), not awaited inline in the route,
-# so it can never add to ingestion response time in the first place.
-_ENRICHMENT_QUEUE_TIMEOUT_SECONDS = 2.0
+# call — cap it, so a slow/unreachable broker degrades to "task wasn't
+# queued this time" instead of hanging (the exact failure mode ADR-005
+# exists to prevent). This runs as a FastAPI background task (after the
+# response is already sent), not awaited inline in the route, so it can
+# never add to ingestion response time in the first place.
+_QUEUE_TIMEOUT_SECONDS = 2.0
 
 
-async def _queue_enrichment(alert_id: str) -> None:
+async def _queue_task(task, alert_id: str, *, task_name: str) -> None:
     loop = asyncio.get_running_loop()
     try:
         await asyncio.wait_for(
-            loop.run_in_executor(None, enrich_alert.delay, alert_id),
-            timeout=_ENRICHMENT_QUEUE_TIMEOUT_SECONDS,
+            loop.run_in_executor(None, task.delay, alert_id),
+            timeout=_QUEUE_TIMEOUT_SECONDS,
         )
     except Exception as e:
-        logger.warning("Failed to queue enrichment task", alert_id=alert_id, error=str(e))
+        logger.warning(f"Failed to queue {task_name} task", alert_id=alert_id, error=str(e))
 
 
 @router.post("/ingest")
@@ -61,8 +62,9 @@ async def ingest_logs(
     within a batch.
 
     All logs are validated against NormalizedLog schema before writing.
-    Threat-intel enrichment for each accepted log is queued as a
-    background task (Celery, ADR-005) and never delays this response.
+    Threat-intel enrichment (SS-025/026) and attack-chain correlation
+    (SS-027/028/030) for each accepted log are both queued as background
+    tasks (Celery, ADR-005) and never delay this response.
     """
     # Determine if single log or batch
     if "log" in payload:
@@ -91,7 +93,8 @@ async def ingest_logs(
     )
 
     for alert_id in result["alert_ids"]:
-        background_tasks.add_task(_queue_enrichment, alert_id)
+        background_tasks.add_task(_queue_task, enrich_alert, alert_id, task_name="enrichment")
+        background_tasks.add_task(_queue_task, evaluate_correlation, alert_id, task_name="correlation")
 
     return {
         "accepted": result["accepted"],
