@@ -124,6 +124,21 @@ async def bulk_index_logs(logs: list[dict]) -> int:
     return success_count
 
 
+async def get_alert_by_id(alert_id: str) -> Optional[dict]:
+    """
+    Fetch a single alert document by its alert_id, searching across all
+    monthly indices (the caller doesn't need to know which one it's in).
+    Returns None if no such document exists.
+    """
+    client = get_client()
+    response = client.search(
+        index="safesoc-alerts-*",
+        body={"query": {"term": {"alert_id": alert_id}}, "size": 1},
+    )
+    hits = response["hits"]["hits"]
+    return hits[0]["_source"] if hits else None
+
+
 async def update_alert_ti_fields(
     alert_id: str,
     timestamp: datetime,

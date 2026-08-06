@@ -195,3 +195,26 @@ def test_router_rejects_unknown_source_with_a_clear_422(client, auth_headers):
         "error": "Unknown log source 'not-a-real-source' — no adapter registered for it.",
         "status_code": 422,
     }
+
+
+# ── Async enrichment queuing (SS-026) ──────────────────────────
+
+def test_ingest_queues_enrichment_for_each_accepted_alert(
+    client, base_log_fields, mock_bulk_index_logs, auth_headers, _mock_enrichment_queueing
+):
+    response = client.post("/api/v1/ingest", json={"log": base_log_fields}, headers=auth_headers)
+
+    assert response.status_code == 200
+    alert_id = response.json()["alert_ids"][0]
+    _mock_enrichment_queueing.assert_called_once_with(alert_id)
+
+
+def test_ingest_succeeds_even_if_enrichment_queueing_fails(
+    client, base_log_fields, mock_bulk_index_logs, auth_headers, _mock_enrichment_queueing
+):
+    _mock_enrichment_queueing.side_effect = ConnectionError("broker unreachable")
+
+    response = client.post("/api/v1/ingest", json={"log": base_log_fields}, headers=auth_headers)
+
+    assert response.status_code == 200  # ingestion succeeds regardless of queueing outcome
+    assert response.json()["accepted"] == 1

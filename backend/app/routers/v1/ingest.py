@@ -5,22 +5,48 @@ Requires a valid JWT (SS-015); tenant_id is derived from the token,
 not the caller-supplied payload (SS-016).
 """
 
-from fastapi import APIRouter, Depends
+import asyncio
+
+from fastapi import APIRouter, BackgroundTasks, Depends
 
 from app.core.config import settings
 from app.core.dependencies import CurrentUser, ensure_tenant_matches, get_current_user
 from app.core.exceptions import IngestionError
 from app.schemas.log import NormalizedLog
 from app.services.ingestion import process_ingest_batch
+from app.tasks.enrichment import enrich_alert
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["ingestion"])
 
+# Queuing a Celery task means publishing to the broker, which is a blocking
+# call — cap it, so a slow/unreachable broker degrades to "enrichment
+# wasn't queued this time" instead of hanging (the exact failure mode
+# ADR-005 exists to prevent). This runs as a FastAPI background task
+# (after the response is already sent), not awaited inline in the route,
+# so it can never add to ingestion response time in the first place.
+_ENRICHMENT_QUEUE_TIMEOUT_SECONDS = 2.0
+
+
+async def _queue_enrichment(alert_id: str) -> None:
+    loop = asyncio.get_running_loop()
+    try:
+        await asyncio.wait_for(
+            loop.run_in_executor(None, enrich_alert.delay, alert_id),
+            timeout=_ENRICHMENT_QUEUE_TIMEOUT_SECONDS,
+        )
+    except Exception as e:
+        logger.warning("Failed to queue enrichment task", alert_id=alert_id, error=str(e))
+
 
 @router.post("/ingest")
-async def ingest_logs(payload: dict, current_user: CurrentUser = Depends(get_current_user)):
+async def ingest_logs(
+    payload: dict,
+    background_tasks: BackgroundTasks,
+    current_user: CurrentUser = Depends(get_current_user),
+):
     """
     Ingest security logs into SafeSOC.
 
@@ -35,6 +61,8 @@ async def ingest_logs(payload: dict, current_user: CurrentUser = Depends(get_cur
     within a batch.
 
     All logs are validated against NormalizedLog schema before writing.
+    Threat-intel enrichment for each accepted log is queued as a
+    background task (Celery, ADR-005) and never delays this response.
     """
     # Determine if single log or batch
     if "log" in payload:
@@ -61,6 +89,9 @@ async def ingest_logs(payload: dict, current_user: CurrentUser = Depends(get_cur
         tenant_id=tenant_id,
         source=payload.get("source", "synthetic"),
     )
+
+    for alert_id in result["alert_ids"]:
+        background_tasks.add_task(_queue_enrichment, alert_id)
 
     return {
         "accepted": result["accepted"],

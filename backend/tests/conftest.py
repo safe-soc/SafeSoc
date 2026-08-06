@@ -5,7 +5,7 @@ Reusable pytest fixtures for the backend test suite.
 
 import uuid
 from typing import Optional
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,12 +13,27 @@ from fastapi.testclient import TestClient
 from app.core.enums import UserRole
 from app.core.security import create_access_token
 from app.main import app
+from app.tasks.enrichment import enrich_alert
 
 
 @pytest.fixture
 def client() -> TestClient:
     """FastAPI TestClient wrapping the SafeSOC app, for HTTP-level endpoint tests."""
     return TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _mock_enrichment_queueing(monkeypatch) -> Mock:
+    """
+    Never attempt a real Celery/Redis broker connection during tests.
+    POST /api/v1/ingest queues enrichment via BackgroundTasks (SS-026),
+    and TestClient runs background tasks synchronously as part of the
+    request — an unmocked real .delay() would try (and, with no broker
+    reachable, hang/fail) on every test that accepts a log.
+    """
+    mock = Mock()
+    monkeypatch.setattr(enrich_alert, "delay", mock)
+    return mock
 
 
 @pytest.fixture
