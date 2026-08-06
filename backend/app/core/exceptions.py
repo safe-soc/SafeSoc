@@ -31,6 +31,12 @@ class DuplicateEmailError(SafeSOCError):
         super().__init__(f"A user with email '{email}' already exists for this tenant.", status_code=409)
 
 
+class InvalidTokenError(SafeSOCError):
+    """Raised when a JWT is missing, tampered, or expired."""
+    def __init__(self, message: str = "Invalid or expired token."):
+        super().__init__(message, status_code=401)
+
+
 async def safesoc_exception_handler(request: Request, exc: SafeSOCError):
     return JSONResponse(
         status_code=exc.status_code,
