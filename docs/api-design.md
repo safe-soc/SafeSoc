@@ -94,6 +94,59 @@ On partial failure, `errors` is a list of `{ "index": <int>, "error": "<pydantic
 ```
 Results are sorted by `timestamp` descending and searched across all `safesoc-alerts-*` monthly indices.
 
+### `POST /api/v1/auth/register`
+
+`backend/app/routers/v1/auth.py` → `services/auth.py: register_user()` → `db/postgresql.py`.
+
+**Request body**
+```json
+{ "tenant_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890", "email": "analyst@acme-corp.com", "password": "correct-horse-battery-staple", "role": "analyst" }
+```
+`role` is optional, defaulting to `"viewer"`. `tenant_id` must reference an existing `Tenant` row (SS-009) — this endpoint does not create tenants.
+
+**Response 201**
+```json
+{ "id": "...", "tenant_id": "...", "email": "analyst@acme-corp.com", "role": "analyst" }
+```
+The password is hashed with bcrypt before storage (SS-012) and never appears in the response.
+
+**Error responses**
+- `409` — a user with this email already exists for this tenant (`DuplicateEmailError`).
+
+### `POST /api/v1/auth/login`
+
+`backend/app/routers/v1/auth.py` → `db/postgresql.py` (direct query) + `core/security.py`.
+
+**Request body**
+```json
+{ "tenant_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890", "email": "analyst@acme-corp.com", "password": "correct-horse-battery-staple" }
+```
+
+**Response 200**
+```json
+{ "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...", "token_type": "bearer" }
+```
+The token embeds `tenant_id`, `user_id`, and `role` claims and expires per `settings.JWT_EXPIRY_HOURS` (SS-013).
+
+**Error responses**
+- `401` — no matching user for `tenant_id`/`email`, or the password doesn't verify (`InvalidCredentialsError`; the same generic message either way, so login doesn't reveal whether an email exists).
+
+### `POST /api/v1/auth/refresh`
+
+`backend/app/routers/v1/auth.py` → `core/security.py`.
+
+**Request body**
+```json
+{ "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." }
+```
+
+**Response 200** — same shape as `/login`, a freshly-issued token carrying the same `tenant_id`/`user_id`/`role` claims with a new expiry.
+
+**Error responses**
+- `401` — the supplied token is missing, tampered, or already expired (`InvalidTokenError`).
+
+**No authentication dependency yet.** These endpoints don't require an `Authorization` header on other routes — that's `core/dependencies.py`, still an empty stub (tracked separately). Today, calling `/register` or `/login` is how a caller *obtains* a token; nothing yet *enforces* it elsewhere (see `architecture.md` §4).
+
 ---
 
 ## Planned Endpoints (stub routers, no logic)
@@ -102,7 +155,6 @@ These router files exist under `backend/app/routers/v1/` but are **empty** — n
 
 | File | Intended purpose (SRS §3.3) |
 |---|---|
-| `auth.py` | Login, JWT issuance/refresh, tied to `UserRole` (admin/analyst/viewer) |
 | `cloud.py` | Surface CloudLens findings (or ingest them via the adapter pipeline) in the unified alert view |
 | `endpoints.py` | List monitored hosts with current risk score/level |
 | `incidents.py` | CRUD + lifecycle transitions (`open` → `investigating` → `resolved`/`false_positive`), alert linking, notes |

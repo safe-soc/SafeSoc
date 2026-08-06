@@ -37,6 +37,12 @@ class InvalidTokenError(SafeSOCError):
         super().__init__(message, status_code=401)
 
 
+class InvalidCredentialsError(SafeSOCError):
+    """Raised when login credentials don't match any user."""
+    def __init__(self, message: str = "Invalid email or password."):
+        super().__init__(message, status_code=401)
+
+
 async def safesoc_exception_handler(request: Request, exc: SafeSOCError):
     return JSONResponse(
         status_code=exc.status_code,

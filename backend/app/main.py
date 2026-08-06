@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.exceptions import SafeSOCError, safesoc_exception_handler
 from app.routers import health
-from app.routers.v1 import ingest
+from app.routers.v1 import auth, ingest
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -34,6 +34,7 @@ app.add_exception_handler(SafeSOCError, safesoc_exception_handler)
 app.include_router(health.router)
 app.include_router(ingest.router)
 app.include_router(alerts.router)
+app.include_router(auth.router)
 
 
 @app.on_event("startup")
