@@ -7,9 +7,16 @@ import uuid
 import pytest
 
 from app.core.enums import CorrelationPattern, IncidentStatus
+from app.core.exceptions import IncidentNotFoundError, InvalidStateTransitionError
 from app.models.incident import Incident, IncidentStateTransition
 from app.services.correlation import DetectedChain
-from app.services.incidents import create_or_merge_incident
+from app.services.incidents import (
+    create_incident,
+    create_or_merge_incident,
+    get_incident,
+    list_incidents,
+    transition_incident,
+)
 
 
 def _chain(*alert_ids, pattern=CorrelationPattern.CREDENTIAL_BRUTE_FORCE, confidence=0.8) -> DetectedChain:
@@ -31,6 +38,12 @@ class _FakeResult:
 
     def all(self):
         return list(self._rows)
+
+    def scalar_one(self):
+        return len(self._rows)
+
+    def scalar_one_or_none(self):
+        return self._rows[0] if self._rows else None
 
 
 class _FakeSession:
@@ -182,3 +195,175 @@ async def test_repeated_detections_of_a_growing_chain_result_in_exactly_one_inci
 
     assert len(session.existing_incidents) == 1
     assert set(final.alert_ids) == {"a1", "a2", "a3", "a4", "a5", "a6", "a7"}
+
+
+# ── SS-036: manual creation, listing, retrieval, lifecycle transitions ──
+
+
+@pytest.mark.asyncio
+async def test_create_incident_opens_a_new_incident_with_the_given_alert_ids():
+    session = _FakeSession()
+    tenant_id = uuid.uuid4()
+
+    incident = await create_incident(session, tenant_id, ["a1", "a2"])
+
+    assert incident.tenant_id == tenant_id
+    assert incident.status == IncidentStatus.OPEN
+    assert incident.alert_ids == ["a1", "a2"]
+
+
+@pytest.mark.asyncio
+async def test_create_incident_defaults_to_no_alert_ids():
+    session = _FakeSession()
+    tenant_id = uuid.uuid4()
+
+    incident = await create_incident(session, tenant_id)
+
+    assert incident.alert_ids == []
+
+
+@pytest.mark.asyncio
+async def test_create_incident_records_the_initial_audit_transition():
+    session = _FakeSession()
+    tenant_id = uuid.uuid4()
+
+    incident = await create_incident(session, tenant_id, ["a1"])
+
+    transitions = [obj for obj in session.all_added if isinstance(obj, IncidentStateTransition)]
+    assert len(transitions) == 1
+    assert transitions[0].incident_id == incident.id
+    assert transitions[0].from_status is None
+    assert transitions[0].to_status == IncidentStatus.OPEN
+
+
+@pytest.mark.asyncio
+async def test_list_incidents_returns_matching_incidents_and_total_count():
+    tenant_id = uuid.uuid4()
+    existing = [
+        Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1"]),
+        Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.RESOLVED, alert_ids=["a2"]),
+    ]
+    session = _FakeSession(existing_incidents=existing)
+
+    incidents, total = await list_incidents(session, tenant_id)
+
+    assert total == 2
+    assert len(incidents) == 2
+
+
+# Note: as with create_or_merge_incident above, real tenant scoping and
+# status filtering for list_incidents happen in the SQL WHERE clause
+# itself — a fake session that hands back a canned list can't prove that
+# clause actually excludes non-matching rows. Verified against live
+# Postgres in Docker instead.
+
+
+@pytest.mark.asyncio
+async def test_get_incident_returns_the_incident_when_it_exists():
+    tenant_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1"])
+    session = _FakeSession(existing_incidents=[existing])
+
+    incident = await get_incident(session, tenant_id, existing.id)
+
+    assert incident.id == existing.id
+
+
+@pytest.mark.asyncio
+async def test_get_incident_raises_not_found_when_no_incident_exists():
+    session = _FakeSession()
+    tenant_id = uuid.uuid4()
+
+    with pytest.raises(IncidentNotFoundError):
+        await get_incident(session, tenant_id, uuid.uuid4())
+
+
+@pytest.mark.asyncio
+async def test_transition_allows_open_to_investigating():
+    tenant_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1"])
+    session = _FakeSession(existing_incidents=[existing])
+
+    incident = await transition_incident(session, tenant_id, existing.id, IncidentStatus.INVESTIGATING)
+
+    assert incident.status == IncidentStatus.INVESTIGATING
+
+
+@pytest.mark.asyncio
+async def test_transition_allows_investigating_to_resolved():
+    tenant_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.INVESTIGATING, alert_ids=["a1"])
+    session = _FakeSession(existing_incidents=[existing])
+
+    incident = await transition_incident(session, tenant_id, existing.id, IncidentStatus.RESOLVED)
+
+    assert incident.status == IncidentStatus.RESOLVED
+
+
+@pytest.mark.asyncio
+async def test_transition_allows_investigating_to_false_positive():
+    tenant_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.INVESTIGATING, alert_ids=["a1"])
+    session = _FakeSession(existing_incidents=[existing])
+
+    incident = await transition_incident(session, tenant_id, existing.id, IncidentStatus.FALSE_POSITIVE)
+
+    assert incident.status == IncidentStatus.FALSE_POSITIVE
+
+
+@pytest.mark.asyncio
+async def test_transition_rejects_resolved_to_open():
+    """The AC's own example of a disallowed transition."""
+    tenant_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.RESOLVED, alert_ids=["a1"])
+    session = _FakeSession(existing_incidents=[existing])
+
+    with pytest.raises(InvalidStateTransitionError):
+        await transition_incident(session, tenant_id, existing.id, IncidentStatus.OPEN)
+
+    assert existing.status == IncidentStatus.RESOLVED  # unchanged
+
+
+@pytest.mark.asyncio
+async def test_transition_rejects_skipping_investigating():
+    tenant_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1"])
+    session = _FakeSession(existing_incidents=[existing])
+
+    with pytest.raises(InvalidStateTransitionError):
+        await transition_incident(session, tenant_id, existing.id, IncidentStatus.RESOLVED)
+
+
+@pytest.mark.asyncio
+async def test_transition_rejects_moving_a_false_positive_incident_anywhere():
+    tenant_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.FALSE_POSITIVE, alert_ids=["a1"])
+    session = _FakeSession(existing_incidents=[existing])
+
+    with pytest.raises(InvalidStateTransitionError):
+        await transition_incident(session, tenant_id, existing.id, IncidentStatus.INVESTIGATING)
+
+
+@pytest.mark.asyncio
+async def test_transition_records_the_acting_user_on_the_audit_transition():
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1"])
+    session = _FakeSession(existing_incidents=[existing])
+
+    await transition_incident(session, tenant_id, existing.id, IncidentStatus.INVESTIGATING, user_id)
+
+    transitions = [obj for obj in session.all_added if isinstance(obj, IncidentStateTransition)]
+    assert len(transitions) == 1
+    assert transitions[0].from_status == IncidentStatus.OPEN
+    assert transitions[0].to_status == IncidentStatus.INVESTIGATING
+    assert transitions[0].changed_by_user_id == user_id
+
+
+@pytest.mark.asyncio
+async def test_transition_raises_not_found_for_a_missing_incident():
+    session = _FakeSession()
+    tenant_id = uuid.uuid4()
+
+    with pytest.raises(IncidentNotFoundError):
+        await transition_incident(session, tenant_id, uuid.uuid4(), IncidentStatus.INVESTIGATING)

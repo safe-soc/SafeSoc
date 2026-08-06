@@ -81,7 +81,7 @@ All of the following are **empty placeholder files** — the module exists on di
 | `routers/v1/auth.py` | **Stub** — no login/JWT endpoints exist yet, despite JWT settings being defined in config |
 | `routers/v1/cloud.py` | **Stub** — no bridge to CloudLens findings |
 | `routers/v1/endpoints.py` | **Stub** — no endpoint/risk-score views |
-| `routers/v1/incidents.py` | **Stub** — no incident lifecycle endpoints |
+| `routers/v1/incidents.py` | **Partial** (SS-036) — `POST/GET /api/v1/incidents`, `GET /api/v1/incidents/{id}`, `POST /api/v1/incidents/{id}/transitions` implemented; alert linking and investigation notes (SS-037) not yet built |
 | `routers/v1/investigate.py` | **Stub** — no NL assistant endpoint |
 | `routers/v1/reports.py` | **Stub** — no report download endpoint |
 | WebSocket channel for live dashboard updates | **Planned** — not present anywhere in `main.py` |

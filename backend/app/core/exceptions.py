@@ -60,6 +60,21 @@ class InsufficientRoleError(SafeSOCError):
         )
 
 
+class IncidentNotFoundError(SafeSOCError):
+    """Raised when an incident doesn't exist, or exists but belongs to a different tenant."""
+    def __init__(self, incident_id):
+        super().__init__(f"Incident '{incident_id}' not found.", status_code=404)
+
+
+class InvalidStateTransitionError(SafeSOCError):
+    """Raised when an incident status transition isn't allowed by the lifecycle state machine."""
+    def __init__(self, from_status, to_status):
+        super().__init__(
+            f"Cannot transition an incident from '{from_status.value}' to '{to_status.value}'.",
+            status_code=409,
+        )
+
+
 async def safesoc_exception_handler(request: Request, exc: SafeSOCError):
     return JSONResponse(
         status_code=exc.status_code,

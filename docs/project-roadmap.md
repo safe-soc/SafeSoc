@@ -42,7 +42,6 @@ Each item lists the report's stated goal alongside what scaffolding (if any) alr
 ## Not Yet Scheduled (mentioned in SRS, no Phase 2 scaffolding beyond enums/config)
 
 - Endpoint risk scoring (`services/risk_scoring.py`, `tasks/scoring.py` — empty)
-- Incident management lifecycle (`routers/v1/incidents.py` — empty; no incident model)
 - Anomaly detection / Isolation Forest (`services/anomaly.py` — empty; `ml/` directory empty; `scikit-learn` not installed)
 - Automated PDF reporting (`services/reporting.py`, `tasks/reporting.py` — empty; WeasyPrint not installed)
 - Notifications (`services/notifications.py`, `workers/notification_worker.py`, `clients/telegram.py` — empty)
