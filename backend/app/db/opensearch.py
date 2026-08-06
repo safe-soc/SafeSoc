@@ -124,6 +124,33 @@ async def bulk_index_logs(logs: list[dict]) -> int:
     return success_count
 
 
+async def update_alert_ti_fields(
+    alert_id: str,
+    timestamp: datetime,
+    ti_result: dict,
+    ti_enriched: bool,
+    risk_score: int,
+) -> bool:
+    """
+    Update an already-indexed alert's ti_result/ti_enriched/risk_score
+    fields in place (update-by-id). `timestamp` locates the alert's
+    monthly index the same way bulk_index_logs does when it was written.
+    Returns True on success, False on failure (never raises).
+    """
+    client = get_client()
+    index_name = _build_index_name(timestamp)
+    try:
+        client.update(
+            index=index_name,
+            id=alert_id,
+            body={"doc": {"ti_result": ti_result, "ti_enriched": ti_enriched, "risk_score": risk_score}},
+        )
+        return True
+    except exceptions.OpenSearchException as e:
+        logger.error("TI enrichment update failed", alert_id=alert_id, error=str(e))
+        return False
+
+
 async def search_alerts(
     tenant_id: str,
     severity: Optional[str] = None,
