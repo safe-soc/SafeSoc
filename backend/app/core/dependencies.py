@@ -2,17 +2,19 @@
 SafeSOC — Auth Dependency Injection
 FastAPI dependency resolving the Authorization: Bearer <JWT> header into
 a (tenant_id, user_id, role) context, usable via Depends(...) in any route.
+Also provides require_role(...) for RBAC enforcement (SRS §3.2): admin >
+analyst > viewer, each tier including everything the tiers below it can do.
 """
 
 import uuid
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.enums import UserRole
-from app.core.exceptions import InvalidTokenError, TenantMismatchError
+from app.core.exceptions import InsufficientRoleError, InvalidTokenError, TenantMismatchError
 from app.core.security import decode_access_token
 
 _bearer_scheme = HTTPBearer(auto_error=False)
@@ -67,3 +69,32 @@ def ensure_tenant_matches(current_user: CurrentUser, candidate_tenant_id: Option
         matches = False
     if not matches:
         raise TenantMismatchError()
+
+
+# Ordered lowest-to-highest per SRS §3.2: viewers are read-only, analysts
+# additionally get alert/incident/investigation access, admins get everything.
+_ROLE_RANK = {
+    UserRole.VIEWER: 0,
+    UserRole.ANALYST: 1,
+    UserRole.ADMIN: 2,
+}
+
+
+def require_role(minimum_role: UserRole) -> Callable[[CurrentUser], CurrentUser]:
+    """
+    Dependency factory: Depends(require_role(UserRole.ANALYST)) allows
+    ANALYST and ADMIN (everything at or above the given tier), blocking
+    lower roles. Reuses get_current_user, so authentication (401) is
+    still checked first — a missing/invalid token never reaches the role
+    check.
+
+    Raises:
+        InsufficientRoleError: (403) if the authenticated user's role is
+        below minimum_role.
+    """
+    def _require_role(current_user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+        if _ROLE_RANK[current_user.role] < _ROLE_RANK[minimum_role]:
+            raise InsufficientRoleError(current_user.role, minimum_role)
+        return current_user
+
+    return _require_role

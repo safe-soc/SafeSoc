@@ -5,6 +5,8 @@ SafeSOC — Custom Exceptions
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
+from app.core.enums import UserRole
+
 
 class SafeSOCError(Exception):
     """Base exception for SafeSOC."""
@@ -47,6 +49,15 @@ class TenantMismatchError(SafeSOCError):
     """Raised when a request's tenant_id doesn't match the authenticated token's tenant."""
     def __init__(self, message: str = "tenant_id does not match the authenticated tenant."):
         super().__init__(message, status_code=403)
+
+
+class InsufficientRoleError(SafeSOCError):
+    """Raised when an authenticated user's role doesn't meet an endpoint's minimum required role."""
+    def __init__(self, actual_role: UserRole, required_role: UserRole):
+        super().__init__(
+            f"Role '{actual_role.value}' does not meet the required minimum role '{required_role.value}'.",
+            status_code=403,
+        )
 
 
 async def safesoc_exception_handler(request: Request, exc: SafeSOCError):
