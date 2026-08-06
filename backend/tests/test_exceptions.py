@@ -38,8 +38,8 @@ def test_handler_produces_documented_shape_for_opensearch_error():
     assert response.json() == {"error": "cluster unreachable", "status_code": 503}
 
 
-def test_ingest_missing_log_and_logs_key_returns_typed_error(client):
-    response = client.post("/api/v1/ingest", json={"tenant_id": "acme"})
+def test_ingest_missing_log_and_logs_key_returns_typed_error(client, auth_headers):
+    response = client.post("/api/v1/ingest", json={}, headers=auth_headers)
 
     assert response.status_code == 422
     assert response.json() == {
@@ -48,8 +48,8 @@ def test_ingest_missing_log_and_logs_key_returns_typed_error(client):
     }
 
 
-def test_ingest_logs_not_a_list_returns_typed_error(client):
-    response = client.post("/api/v1/ingest", json={"tenant_id": "acme", "logs": "not-a-list"})
+def test_ingest_logs_not_a_list_returns_typed_error(client, auth_headers):
+    response = client.post("/api/v1/ingest", json={"logs": "not-a-list"}, headers=auth_headers)
 
     assert response.status_code == 422
     assert response.json() == {"error": "'logs' must be a list", "status_code": 422}

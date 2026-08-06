@@ -6,12 +6,13 @@ a (tenant_id, user_id, role) context, usable via Depends(...) in any route.
 
 import uuid
 from dataclasses import dataclass
+from typing import Optional
 
 from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.enums import UserRole
-from app.core.exceptions import InvalidTokenError
+from app.core.exceptions import InvalidTokenError, TenantMismatchError
 from app.core.security import decode_access_token
 
 _bearer_scheme = HTTPBearer(auto_error=False)
@@ -45,3 +46,24 @@ async def get_current_user(
         user_id=uuid.UUID(claims["user_id"]),
         role=UserRole(claims["role"]),
     )
+
+
+def ensure_tenant_matches(current_user: CurrentUser, candidate_tenant_id: Optional[str]) -> None:
+    """
+    Guard against a caller-supplied tenant_id (request body/query) diverging
+    from the authenticated token's tenant. A missing/empty candidate is
+    treated as "not supplied" and passes silently — the authenticated
+    tenant is always the one actually used by the caller.
+
+    Raises:
+        TenantMismatchError: (403) if candidate_tenant_id is present and
+        doesn't match current_user.tenant_id.
+    """
+    if not candidate_tenant_id:
+        return
+    try:
+        matches = uuid.UUID(candidate_tenant_id) == current_user.tenant_id
+    except ValueError:
+        matches = False
+    if not matches:
+        raise TenantMismatchError()

@@ -104,10 +104,14 @@ CloudLens (`cloud/AWS-IAM-backend` + `cloud/AWS-IAM-frontend`) is a **separate, 
 
 ## 4. Multi-Tenancy
 
-The report describes tenant isolation enforced at the database query layer with JWT-based auth. Today:
+The report describes tenant isolation enforced at the database query layer with JWT-based auth. As of SS-016, this is now real for the two endpoints that touch tenant data:
 
 - `tenant_id` is a required field on `NormalizedLog` and is used as a mandatory filter in `search_alerts()` (`backend/app/db/opensearch.py`) — **Implemented** at the data-model level.
-- Tenant ID is currently taken directly from the request body (`payload.get("tenant_id", "default-tenant")` in `ingest.py`) rather than derived from an authenticated JWT — there is no authentication layer yet, so tenant isolation is **not enforced**; any caller can write or read any tenant's data by passing a different `tenant_id`. This is a Phase 2 requirement (`routers/v1/auth.py` stub, `core/security.py` stub).
+- `POST /api/v1/ingest` and `GET /api/v1/alerts` both require a valid JWT (`core/dependencies.py: get_current_user()`, SS-015) and derive `tenant_id` from the authenticated token's claim (`CurrentUser.tenant_id`), not from the caller-supplied request — **Implemented, enforcement is real**:
+  - Missing or invalid tokens are rejected with `401` before either route body runs.
+  - A `tenant_id` in `/ingest`'s request body or `/alerts`'s query string is optional; if present it must match the token's `tenant_id` or the request is rejected with `403` (`TenantMismatchError`, `core/exceptions.py`) — it is never used to select which tenant's data is read or written.
+  - Within an ingest batch, each log's own `tenant_id` field (if any) is unconditionally overwritten with the authenticated value in `services/ingestion.py::process_ingest_batch()` — a caller cannot smuggle a different tenant via an individual log object either.
+- What's still open: nothing yet enforces *who* may call `/api/v1/auth/register` to obtain a token for a given tenant in the first place (no admin-invite flow), and role-based restriction within a tenant (`UserRole`) isn't enforced anywhere yet — that's SS-017.
 
 ## 5. Summary Table
 

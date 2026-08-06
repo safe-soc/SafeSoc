@@ -1,12 +1,15 @@
 """
 SafeSOC — Alerts API
 GET /api/v1/alerts — paginated alert search with filters.
+Requires a valid JWT (SS-015); tenant_id is derived from the token,
+not the caller-supplied query parameter (SS-016).
 """
 
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
+from app.core.dependencies import CurrentUser, ensure_tenant_matches, get_current_user
 from app.db.opensearch import search_alerts
 
 router = APIRouter(prefix="/api/v1", tags=["alerts"])
@@ -14,7 +17,10 @@ router = APIRouter(prefix="/api/v1", tags=["alerts"])
 
 @router.get("/alerts")
 async def get_alerts(
-    tenant_id: str = Query(..., description="Tenant ID (required)"),
+    current_user: CurrentUser = Depends(get_current_user),
+    tenant_id: Optional[str] = Query(
+        None, description="Optional; if provided must match the authenticated tenant"
+    ),
     severity: Optional[str] = Query(None, description="Filter by severity"),
     log_type: Optional[str] = Query(None, description="Filter by log type"),
     source: Optional[str] = Query(None, description="Filter by source"),
@@ -24,11 +30,17 @@ async def get_alerts(
     size: int = Query(50, ge=1, le=500, description="Results per page"),
 ):
     """
-    Search alerts with mandatory tenant_id filter.
+    Search alerts scoped to the authenticated tenant.
+
+    Requires a valid JWT. tenant_id is always derived from the
+    authenticated token; a tenant_id query parameter is only accepted if
+    it matches the token's tenant_id, otherwise the request is rejected.
     Returns paginated results sorted by timestamp descending.
     """
+    ensure_tenant_matches(current_user, tenant_id)
+
     result = await search_alerts(
-        tenant_id=tenant_id,
+        tenant_id=str(current_user.tenant_id),
         severity=severity,
         log_type=log_type,
         source=source,

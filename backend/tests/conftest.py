@@ -3,11 +3,15 @@ SafeSOC — Shared Test Fixtures
 Reusable pytest fixtures for the backend test suite.
 """
 
+import uuid
+from typing import Optional
 from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.enums import UserRole
+from app.core.security import create_access_token
 from app.main import app
 
 
@@ -15,6 +19,21 @@ from app.main import app
 def client() -> TestClient:
     """FastAPI TestClient wrapping the SafeSOC app, for HTTP-level endpoint tests."""
     return TestClient(app)
+
+
+@pytest.fixture
+def make_auth_headers():
+    """Factory returning an Authorization: Bearer <JWT> header dict for a real, valid token (SS-013/015)."""
+    def _make(tenant_id: Optional[uuid.UUID] = None, role: UserRole = UserRole.ANALYST) -> dict:
+        token = create_access_token(tenant_id or uuid.uuid4(), uuid.uuid4(), role)
+        return {"Authorization": f"Bearer {token}"}
+    return _make
+
+
+@pytest.fixture
+def auth_headers(make_auth_headers) -> dict:
+    """A valid Authorization header for an arbitrary, freshly-minted tenant — for tests that just need *some* authenticated caller."""
+    return make_auth_headers()
 
 
 @pytest.fixture

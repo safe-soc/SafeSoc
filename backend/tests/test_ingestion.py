@@ -79,10 +79,10 @@ async def test_empty_batch_is_a_no_op(mock_bulk_index_logs):
 # go through the real endpoint rather than calling process_ingest_batch
 # directly.
 
-def test_batch_at_exactly_the_limit_is_accepted(client, base_log_fields, mock_bulk_index_logs):
+def test_batch_at_exactly_the_limit_is_accepted(client, base_log_fields, mock_bulk_index_logs, auth_headers):
     logs = [dict(base_log_fields) for _ in range(settings.INGEST_BATCH_SIZE)]
 
-    response = client.post("/api/v1/ingest", json={"tenant_id": "acme-corp", "logs": logs})
+    response = client.post("/api/v1/ingest", json={"logs": logs}, headers=auth_headers)
 
     assert response.status_code == 200
     body = response.json()
@@ -91,10 +91,10 @@ def test_batch_at_exactly_the_limit_is_accepted(client, base_log_fields, mock_bu
     mock_bulk_index_logs.assert_called_once()
 
 
-def test_batch_one_over_the_limit_is_rejected(client, base_log_fields, mock_bulk_index_logs):
+def test_batch_one_over_the_limit_is_rejected(client, base_log_fields, mock_bulk_index_logs, auth_headers):
     logs = [dict(base_log_fields) for _ in range(settings.INGEST_BATCH_SIZE + 1)]
 
-    response = client.post("/api/v1/ingest", json={"tenant_id": "acme-corp", "logs": logs})
+    response = client.post("/api/v1/ingest", json={"logs": logs}, headers=auth_headers)
 
     assert response.status_code == 422
     assert response.json() == {

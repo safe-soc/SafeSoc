@@ -43,6 +43,12 @@ class InvalidCredentialsError(SafeSOCError):
         super().__init__(message, status_code=401)
 
 
+class TenantMismatchError(SafeSOCError):
+    """Raised when a request's tenant_id doesn't match the authenticated token's tenant."""
+    def __init__(self, message: str = "tenant_id does not match the authenticated tenant."):
+        super().__init__(message, status_code=403)
+
+
 async def safesoc_exception_handler(request: Request, exc: SafeSOCError):
     return JSONResponse(
         status_code=exc.status_code,

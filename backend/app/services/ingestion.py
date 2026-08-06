@@ -38,9 +38,11 @@ async def process_ingest_batch(
 
     for i, log in enumerate(logs):
         try:
-            # Inject tenant_id and source if not provided by the adapter
-            if "tenant_id" not in log or not log["tenant_id"]:
-                log["tenant_id"] = tenant_id
+            # tenant_id always comes from the caller's authenticated identity
+            # (SS-016) — any tenant_id the log itself carries is ignored, not
+            # merely defaulted, so a batch can't smuggle a different tenant
+            # via an individual log object.
+            log["tenant_id"] = tenant_id
             if "source" not in log or not log["source"]:
                 log["source"] = source
 
