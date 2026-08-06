@@ -75,6 +75,12 @@ class InvalidStateTransitionError(SafeSOCError):
         )
 
 
+class InvalidServiceTokenError(SafeSOCError):
+    """Raised when a service-to-service caller's X-Service-Token header is missing or wrong."""
+    def __init__(self, message: str = "Invalid or missing service token."):
+        super().__init__(message, status_code=401)
+
+
 async def safesoc_exception_handler(request: Request, exc: SafeSOCError):
     return JSONResponse(
         status_code=exc.status_code,

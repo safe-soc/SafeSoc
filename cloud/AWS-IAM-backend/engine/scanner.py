@@ -1,4 +1,4 @@
-from engine import aws_wrapper, iam_normalize, graph_builder, risk_rules,remediation, notifier
+from engine import aws_wrapper, iam_normalize, graph_builder, risk_rules,remediation, notifier, safesoc_bridge
 from core.models import Scan, Finding, GraphNode, GraphEdge
 from django.utils import timezone
 from datetime import datetime, timedelta, timezone as dt_timezone
@@ -174,6 +174,13 @@ def run_full_scan(access_key, secret_key):
         notifier.send_telegram_report(scan)
     except Exception as e:
         print(f"Notification Error: {e}")
+
+    # --- SYNC FINDINGS TO SAFESOC ---
+    try:
+        safesoc_bridge.sync_findings_to_safesoc(scan)
+    except Exception as e:
+        print(f"SafeSOC Sync Error: {e}")
+
     return scan
 
 def create_finding(scan_obj, rule_id, resource_name):

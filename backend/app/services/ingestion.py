@@ -4,16 +4,20 @@ Dispatches raw, source-specific payloads through the matching adapter,
 validates the result against NormalizedLog schema, and writes to OpenSearch.
 """
 
+import asyncio
 from typing import Callable, Optional
 
+from fastapi import BackgroundTasks
 from pydantic import ValidationError
 
-from app.adapters import cloudtrail, guardduty, wazuh
+from app.adapters import cloudlens, cloudtrail, guardduty, wazuh
 from app.core.enums import LogSource
 from app.core.exceptions import IngestionError
 from app.db.opensearch import bulk_index_logs
 from app.schemas.log import NormalizedLog
+from app.tasks.enrichment import enrich_alert
 from app.utils.logger import get_logger
+from app.workers.correlation_worker import evaluate_correlation
 
 logger = get_logger(__name__)
 
@@ -24,7 +28,38 @@ ADAPTER_REGISTRY: dict[str, Callable[[dict], dict]] = {
     LogSource.WAZUH.value: wazuh.transform,
     LogSource.AWS_CLOUDTRAIL.value: cloudtrail.transform,
     LogSource.AWS_GUARDDUTY.value: guardduty.transform,
+    LogSource.CLOUDLENS.value: cloudlens.transform,
 }
+
+# Queuing a Celery task means publishing to the broker, which is a blocking
+# call — cap it, so a slow/unreachable broker degrades to "task wasn't
+# queued this time" instead of hanging (the exact failure mode ADR-005
+# exists to prevent).
+_QUEUE_TIMEOUT_SECONDS = 2.0
+
+
+async def _queue_task(task, alert_id: str, *, task_name: str) -> None:
+    loop = asyncio.get_running_loop()
+    try:
+        await asyncio.wait_for(
+            loop.run_in_executor(None, task.delay, alert_id),
+            timeout=_QUEUE_TIMEOUT_SECONDS,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to queue {task_name} task", alert_id=alert_id, error=str(e))
+
+
+def queue_post_ingest_tasks(background_tasks: BackgroundTasks, alert_ids: list[str]) -> None:
+    """
+    Queue threat-intel enrichment (SS-025/026) and attack-chain
+    correlation (SS-027/028/030) for each accepted alert, as FastAPI
+    background tasks (run after the response is sent, ADR-005) so
+    neither ever delays a caller's response. Shared by every router that
+    accepts logs (POST /api/v1/ingest, POST /api/v1/cloud/findings).
+    """
+    for alert_id in alert_ids:
+        background_tasks.add_task(_queue_task, enrich_alert, alert_id, task_name="enrichment")
+        background_tasks.add_task(_queue_task, evaluate_correlation, alert_id, task_name="correlation")
 
 
 async def process_ingest_batch(

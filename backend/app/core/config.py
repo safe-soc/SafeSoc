@@ -158,6 +158,15 @@ class Settings(BaseSettings):
     # ──────────────────────────────────────────────
     ALLOWED_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:5173"]
 
+    # ──────────────────────────────────────────────
+    # CloudLens Integration
+    # ──────────────────────────────────────────────
+    # Shared secret checked against the X-Service-Token header on
+    # POST /api/v1/cloud/findings (SS-039) — CloudLens is a same-deployment
+    # backend service pushing findings, not an interactive user, so it
+    # authenticates with this instead of a per-user JWT.
+    CLOUDLENS_SERVICE_TOKEN: str = ""
+
 
 # Singleton settings instance
 settings = Settings()
