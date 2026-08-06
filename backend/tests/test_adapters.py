@@ -4,7 +4,9 @@ SafeSOC — Source Adapter Tests
 
 import json
 
-from app.adapters import cloudtrail, wazuh
+import pytest
+
+from app.adapters import cloudtrail, guardduty, wazuh
 from app.core.enums import LogType, Severity
 from app.schemas.log import NormalizedLog
 
@@ -189,3 +191,111 @@ def test_cloudtrail_raw_log_preserves_the_original_payload_as_json():
     result = cloudtrail.transform(CLOUDTRAIL_CONSOLE_LOGIN_EVENT)
 
     assert json.loads(result["raw_log"]) == CLOUDTRAIL_CONSOLE_LOGIN_EVENT
+
+
+# ── SS-020: AWS GuardDuty adapter ─────────────────────────────────
+
+GUARDDUTY_SSH_BRUTE_FORCE_FINDING = {
+    "SchemaVersion": "2.0",
+    "AccountId": "123456789012",
+    "Region": "us-east-1",
+    "Id": "abcd1234ef567890",
+    "Type": "UnauthorizedAccess:EC2/SSHBruteForce",
+    "Severity": 5.0,
+    "CreatedAt": "2026-08-06T02:47:11.000Z",
+    "Title": "SSH brute force attack against i-99999999.",
+    "Description": "123.45.67.89 is performing SSH brute force attacks against i-99999999.",
+    "Resource": {
+        "ResourceType": "Instance",
+        "InstanceDetails": {
+            "InstanceId": "i-99999999",
+            "NetworkInterfaces": [{"PrivateIpAddress": "10.0.0.1", "PublicIp": "198.51.100.1"}],
+        },
+    },
+    "Service": {
+        "Action": {
+            "ActionType": "NETWORK_CONNECTION",
+            "NetworkConnectionAction": {
+                "RemoteIpDetails": {"IpAddressV4": "123.45.67.89"},
+                "RemotePortDetails": {"Port": 51413},
+                "LocalPortDetails": {"Port": 22},
+            },
+        }
+    },
+}
+
+# An IAM-focused finding: no InstanceDetails/NetworkConnectionAction at all,
+# exercising the graceful-fallback paths.
+GUARDDUTY_IAM_ANOMALY_FINDING = {
+    "SchemaVersion": "2.0",
+    "AccountId": "123456789012",
+    "Region": "us-east-1",
+    "Id": "99998888ff",
+    "Type": "Recon:IAMUser/MaliciousIPCaller",
+    "Severity": 8.5,
+    "CreatedAt": "2026-08-06T04:00:00.000Z",
+    "Title": "API call to access management console from a known malicious IP.",
+    "Resource": {
+        "ResourceType": "AccessKey",
+        "AccessKeyDetails": {"UserName": "bob", "AccessKeyId": "AKIAEXAMPLE"},
+    },
+}
+
+
+def test_ssh_brute_force_finding_produces_a_valid_normalized_log():
+    result = guardduty.transform(GUARDDUTY_SSH_BRUTE_FORCE_FINDING)
+    log = NormalizedLog(tenant_id="acme-corp", **result)
+
+    assert log.log_type == LogType.CLOUD
+    assert log.source.value == "aws_guardduty"
+    assert log.host_id == "i-99999999"
+    assert log.host_ip == "10.0.0.1"
+    assert log.action == "UnauthorizedAccess:EC2/SSHBruteForce"
+    assert "SSH brute force" in log.description
+    assert log.severity == Severity.MEDIUM
+    assert log.source_ip == "123.45.67.89"
+    assert log.source_port == 51413
+    assert log.destination_port == 22
+    assert log.rule_id == "abcd1234ef567890"
+
+
+def test_iam_anomaly_finding_degrades_gracefully_without_instance_or_network_data():
+    result = guardduty.transform(GUARDDUTY_IAM_ANOMALY_FINDING)
+    log = NormalizedLog(tenant_id="acme-corp", **result)
+
+    assert log.log_type == LogType.CLOUD
+    assert log.host_id == "123456789012"  # falls back to AccountId
+    assert log.host_ip == "0.0.0.0"
+    assert log.user == "bob"
+    assert log.severity == Severity.HIGH
+    assert log.source_ip is None
+    assert log.source_port is None
+
+
+def test_guardduty_raw_log_preserves_the_original_payload_as_json():
+    result = guardduty.transform(GUARDDUTY_SSH_BRUTE_FORCE_FINDING)
+
+    assert json.loads(result["raw_log"]) == GUARDDUTY_SSH_BRUTE_FORCE_FINDING
+
+
+@pytest.mark.parametrize(
+    "score,expected",
+    [
+        (0.1, Severity.LOW),
+        (3.9, Severity.LOW),
+        (4.0, Severity.MEDIUM),   # lower boundary of MEDIUM
+        (6.9, Severity.MEDIUM),
+        (7.0, Severity.HIGH),     # lower boundary of HIGH
+        (8.9, Severity.HIGH),     # documented GuardDuty maximum
+        (8.95, Severity.CRITICAL),  # just above the documented maximum
+        (0.0, Severity.LOW),
+        (None, Severity.LOW),     # missing
+        ("not-a-number", Severity.LOW),  # unparseable
+    ],
+)
+def test_guardduty_severity_boundaries(score, expected):
+    finding = {**GUARDDUTY_SSH_BRUTE_FORCE_FINDING, "Severity": score}
+
+    result = guardduty.transform(finding)
+
+    assert result["severity"] == expected.value
