@@ -11,7 +11,7 @@ from opensearchpy import exceptions
 
 from app.core.config import settings
 from app.db.mappings.ilm_policy import ILM_POLICY, ILM_POLICY_ID
-from app.db.opensearch import _build_index_name, check_connection, ensure_ilm_policy
+from app.db.opensearch import _build_index_name, check_connection, ensure_ilm_policy, get_cloud_summary
 
 
 # ── _build_index_name ────────────────────────────────────────
@@ -166,3 +166,58 @@ async def test_ensure_ilm_policy_skips_when_already_exists(monkeypatch):
     await ensure_ilm_policy()  # must not raise
 
     assert fake_im.put_calls == []
+
+
+# ── SS-040: get_cloud_summary ────────────────────────────────
+
+class _FakeSearchClient:
+    def __init__(self, response):
+        self._response = response
+        self.last_search_kwargs = None
+
+    def search(self, index, body):
+        self.last_search_kwargs = {"index": index, "body": body}
+        return self._response
+
+
+@pytest.mark.asyncio
+async def test_get_cloud_summary_parses_aggregation_buckets_into_dicts(monkeypatch):
+    fake_response = {
+        "hits": {"total": {"value": 5}},
+        "aggregations": {
+            "by_severity": {"buckets": [{"key": "critical", "doc_count": 2}, {"key": "high", "doc_count": 3}]},
+            "by_category": {"buckets": [{"key": "Privilege Escalation", "doc_count": 5}]},
+            "distinct_affected_resources": {"value": 4},
+        },
+    }
+    fake_client = _FakeSearchClient(fake_response)
+    monkeypatch.setattr("app.db.opensearch.get_client", lambda: fake_client)
+
+    result = await get_cloud_summary("acme-corp", timerange_hours=48)
+
+    assert result == {
+        "total": 5,
+        "by_severity": {"critical": 2, "high": 3},
+        "by_category": {"Privilege Escalation": 5},
+        "distinct_affected_resources": 4,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_cloud_summary_scopes_the_query_to_tenant_and_cloudlens_source(monkeypatch):
+    fake_response = {
+        "hits": {"total": {"value": 0}},
+        "aggregations": {
+            "by_severity": {"buckets": []},
+            "by_category": {"buckets": []},
+            "distinct_affected_resources": {"value": 0},
+        },
+    }
+    fake_client = _FakeSearchClient(fake_response)
+    monkeypatch.setattr("app.db.opensearch.get_client", lambda: fake_client)
+
+    await get_cloud_summary("acme-corp")
+
+    must_filters = fake_client.last_search_kwargs["body"]["query"]["bool"]["must"]
+    assert {"term": {"tenant_id": "acme-corp"}} in must_filters
+    assert {"term": {"source": "cloudlens"}} in must_filters

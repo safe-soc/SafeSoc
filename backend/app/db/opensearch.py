@@ -9,6 +9,7 @@ from typing import Optional
 from opensearchpy import OpenSearch, exceptions
 
 from app.core.config import settings
+from app.core.enums import LogSource
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -227,4 +228,48 @@ async def search_alerts(
         "size": size,
         "pages": (total + size - 1) // size,
         "alerts": hits,
+    }
+
+
+async def get_cloud_summary(tenant_id: str, timerange_hours: int = 24) -> dict:
+    """
+    Aggregate stats for cloud-sourced (CloudLens) alerts: total count,
+    breakdowns by severity and category (stored as `action`), and the
+    number of distinct affected resources (`host_id`). A genuinely
+    different *shape* of view than search_alerts' paginated raw list —
+    aggregates, not a page of documents — which is what makes this
+    worth a dedicated endpoint rather than duplicating GET /api/v1/alerts
+    (SS-040).
+    """
+    client = get_client()
+
+    query = {
+        "query": {
+            "bool": {
+                "must": [
+                    {"term": {"tenant_id": tenant_id}},
+                    {"term": {"source": LogSource.CLOUDLENS.value}},
+                ],
+                "filter": [{"range": {"timestamp": {"gte": f"now-{timerange_hours}h", "lte": "now"}}}],
+            }
+        },
+        "size": 0,
+        "track_total_hits": True,
+        "aggs": {
+            "by_severity": {"terms": {"field": "severity", "size": 10}},
+            "by_category": {"terms": {"field": "action", "size": 20}},
+            "distinct_affected_resources": {"cardinality": {"field": "host_id"}},
+        },
+    }
+
+    response = client.search(index="safesoc-alerts-*", body=query)
+
+    total = response["hits"]["total"]["value"]
+    aggs = response["aggregations"]
+
+    return {
+        "total": total,
+        "by_severity": {bucket["key"]: bucket["doc_count"] for bucket in aggs["by_severity"]["buckets"]},
+        "by_category": {bucket["key"]: bucket["doc_count"] for bucket in aggs["by_category"]["buckets"]},
+        "distinct_affected_resources": aggs["distinct_affected_resources"]["value"],
     }

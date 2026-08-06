@@ -110,3 +110,19 @@ def test_alerts_accepts_tenant_id_matching_the_token(client, make_auth_headers, 
     response = client.get(f"/api/v1/alerts?tenant_id={tenant_a}", headers=headers)
 
     assert response.status_code == 200
+
+
+def test_alerts_source_filter_reaches_search_alerts(client, make_auth_headers, monkeypatch):
+    """
+    SS-040 AC: cloud-sourced alerts are queryable via the existing
+    ?source= filter — confirming the already-supported filter plumbing
+    reaches search_alerts rather than building a redundant endpoint.
+    """
+    headers = make_auth_headers()
+    mock_search = AsyncMock(return_value={"total": 0, "page": 1, "size": 50, "pages": 0, "alerts": []})
+    monkeypatch.setattr("app.routers.v1.alerts.search_alerts", mock_search)
+
+    response = client.get("/api/v1/alerts?source=cloudlens", headers=headers)
+
+    assert response.status_code == 200
+    assert mock_search.call_args.kwargs["source"] == "cloudlens"

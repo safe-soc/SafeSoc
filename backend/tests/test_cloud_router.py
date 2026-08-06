@@ -2,6 +2,9 @@
 SafeSOC — Cloud Findings Bridge Router Tests
 """
 
+import uuid
+from unittest.mock import AsyncMock
+
 import pytest
 
 from app.core.config import settings
@@ -130,3 +133,44 @@ def test_queues_enrichment_and_correlation_for_accepted_alerts(
     alert_id = response.json()["alert_ids"][0]
     _mock_enrichment_queueing.assert_called_once_with(alert_id)
     _mock_correlation_queueing.assert_called_once_with(alert_id)
+
+
+# ── SS-040: GET /api/v1/cloud/summary ──────────────────────────
+
+
+def test_summary_requires_authentication(client):
+    response = client.get("/api/v1/cloud/summary")
+
+    assert response.status_code == 401
+
+
+def test_summary_returns_the_aggregate_stats_for_the_authenticated_tenant(client, make_auth_headers, monkeypatch):
+    tenant_id = uuid.uuid4()
+    headers = make_auth_headers(tenant_id=tenant_id)
+    fake_summary = {
+        "total": 3,
+        "by_severity": {"critical": 1, "high": 2},
+        "by_category": {"Privilege Escalation": 3},
+        "distinct_affected_resources": 2,
+    }
+    mock_get_summary = AsyncMock(return_value=fake_summary)
+    monkeypatch.setattr("app.routers.v1.cloud.get_cloud_summary", mock_get_summary)
+
+    response = client.get("/api/v1/cloud/summary", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json() == fake_summary
+    mock_get_summary.assert_called_once_with(str(tenant_id), 24)
+
+
+def test_summary_accepts_a_custom_timerange(client, make_auth_headers, monkeypatch):
+    headers = make_auth_headers()
+    mock_get_summary = AsyncMock(
+        return_value={"total": 0, "by_severity": {}, "by_category": {}, "distinct_affected_resources": 0}
+    )
+    monkeypatch.setattr("app.routers.v1.cloud.get_cloud_summary", mock_get_summary)
+
+    response = client.get("/api/v1/cloud/summary?timerange_hours=168", headers=headers)
+
+    assert response.status_code == 200
+    assert mock_get_summary.call_args.args[1] == 168

@@ -6,16 +6,25 @@ scan completes (SS-039), and routes them through the same pipeline
 POST /api/v1/ingest uses (services/ingestion.py:process_ingest_batch,
 source="cloudlens" -> app/adapters/cloudlens.py:transform, SS-038).
 
+GET /api/v1/cloud/summary — aggregate stats for cloud-sourced alerts
+(SS-040). Cloud-sourced alerts are already queryable via the generic
+GET /api/v1/alerts?source=cloudlens (existing filter logic, confirmed
+rather than duplicated here — see tests/test_cloud_router.py and this
+issue's Docker verification notes); this endpoint only adds the one
+thing that generic paginated list genuinely can't: aggregate counts.
+
 Authenticated via a shared service token (X-Service-Token header), not
 a user JWT: CloudLens is a same-deployment backend service pushing data
 on a scan's behalf, not an interactive user (SS-039).
 """
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, Query
 
 from app.core.config import settings
+from app.core.dependencies import CurrentUser, get_current_user
 from app.core.exceptions import IngestionError, InvalidServiceTokenError
 from app.core.enums import LogSource
+from app.db.opensearch import get_cloud_summary
 from app.services.ingestion import process_ingest_batch, queue_post_ingest_tasks
 from app.utils.logger import get_logger
 
@@ -69,3 +78,16 @@ async def receive_findings(payload: dict, background_tasks: BackgroundTasks):
         "alert_ids": result["alert_ids"],
         "errors": result.get("errors"),
     }
+
+
+@router.get("/summary")
+async def summary(
+    timerange_hours: int = Query(24, ge=1, le=720, description="Hours to look back"),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Aggregate stats for cloud-sourced alerts scoped to the authenticated
+    tenant: total count, breakdowns by severity and category, and the
+    number of distinct affected resources.
+    """
+    return await get_cloud_summary(str(current_user.tenant_id), timerange_hours)
