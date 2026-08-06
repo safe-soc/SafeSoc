@@ -174,7 +174,12 @@ def test_refresh_issues_new_token_preserving_claims(client_with_fake_db):
 def test_refresh_rejects_tampered_token_with_401(client_with_fake_db):
     client, _ = client_with_fake_db
     token = create_access_token(uuid.uuid4(), uuid.uuid4(), UserRole.VIEWER)
-    tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+    header, payload, signature = token.split(".")
+    # Flip the *first* signature char, not the last: base64url's final
+    # character can carry unused padding bits, so some replacements there
+    # decode to the same bytes and silently fail to tamper anything.
+    tampered_signature = ("A" if signature[0] != "A" else "B") + signature[1:]
+    tampered = f"{header}.{payload}.{tampered_signature}"
 
     response = client.post("/api/v1/auth/refresh", json={"token": tampered})
 
