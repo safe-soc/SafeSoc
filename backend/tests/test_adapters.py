@@ -4,7 +4,7 @@ SafeSOC — Source Adapter Tests
 
 import json
 
-from app.adapters import wazuh
+from app.adapters import cloudtrail, wazuh
 from app.core.enums import LogType, Severity
 from app.schemas.log import NormalizedLog
 
@@ -117,3 +117,75 @@ def test_unmappable_rule_level_defaults_to_low_severity():
     result = wazuh.transform(alert)
 
     assert result["severity"] == Severity.LOW.value
+
+
+# ── SS-019: AWS CloudTrail adapter ────────────────────────────────
+
+CLOUDTRAIL_CONSOLE_LOGIN_EVENT = {
+    "eventVersion": "1.08",
+    "eventTime": "2026-08-06T02:47:11Z",
+    "eventSource": "signin.amazonaws.com",
+    "eventName": "ConsoleLogin",
+    "awsRegion": "us-east-1",
+    "sourceIPAddress": "45.33.32.156",
+    "userIdentity": {
+        "type": "IAMUser",
+        "arn": "arn:aws:iam::123456789012:user/alice",
+        "accountId": "123456789012",
+        "userName": "alice",
+    },
+    "resources": [],
+    "eventID": "abcd1234-ef56-7890-abcd-ef1234567890",
+}
+
+CLOUDTRAIL_DENIED_S3_EVENT = {
+    "eventVersion": "1.08",
+    "eventTime": "2026-08-06T03:15:42Z",
+    "eventSource": "s3.amazonaws.com",
+    "eventName": "PutObject",
+    "awsRegion": "us-east-1",
+    "sourceIPAddress": "203.0.113.9",
+    "userIdentity": {
+        "type": "AssumedRole",
+        "arn": "arn:aws:sts::123456789012:assumed-role/dev-role/bob",
+        "accountId": "123456789012",
+    },
+    "resources": [
+        {"ARN": "arn:aws:s3:::acme-secrets-bucket", "accountId": "123456789012", "type": "AWS::S3::Object"}
+    ],
+    "errorCode": "AccessDenied",
+    "errorMessage": "Access Denied",
+    "eventID": "11112222-3333-4444-5555-666677778888",
+}
+
+
+def test_console_login_event_produces_a_valid_normalized_log():
+    result = cloudtrail.transform(CLOUDTRAIL_CONSOLE_LOGIN_EVENT)
+    log = NormalizedLog(tenant_id="acme-corp", **result)
+
+    assert log.log_type == LogType.CLOUD
+    assert log.source.value == "aws_cloudtrail"
+    assert log.action == "ConsoleLogin"
+    assert log.user == "alice"
+    assert log.source_ip == "45.33.32.156"
+    assert log.severity == Severity.LOW
+    assert "ConsoleLogin" in log.description
+    assert "alice" in log.description
+
+
+def test_denied_event_maps_actor_ip_and_resource_into_description_and_is_high_severity():
+    result = cloudtrail.transform(CLOUDTRAIL_DENIED_S3_EVENT)
+    log = NormalizedLog(tenant_id="acme-corp", **result)
+
+    assert log.log_type == LogType.CLOUD
+    # No userName on an assumed-role identity -> falls back to the ARN.
+    assert log.user == "arn:aws:sts::123456789012:assumed-role/dev-role/bob"
+    assert log.source_ip == "203.0.113.9"
+    assert log.severity == Severity.HIGH
+    assert "acme-secrets-bucket" in log.description
+
+
+def test_cloudtrail_raw_log_preserves_the_original_payload_as_json():
+    result = cloudtrail.transform(CLOUDTRAIL_CONSOLE_LOGIN_EVENT)
+
+    assert json.loads(result["raw_log"]) == CLOUDTRAIL_CONSOLE_LOGIN_EVENT
