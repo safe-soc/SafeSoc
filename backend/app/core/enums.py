@@ -61,3 +61,13 @@ class IndicatorType(str, Enum):
     IP = "ip"
     FILE_HASH = "file_hash"
     DOMAIN = "domain"
+
+
+class CorrelationPattern(str, Enum):
+    """Attack chain patterns detected by the correlation engine (SRS §3.3)."""
+    CREDENTIAL_BRUTE_FORCE = "credential_brute_force"
+    SUCCESSFUL_COMPROMISE = "successful_compromise"
+    RECON_TO_EXPLOITATION = "recon_to_exploitation"
+    PRIVILEGE_ESCALATION = "privilege_escalation"
+    DATA_EXFILTRATION = "data_exfiltration"
+    LATERAL_MOVEMENT = "lateral_movement"
