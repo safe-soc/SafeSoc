@@ -5,6 +5,7 @@ SafeSOC — Ingestion Service Tests
 import pytest
 
 from app.core.config import settings
+from app.core.exceptions import IngestionError
 from app.services.ingestion import process_ingest_batch
 
 
@@ -105,3 +106,92 @@ def test_batch_one_over_the_limit_is_rejected(client, base_log_fields, mock_bulk
         "status_code": 422,
     }
     mock_bulk_index_logs.assert_not_called()
+
+
+# ── Adapter dispatch (SS-021) ──────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_wazuh_source_routes_raw_payloads_through_the_wazuh_adapter(mock_bulk_index_logs):
+    raw_wazuh_alert = {
+        "timestamp": "2026-08-06T02:47:11.123+0000",
+        "rule": {"id": "5710", "level": 10, "description": "sshd auth failure", "groups": ["sshd"]},
+        "agent": {"name": "DESKTOP-042", "ip": "192.168.1.42"},
+        "decoder": {"name": "sshd"},
+        "data": {"srcip": "45.33.32.156"},
+    }
+
+    result = await process_ingest_batch(logs=[raw_wazuh_alert], tenant_id="acme-corp", source="wazuh")
+
+    assert result["accepted"] == 1
+    assert result["rejected"] == 0
+    written_docs = mock_bulk_index_logs.call_args.args[0]
+    assert written_docs[0]["host_id"] == "DESKTOP-042"
+    assert written_docs[0]["source"] == "wazuh"
+    assert written_docs[0]["tenant_id"] == "acme-corp"
+
+
+@pytest.mark.asyncio
+async def test_aws_cloudtrail_source_routes_raw_payloads_through_the_cloudtrail_adapter(mock_bulk_index_logs):
+    raw_event = {
+        "eventTime": "2026-08-06T02:47:11Z",
+        "eventName": "ConsoleLogin",
+        "eventSource": "signin.amazonaws.com",
+        "userIdentity": {"userName": "alice", "accountId": "123456789012"},
+        "sourceIPAddress": "45.33.32.156",
+    }
+
+    result = await process_ingest_batch(logs=[raw_event], tenant_id="acme-corp", source="aws_cloudtrail")
+
+    assert result["accepted"] == 1
+    written_docs = mock_bulk_index_logs.call_args.args[0]
+    assert written_docs[0]["action"] == "ConsoleLogin"
+    assert written_docs[0]["source"] == "aws_cloudtrail"
+
+
+@pytest.mark.asyncio
+async def test_aws_guardduty_source_routes_raw_payloads_through_the_guardduty_adapter(mock_bulk_index_logs):
+    raw_finding = {
+        "AccountId": "123456789012",
+        "Id": "abcd1234",
+        "Type": "UnauthorizedAccess:EC2/SSHBruteForce",
+        "Severity": 5.0,
+        "CreatedAt": "2026-08-06T02:47:11.000Z",
+        "Title": "SSH brute force attack",
+    }
+
+    result = await process_ingest_batch(logs=[raw_finding], tenant_id="acme-corp", source="aws_guardduty")
+
+    assert result["accepted"] == 1
+    written_docs = mock_bulk_index_logs.call_args.args[0]
+    assert written_docs[0]["action"] == "UnauthorizedAccess:EC2/SSHBruteForce"
+    assert written_docs[0]["source"] == "aws_guardduty"
+
+
+@pytest.mark.asyncio
+async def test_synthetic_source_is_still_not_transformed(base_log_fields, mock_bulk_index_logs):
+    """Synthetic logs are already NormalizedLog-shaped; dispatch must leave them alone."""
+    result = await process_ingest_batch(logs=[dict(base_log_fields)], tenant_id="acme-corp", source="synthetic")
+
+    assert result["accepted"] == 1
+
+
+@pytest.mark.asyncio
+async def test_unknown_source_raises_ingestion_error_instead_of_falling_through_to_synthetic(mock_bulk_index_logs):
+    with pytest.raises(IngestionError):
+        await process_ingest_batch(logs=[{"anything": "here"}], tenant_id="acme-corp", source="not-a-real-source")
+
+    mock_bulk_index_logs.assert_not_called()
+
+
+def test_router_rejects_unknown_source_with_a_clear_422(client, auth_headers):
+    response = client.post(
+        "/api/v1/ingest",
+        json={"source": "not-a-real-source", "log": {"anything": "here"}},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "error": "Unknown log source 'not-a-real-source' — no adapter registered for it.",
+        "status_code": 422,
+    }

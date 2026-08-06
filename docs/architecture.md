@@ -43,7 +43,7 @@ SafeSOC is designed as a six-layer, service-oriented platform (per the Phase 1 r
 | Ingestion API (`POST /api/v1/ingest`) | **Implemented** | `backend/app/routers/v1/ingest.py` |
 | Schema validation (`NormalizedLog`) | **Implemented** | `backend/app/schemas/log.py` |
 | Bulk write to OpenSearch | **Implemented** | `backend/app/db/opensearch.py` |
-| Source-specific adapters (Wazuh, CloudTrail, GuardDuty) | **Stub** | `backend/app/adapters/__init__.py` is empty; only the `synthetic` path is exercised today (the ingest endpoint defaults `source` to `"synthetic"` and does no per-source transformation). |
+| Source-specific adapters (Wazuh, CloudTrail, GuardDuty) | **Implemented** | `backend/app/adapters/{wazuh,cloudtrail,guardduty}.py` each expose `transform(raw) -> dict`, converting that source's native payload shape into NormalizedLog-shaped fields (SS-018/019/020). `services/ingestion.py::ADAPTER_REGISTRY` dispatches a batch to the matching adapter based on its `source` field before schema validation (SS-021); `source: "synthetic"` (the default) skips adapter dispatch since synthetic payloads are already NormalizedLog-shaped, and any other unrecognized `source` value fails the request with a `422` rather than silently falling through to the synthetic path. |
 | Async processing / batch buffering beyond OpenSearch's own bulk API | **Planned** | No queue or worker consumes ingestion events yet. |
 
 ### 2.3 Processing Layer
