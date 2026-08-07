@@ -114,6 +114,12 @@ class Settings(BaseSettings):
     def ollama_url(self) -> str:
         return f"http://{self.OLLAMA_HOST}:{self.OLLAMA_PORT}"
 
+    # How long a conversation session's context survives idle time
+    # before a follow-up question is treated as a fresh conversation
+    # instead (SS-046). Redis-backed, same TTL-refreshed-on-write
+    # pattern as CORRELATION_WINDOW_TTL below.
+    INVESTIGATION_SESSION_TTL_SECONDS: int = 600  # 10 minutes
+
     # ──────────────────────────────────────────────
     # Correlation Engine
     # ──────────────────────────────────────────────

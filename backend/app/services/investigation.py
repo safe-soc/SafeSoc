@@ -17,9 +17,14 @@ natural-language *answer* once a tool's data comes back (SS-046/SS-047),
 not for classification.
 """
 
+import json
 import re
+from dataclasses import dataclass
+from typing import Optional
 
+from app.core.config import settings
 from app.core.enums import Intent
+from app.db.redis import get_client
 
 # Each phrase is matched as a case-insensitive substring of the query.
 # Order doesn't matter — every intent's phrases are checked and scored;
@@ -105,3 +110,95 @@ def classify_intent(query: str) -> Intent:
         return Intent.UNKNOWN
 
     return top_intents[0]
+
+
+# ── SS-046: conversation context/session state ────────────────────
+# Redis-backed, mirroring services/correlation.py's sliding-window
+# pattern (SS-027): a namespaced key per (tenant, session), TTL
+# refreshed on every write so an idle conversation's context
+# eventually expires (SRS §3.3 / SS-046 AC) rather than living forever.
+
+SESSION_KEY_PREFIX = "investigation:session"
+
+
+def _session_key(tenant_id: str, session_id: str) -> str:
+    return f"{SESSION_KEY_PREFIX}:{tenant_id}:{session_id}"
+
+
+@dataclass(frozen=True)
+class ConversationContext:
+    intent: Intent
+    params: dict
+
+
+async def save_context(tenant_id: str, session_id: str, intent: Intent, params: dict) -> None:
+    """
+    Persist a turn's resolved intent + tool parameters as this
+    session's context, for a follow-up turn to build on. Refreshes the
+    idle-expiry TTL on every write, same as CORRELATION_WINDOW_TTL.
+    """
+    client = get_client()
+    payload = json.dumps({"intent": intent.value, "params": params})
+    await client.set(_session_key(tenant_id, session_id), payload, ex=settings.INVESTIGATION_SESSION_TTL_SECONDS)
+
+
+async def get_context(tenant_id: str, session_id: str) -> Optional[ConversationContext]:
+    """The previous turn's context, or None if no session exists or it has idled out."""
+    client = get_client()
+    raw = await client.get(_session_key(tenant_id, session_id))
+    if raw is None:
+        return None
+    data = json.loads(raw)
+    return ConversationContext(intent=Intent(data["intent"]), params=data["params"])
+
+
+# Endpoint hostnames in this codebase are consistently formatted as
+# uppercase, hyphenated tokens (DESKTOP-042, WEB-SERVER-01, ...) — see
+# every adapter/test fixture that names a host_id. Used to pick "host
+# X" out of a query so it can be carried into a follow-up turn.
+_HOST_ID_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+\b")
+
+
+def _extract_host_id(query: str) -> Optional[str]:
+    match = _HOST_ID_PATTERN.search(query)
+    return match.group(0) if match else None
+
+
+async def resolve_query(tenant_id: str, session_id: str, query: str) -> tuple[Intent, dict]:
+    """
+    Classify `query` and resolve it against this session's prior
+    context, so a follow-up that doesn't restate its subject (SS-046
+    AC's own example: "show failed logins for host X" -> "what about
+    yesterday?") still resolves to the right intent and parameters
+    instead of falling back to Intent.UNKNOWN.
+
+    A query that classifies to a specific intent on its own is treated
+    as a fresh turn: its params start empty, plus a host_id if the
+    query names one (the AC's own worked example turns on exactly
+    this — "host X" must actually be captured for a later "what about
+    yesterday?" to have something to inherit). A query that *doesn't*
+    classify on its own, with context available from a still-live
+    session, inherits the previous turn's intent and parameters
+    wholesale instead. Resolving other new entities in a follow-up
+    (e.g. turning "yesterday" into an actual date range) is
+    intentionally out of scope — SS-044 classifies intent, not
+    entities, and this issue is about carrying context forward, not
+    general natural-language date/entity extraction.
+
+    The resolved (intent, params) becomes the new saved context, so a
+    chain of follow-ups keeps building on the same subject.
+    """
+    intent = classify_intent(query)
+    previous = await get_context(tenant_id, session_id)
+
+    if intent == Intent.UNKNOWN and previous is not None:
+        intent = previous.intent
+        params = dict(previous.params)
+    else:
+        params = {}
+        host_id = _extract_host_id(query)
+        if host_id:
+            params["host_id"] = host_id
+
+    await save_context(tenant_id, session_id, intent, params)
+    return intent, params

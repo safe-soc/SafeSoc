@@ -2,8 +2,18 @@
 SafeSOC — Investigation Service Tests
 """
 
+import pytest
+
+from app.core.config import settings
 from app.core.enums import Intent
-from app.services.investigation import INTENT_CLASSIFICATION_ACCURACY_THRESHOLD, classify_intent
+from app.services import investigation
+from app.services.investigation import (
+    INTENT_CLASSIFICATION_ACCURACY_THRESHOLD,
+    classify_intent,
+    get_context,
+    resolve_query,
+    save_context,
+)
 
 # Representative queries per intent, phrased the way a SOC analyst would
 # actually type them (not hand-picked to trivially match the keyword
@@ -135,3 +145,111 @@ def test_a_query_matching_no_keywords_falls_back_to_unknown():
 def test_classification_is_case_insensitive():
     assert classify_intent("SHOW ME FAILED LOGINS") == Intent.AUTH_FAILURES
     assert classify_intent("show me failed logins") == Intent.AUTH_FAILURES
+
+
+# ── SS-046: conversation context/session state ────────────────────
+
+class _FakeRedisClient:
+    """Minimal in-memory string-KV fake with TTL tracking, mirroring tests/test_correlation.py's sorted-set fake."""
+
+    def __init__(self):
+        self._store: dict[str, str] = {}
+        self.set_calls: list[tuple[str, int]] = []  # (key, ex) for every set()
+
+    async def set(self, key, value, ex=None):
+        self._store[key] = value
+        self.set_calls.append((key, ex))
+
+    async def get(self, key):
+        return self._store.get(key)
+
+
+@pytest.fixture
+def fake_redis(monkeypatch) -> _FakeRedisClient:
+    client = _FakeRedisClient()
+    monkeypatch.setattr(investigation, "get_client", lambda: client)
+    return client
+
+
+@pytest.mark.asyncio
+async def test_save_and_get_context_round_trips(fake_redis):
+    await save_context("tenant-a", "session-1", Intent.AUTH_FAILURES, {"host_id": "DESKTOP-042"})
+
+    context = await get_context("tenant-a", "session-1")
+
+    assert context.intent == Intent.AUTH_FAILURES
+    assert context.params == {"host_id": "DESKTOP-042"}
+
+
+@pytest.mark.asyncio
+async def test_get_context_returns_none_when_no_session_exists(fake_redis):
+    assert await get_context("tenant-a", "never-started") is None
+
+
+@pytest.mark.asyncio
+async def test_save_context_sets_the_configured_idle_ttl(fake_redis):
+    await save_context("tenant-a", "session-1", Intent.TOP_ALERTS, {})
+
+    key, ex = fake_redis.set_calls[0]
+    assert key == "investigation:session:tenant-a:session-1"
+    assert ex == settings.INVESTIGATION_SESSION_TTL_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_sessions_are_isolated_per_tenant(fake_redis):
+    await save_context("tenant-a", "session-1", Intent.AUTH_FAILURES, {"host_id": "X"})
+
+    assert await get_context("tenant-b", "session-1") is None
+
+
+# ── SS-046 AC: a two-turn conversation resolves the second query using
+# context from the first ("show failed logins for host X" -> "what about
+# yesterday?") ──
+
+@pytest.mark.asyncio
+async def test_follow_up_query_inherits_intent_and_host_id_from_the_first_turn(fake_redis):
+    intent1, params1 = await resolve_query("tenant-a", "session-1", "Show failed logins for host DESKTOP-042")
+    assert intent1 == Intent.AUTH_FAILURES
+    assert params1 == {"host_id": "DESKTOP-042"}
+
+    intent2, params2 = await resolve_query("tenant-a", "session-1", "What about yesterday?")
+
+    assert intent2 == Intent.AUTH_FAILURES
+    assert params2 == {"host_id": "DESKTOP-042"}
+
+
+@pytest.mark.asyncio
+async def test_a_query_that_classifies_on_its_own_is_treated_as_a_fresh_turn(fake_redis):
+    await resolve_query("tenant-a", "session-1", "Show failed logins for host DESKTOP-042")
+
+    intent, params = await resolve_query("tenant-a", "session-1", "Which endpoints are riskiest right now?")
+
+    assert intent == Intent.RISKY_ENDPOINTS
+    assert params == {}
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_with_no_prior_session_stays_unknown(fake_redis):
+    intent, params = await resolve_query("tenant-a", "brand-new-session", "What about yesterday?")
+
+    assert intent == Intent.UNKNOWN
+    assert params == {}
+
+
+@pytest.mark.asyncio
+async def test_resolve_query_refreshes_the_session_for_further_follow_ups(fake_redis):
+    """A chain of 3 follow-ups keeps resolving to the same subject."""
+    await resolve_query("tenant-a", "session-1", "Show failed logins for host DESKTOP-042")
+    await resolve_query("tenant-a", "session-1", "What about yesterday?")
+    intent, params = await resolve_query("tenant-a", "session-1", "and the day before?")
+
+    assert intent == Intent.AUTH_FAILURES
+    assert params == {"host_id": "DESKTOP-042"}
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_turn_naming_no_host_has_empty_params(fake_redis):
+    intent, params = await resolve_query("tenant-a", "session-1", "Which endpoints are riskiest right now?")
+
+    assert intent == Intent.RISKY_ENDPOINTS
+    assert params == {}
