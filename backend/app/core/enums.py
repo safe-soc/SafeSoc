@@ -84,3 +84,21 @@ class RiskLevel(str, Enum):
     MEDIUM = "medium"
     HIGH = "high"
     CRITICAL = "critical"
+
+
+class Intent(str, Enum):
+    """
+    The 8 natural-language query intents the investigation assistant
+    supports (SRS §3.3, SS-044).
+    """
+    AUTH_FAILURES = "auth_failures"
+    IP_ACTIVITY = "ip_activity"
+    ENDPOINT_SNAPSHOT = "endpoint_snapshot"
+    TOP_ALERTS = "top_alerts"
+    USER_ACTIVITY = "user_activity"
+    CLOUD_EVENTS = "cloud_events"
+    RISKY_ENDPOINTS = "risky_endpoints"
+    ATTACK_CHAIN_STATUS = "attack_chain_status"
+    # Fallback for queries that don't confidently match any of the 8
+    # supported intents (SS-044 AC) — never silently guessed as one.
+    UNKNOWN = "unknown"
