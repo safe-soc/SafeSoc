@@ -76,3 +76,11 @@ class CorrelationPattern(str, Enum):
     PRIVILEGE_ESCALATION = "privilege_escalation"
     DATA_EXFILTRATION = "data_exfiltration"
     LATERAL_MOVEMENT = "lateral_movement"
+
+
+class RiskLevel(str, Enum):
+    """Endpoint risk levels a 0-100 risk score maps to (SRS §3.3)."""
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
