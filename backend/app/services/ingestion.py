@@ -15,6 +15,7 @@ from app.core.enums import LogSource
 from app.core.exceptions import IngestionError
 from app.db.opensearch import bulk_index_logs
 from app.schemas.log import NormalizedLog
+from app.services.realtime import publish_event
 from app.tasks.enrichment import enrich_alert
 from app.utils.logger import get_logger
 from app.workers.correlation_worker import evaluate_correlation
@@ -130,6 +131,22 @@ async def process_ingest_batch(
     if validated_logs:
         written = await bulk_index_logs(validated_logs)
         logger.info("Batch ingested", accepted=len(accepted), rejected=len(rejected), written=written)
+
+        # Live dashboard push (SS-063) — published from this same request,
+        # not deferred to a background task, so a new critical alert reaches
+        # an open dashboard as fast as possible (AC: "within a few seconds").
+        for log in validated_logs:
+            if log.get("severity") == "critical":
+                await publish_event(
+                    tenant_id,
+                    "new_alert",
+                    {
+                        "alert_id": log["alert_id"],
+                        "host_id": log["host_id"],
+                        "severity": log["severity"],
+                        "description": log["description"],
+                    },
+                )
 
     return {
         "accepted": len(accepted),

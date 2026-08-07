@@ -81,6 +81,8 @@ async def test_evaluate_correlation_async_creates_an_incident_and_logs_each_dete
     monkeypatch.setattr(correlation_worker, "async_session_factory", lambda: _FakeSessionCM())
     mock_create_or_merge = AsyncMock(return_value=incident)
     monkeypatch.setattr(correlation_worker, "create_or_merge_incident", mock_create_or_merge)
+    monkeypatch.setattr(correlation_worker, "notify_attack_chain", Mock())
+    monkeypatch.setattr(correlation_worker, "publish_event", AsyncMock())
 
     logged = []
     monkeypatch.setattr(correlation_worker.logger, "info", lambda msg, **kw: logged.append((msg, kw)))
@@ -125,10 +127,55 @@ async def test_evaluate_correlation_async_notifies_for_each_detected_chain(monke
     monkeypatch.setattr(correlation_worker, "create_or_merge_incident", AsyncMock(return_value=incident))
     mock_notify = Mock()
     monkeypatch.setattr(correlation_worker, "notify_attack_chain", mock_notify)
+    monkeypatch.setattr(correlation_worker, "publish_event", AsyncMock())
 
     await correlation_worker._evaluate_correlation_async("abc-123")
 
     mock_notify.assert_called_once_with("DESKTOP-042", chain, incident.id)
+
+
+@pytest.mark.asyncio
+async def test_evaluate_correlation_async_publishes_a_realtime_event_for_each_detected_chain(monkeypatch):
+    """SS-063 AC: a detected chain pushes a live dashboard update."""
+    tenant_id = uuid.uuid4()
+    doc = {
+        "alert_id": "abc-123",
+        "tenant_id": str(tenant_id),
+        "host_id": "DESKTOP-042",
+        "log_type": "authentication",
+        "action": "failed_login",
+        "severity": "low",
+    }
+    chain = DetectedChain(
+        pattern=CorrelationPattern.CREDENTIAL_BRUTE_FORCE,
+        confidence=0.8,
+        alert_ids=("a1", "a2"),
+        mitre_technique_ids=("T1110",),
+        mitre_tactic="Credential Access",
+    )
+    incident = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1", "a2"])
+
+    monkeypatch.setattr(correlation_worker, "get_alert_by_id", AsyncMock(return_value=doc))
+    monkeypatch.setattr(correlation_worker, "add_event", AsyncMock())
+    monkeypatch.setattr(correlation_worker, "evaluate_host", AsyncMock(return_value=[chain]))
+    monkeypatch.setattr(correlation_worker, "async_session_factory", lambda: _FakeSessionCM())
+    monkeypatch.setattr(correlation_worker, "create_or_merge_incident", AsyncMock(return_value=incident))
+    monkeypatch.setattr(correlation_worker, "notify_attack_chain", Mock())
+    mock_publish = AsyncMock()
+    monkeypatch.setattr(correlation_worker, "publish_event", mock_publish)
+
+    await correlation_worker._evaluate_correlation_async("abc-123")
+
+    mock_publish.assert_called_once_with(
+        str(tenant_id),
+        "chain_detected",
+        {
+            "incident_id": str(incident.id),
+            "host_id": "DESKTOP-042",
+            "pattern": "credential_brute_force",
+            "confidence": 0.8,
+        },
+    )
 
 
 @pytest.mark.asyncio

@@ -2,10 +2,13 @@
 SafeSOC — Ingestion Service Tests
 """
 
+from unittest.mock import AsyncMock
+
 import pytest
 
 from app.core.config import settings
 from app.core.exceptions import IngestionError
+from app.services import ingestion
 from app.services.ingestion import process_ingest_batch
 
 
@@ -264,3 +267,33 @@ def test_ingest_succeeds_even_if_notification_queueing_fails(
 
     assert response.status_code == 200  # ingestion succeeds regardless of queueing outcome
     assert response.json()["accepted"] == 1
+
+
+# ── Live dashboard push for new critical alerts (SS-063) ───────
+
+@pytest.mark.asyncio
+async def test_critical_alert_publishes_a_realtime_event(monkeypatch, base_log_fields, mock_bulk_index_logs):
+    mock_publish = AsyncMock()
+    monkeypatch.setattr(ingestion, "publish_event", mock_publish)
+    log = dict(base_log_fields, severity="critical")
+
+    result = await process_ingest_batch(logs=[log], tenant_id="acme-corp", source="synthetic")
+
+    mock_publish.assert_called_once()
+    tenant_arg, event_type, payload = mock_publish.call_args.args
+    assert tenant_arg == "acme-corp"
+    assert event_type == "new_alert"
+    assert payload["alert_id"] == result["alert_ids"][0]
+    assert payload["host_id"] == base_log_fields["host_id"]
+    assert payload["severity"] == "critical"
+
+
+@pytest.mark.asyncio
+async def test_non_critical_alert_does_not_publish_a_realtime_event(monkeypatch, base_log_fields, mock_bulk_index_logs):
+    mock_publish = AsyncMock()
+    monkeypatch.setattr(ingestion, "publish_event", mock_publish)
+    log = dict(base_log_fields, severity="low")
+
+    await process_ingest_batch(logs=[log], tenant_id="acme-corp", source="synthetic")
+
+    mock_publish.assert_not_called()

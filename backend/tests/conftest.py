@@ -60,6 +60,22 @@ def _mock_notification_queueing(monkeypatch) -> Mock:
     return mock
 
 
+@pytest.fixture(autouse=True)
+def _mock_realtime_publish(monkeypatch) -> AsyncMock:
+    """
+    Never attempt a real Redis connection during tests. Unlike the
+    three fixtures above, this isn't a queued Celery task — SS-063's
+    live dashboard push is awaited directly in-request (by design, for
+    "few seconds" latency) whenever a batch contains a critical-severity
+    alert, and services/incidents.py's chain-detection path calls it
+    directly too.
+    """
+    mock = AsyncMock()
+    monkeypatch.setattr("app.services.ingestion.publish_event", mock)
+    monkeypatch.setattr("app.workers.correlation_worker.publish_event", mock)
+    return mock
+
+
 @pytest.fixture
 def make_auth_headers():
     """Factory returning an Authorization: Bearer <JWT> header dict for a real, valid token (SS-013/015)."""

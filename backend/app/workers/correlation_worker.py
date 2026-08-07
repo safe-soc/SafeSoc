@@ -15,6 +15,7 @@ from app.db.postgresql import async_session_factory
 from app.services.correlation import add_event, evaluate_host
 from app.services.incidents import create_or_merge_incident
 from app.services.notifications import notify_attack_chain
+from app.services.realtime import publish_event
 from app.tasks.celery_app import celery_app
 from app.utils.logger import get_logger
 
@@ -70,7 +71,15 @@ async def _evaluate_correlation_async(alert_id: str) -> None:
             # TELEGRAM_BOT_TOKEN/CHAT_ID aren't configured (SS-055),
             # same as the critical-alert path below never blocks anything.
             notify_attack_chain(host_id, chain, incident.id)
-
-    # Dashboard notification (WebSocket) is intentionally not implemented
-    # here: SS-031's own description defers it "once the frontend exists"
-    # (Milestone 12) — main.py has no WebSocket channel yet (SS-062).
+            # Live dashboard push (SS-063) — the frontend's open dashboard
+            # updates without a manual refresh (AC).
+            await publish_event(
+                tenant_id,
+                "chain_detected",
+                {
+                    "incident_id": str(incident.id),
+                    "host_id": host_id,
+                    "pattern": chain.pattern.value,
+                    "confidence": round(chain.confidence, 2),
+                },
+            )
