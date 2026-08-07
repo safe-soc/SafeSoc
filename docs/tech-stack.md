@@ -72,7 +72,22 @@ React + TypeScript + Vite, with Tailwind CSS (`tailwind.config.js`, `postcss.con
 
 ## 3. SafeSOC Frontend
 
-`frontend/` contains only a `.gitkeep` — **no stack has been chosen or implemented yet.** The report's Phase 1 SRS (§3.5) doesn't specify a frontend framework for the main SafeSOC dashboard either; this is an open decision for Phase 2.
+**Stack chosen and scaffolded (SS-057):** React 18 + TypeScript + Vite + Tailwind CSS — matching CloudLens's frontend (§2.2 above) for stack consistency and shared team familiarity, as the SRS itself doesn't mandate a framework (Phase 1 §3.5 left this open for Phase 2).
+
+| Layer | Choice |
+|---|---|
+| Framework | React 18 (`react`, `react-dom`) |
+| Language | TypeScript, strict mode |
+| Build tool | Vite |
+| Routing | `react-router-dom` (client-side, `BrowserRouter`) |
+| Styling | Tailwind CSS |
+| HTTP client | `axios` — single shared instance (`src/lib/api.ts`) with a request interceptor injecting the stored JWT and a response interceptor bouncing to `/login` on `401` |
+| Auth state | React Context (`src/context/AuthContext.tsx`) backed by `localStorage` (`src/lib/auth-storage.ts`) |
+| Lint | ESLint 9 (flat config), `typescript-eslint` |
+
+Unlike CloudLens, no graph-visualization library is included — SafeSOC's dashboard doesn't have an equivalent relationship-graph view.
+
+Run locally: `cd frontend && npm install && npm run dev` (serves on `http://localhost:5173`, configured via `VITE_API_BASE_URL` — see `.env.example`). Production build: `npm run build`.
 
 ## 4. Summary — Target vs. Actual (SafeSOC backend only)
 
