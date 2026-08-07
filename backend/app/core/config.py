@@ -186,6 +186,17 @@ class Settings(BaseSettings):
     # authenticates with this instead of a per-user JWT.
     CLOUDLENS_SERVICE_TOKEN: str = ""
 
+    # ──────────────────────────────────────────────
+    # Notifications
+    # ──────────────────────────────────────────────
+    # SafeSOC's own Telegram bot (SS-055) — separate from CloudLens's
+    # own TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID env vars (cloud/AWS-IAM-backend),
+    # since these are two independent applications/deployments, not a
+    # shared notification channel. Same names as CloudLens's own
+    # notifier for familiarity, but read from this app's own env.
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_CHAT_ID: str = ""
+
 
 # Singleton settings instance
 settings = Settings()
