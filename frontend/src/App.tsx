@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard';
 import Endpoints from './pages/Endpoints';
 import IncidentDetail from './pages/IncidentDetail';
 import Incidents from './pages/Incidents';
+import Investigate from './pages/Investigate';
 import Login from './pages/Login';
 
 function App() {
@@ -20,6 +21,7 @@ function App() {
             <Route path="/endpoints" element={<Endpoints />} />
             <Route path="/incidents" element={<Incidents />} />
             <Route path="/incidents/:incidentId" element={<IncidentDetail />} />
+            <Route path="/investigate" element={<Investigate />} />
           </Route>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
         </Routes>

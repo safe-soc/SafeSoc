@@ -75,3 +75,10 @@ export interface IncidentNote {
   body: string;
   created_at: string;
 }
+
+export interface InvestigateResponse {
+  session_id: string;
+  intent: string;
+  answer: string;
+  data: Record<string, unknown>;
+}

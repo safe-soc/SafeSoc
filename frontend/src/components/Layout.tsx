@@ -14,6 +14,7 @@ const NAV_LINKS = [
   { to: '/alerts', label: 'Alerts' },
   { to: '/endpoints', label: 'Endpoints' },
   { to: '/incidents', label: 'Incidents' },
+  { to: '/investigate', label: 'Investigate' },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {
