@@ -8,6 +8,16 @@ ordered event sequence engineered to trigger one specific attack-chain
 pattern in services/correlation.py (SS-028) — useful for demoing or
 testing the correlation engine against something other than random
 noise (SS-064).
+
+POST /api/v1/ingest has required a valid JWT since SS-016 (BUG-001):
+running this script's CLI now logs in first, exactly like demo.py's
+own _login(), and sends the resulting token as a Bearer header. With
+no credentials given, it defaults to the same demo tenant/user
+demo.py (SS-065) provisions, so a bare `python injector.py --scenario
+brute_force` keeps working stand-alone as long as `python
+injector/demo.py` has been run at least once. --no-auth restores the
+exact pre-SS-016 unauthenticated payload shape, for whoever still
+needs it against a backend with auth disabled.
 """
 
 import argparse
@@ -20,8 +30,16 @@ from typing import Callable, Optional
 import requests
 
 # Configuration
-DEFAULT_TARGET = "http://localhost:8000/api/v1/ingest"
-TENANT_ID = "acme-corp"
+DEFAULT_API_BASE = "http://localhost:8000"
+DEFAULT_TARGET = f"{DEFAULT_API_BASE}/api/v1/ingest"
+TENANT_ID = "acme-corp"  # only used in --no-auth mode; see send_logs()
+
+# The demo tenant/user demo.py (SS-065) provisions — reused here as
+# injector.py's own zero-config login default (BUG-001), so the two
+# scripts point at the same tenant unless the caller overrides them.
+DEMO_TENANT_ID = "00000000-dead-beef-0000-000000000001"
+DEMO_EMAIL = "demo@safesoc.example"
+DEMO_PASSWORD = "SafeSOC-Demo-2026!"
 
 # Demo data pools
 HOSTS = [f"DESKTOP-{i:03d}" for i in range(1, 51)]
@@ -84,6 +102,17 @@ def send_logs(target_url: str, logs: list[dict], token: Optional[str] = None) ->
     response = requests.post(target_url, json=payload, headers=headers, timeout=10)
     response.raise_for_status()
     return response.json()
+
+
+def login(api_base: str, tenant_id: str, email: str, password: str) -> str:
+    """Authenticate and return a JWT access token — the same flow as demo.py's own _login() (BUG-001)."""
+    response = requests.post(
+        f"{api_base}/api/v1/auth/login",
+        json={"tenant_id": tenant_id, "email": email, "password": password},
+        timeout=10,
+    )
+    response.raise_for_status()
+    return response.json()["access_token"]
 
 
 # ── Attack scenarios (SS-064) ────────────────────────────────────
@@ -187,9 +216,32 @@ def main():
         "--scenario", choices=sorted(SCENARIOS.keys()), help="Send a named attack scenario instead of random logs"
     )
     parser.add_argument("--host", help="Target host_id for the scenario (default: a random host)")
+    parser.add_argument("--api-base", default=DEFAULT_API_BASE, help="Backend base URL, used to log in (default: http://localhost:8000)")
+    parser.add_argument("--tenant-id", default=DEMO_TENANT_ID, help="Tenant UUID to authenticate as (default: the demo tenant created by demo.py)")
+    parser.add_argument("--email", default=DEMO_EMAIL, help="User email to authenticate as (default: the demo user)")
+    parser.add_argument("--password", default=DEMO_PASSWORD, help="Password for --email (default: the demo user's password)")
+    parser.add_argument(
+        "--no-auth", action="store_true",
+        help="Skip login and send the legacy unauthenticated payload (only works against a backend with auth disabled)",
+    )
     args = parser.parse_args()
 
     print(f"Target: {args.target}")
+
+    token = None
+    if not args.no_auth:
+        print(f"Logging in as {args.email} (tenant {args.tenant_id})...")
+        try:
+            token = login(args.api_base, args.tenant_id, args.email, args.password)
+        except requests.exceptions.ConnectionError:
+            print(f"ERROR: Could not connect to SafeSOC backend at {args.api_base}.")
+            print("Is 'docker compose up' running?")
+            return
+        except requests.exceptions.HTTPError as e:
+            print(f"ERROR: Login failed ({e.response.status_code}).")
+            print("Run 'python injector/demo.py' first to provision the demo tenant, "
+                  "or pass --tenant-id/--email/--password for an existing user.")
+            return
 
     if args.scenario:
         logs = SCENARIOS[args.scenario](args.host)
@@ -199,11 +251,13 @@ def main():
         logs = [generate_log() for _ in range(args.count)]
 
     try:
-        result = send_logs(args.target, logs)
+        result = send_logs(args.target, logs, token=token)
         _print_result(result)
     except requests.exceptions.ConnectionError:
         print("ERROR: Could not connect to SafeSOC backend.")
         print("Is 'docker compose up' running?")
+    except requests.exceptions.HTTPError as e:
+        print(f"ERROR: Ingestion failed ({e.response.status_code}): {e.response.text[:300]}")
 
 
 if __name__ == "__main__":

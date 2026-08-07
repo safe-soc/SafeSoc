@@ -9,6 +9,7 @@ Every scenario test below does exactly that, not just shape-checking.
 import sys
 import uuid
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -16,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from injector.injector import SCENARIOS, generate_log, main  # noqa: E402
+from injector.injector import DEMO_EMAIL, DEMO_PASSWORD, DEMO_TENANT_ID, SCENARIOS, generate_log, main  # noqa: E402
 
 from app.services import correlation  # noqa: E402
 
@@ -146,11 +147,24 @@ def test_scenario_defaults_to_a_random_host_when_none_given():
 
 # ── CLI (argparse) ────────────────────────────────────────────────
 
-def test_cli_default_behavior_sends_random_logs_not_a_scenario(monkeypatch, capsys):
+@pytest.fixture
+def _mock_login(monkeypatch):
+    """
+    BUG-001: main() now logs in before sending. Tests that only care
+    about what gets sent to send_logs() don't want a real HTTP call
+    here, so this fixture stands in for a successful login.
+    """
+    mock = Mock(return_value="fake-jwt")
+    monkeypatch.setattr("injector.injector.login", mock)
+    return mock
+
+
+def test_cli_default_behavior_sends_random_logs_not_a_scenario(monkeypatch, capsys, _mock_login):
     captured_logs = {}
 
-    def fake_send_logs(target_url, logs):
+    def fake_send_logs(target_url, logs, token=None):
         captured_logs["logs"] = logs
+        captured_logs["token"] = token
         return {"accepted": len(logs), "rejected": 0, "alert_ids": ["a1"] * len(logs)}
 
     monkeypatch.setattr("injector.injector.send_logs", fake_send_logs)
@@ -162,12 +176,13 @@ def test_cli_default_behavior_sends_random_logs_not_a_scenario(monkeypatch, caps
     # Random logs default to the authentication log_type/action pool, not
     # a scenario's fixed shape (generate_log()'s own default).
     assert all(log["log_type"] == "authentication" for log in captured_logs["logs"])
+    assert captured_logs["token"] == "fake-jwt"
 
 
-def test_cli_scenario_flag_sends_the_named_scenario(monkeypatch):
+def test_cli_scenario_flag_sends_the_named_scenario(monkeypatch, _mock_login):
     captured_logs = {}
 
-    def fake_send_logs(target_url, logs):
+    def fake_send_logs(target_url, logs, token=None):
         captured_logs["logs"] = logs
         return {"accepted": len(logs), "rejected": 0, "alert_ids": ["a1"] * len(logs)}
 
@@ -189,6 +204,68 @@ def test_cli_rejects_an_unknown_scenario_name(monkeypatch, capsys):
 
     with pytest.raises(SystemExit):
         main()
+
+
+# ── CLI authentication (BUG-001) ─────────────────────────────────
+
+def test_cli_logs_in_and_passes_the_token_to_send_logs(monkeypatch):
+    login_calls = {}
+
+    def fake_login(api_base, tenant_id, email, password):
+        login_calls["args"] = (api_base, tenant_id, email, password)
+        return "real-jwt"
+
+    captured = {}
+
+    def fake_send_logs(target_url, logs, token=None):
+        captured["token"] = token
+        return {"accepted": len(logs), "rejected": 0, "alert_ids": []}
+
+    monkeypatch.setattr("injector.injector.login", fake_login)
+    monkeypatch.setattr("injector.injector.send_logs", fake_send_logs)
+    monkeypatch.setattr(sys, "argv", ["injector.py", "http://example.test/ingest", "1"])
+
+    main()
+
+    assert login_calls["args"] == ("http://localhost:8000", DEMO_TENANT_ID, DEMO_EMAIL, DEMO_PASSWORD)
+    assert captured["token"] == "real-jwt"
+
+
+def test_cli_no_auth_flag_skips_login_entirely(monkeypatch):
+    login_mock = Mock()
+    captured = {}
+
+    def fake_send_logs(target_url, logs, token=None):
+        captured["token"] = token
+        return {"accepted": len(logs), "rejected": 0, "alert_ids": []}
+
+    monkeypatch.setattr("injector.injector.login", login_mock)
+    monkeypatch.setattr("injector.injector.send_logs", fake_send_logs)
+    monkeypatch.setattr(sys, "argv", ["injector.py", "http://example.test/ingest", "1", "--no-auth"])
+
+    main()
+
+    login_mock.assert_not_called()
+    assert captured["token"] is None
+
+
+def test_cli_prints_a_clear_error_and_exits_cleanly_when_login_fails(monkeypatch, capsys):
+    import requests
+
+    def failing_login(api_base, tenant_id, email, password):
+        response = Mock(status_code=401)
+        raise requests.exceptions.HTTPError(response=response)
+
+    send_logs_mock = Mock()
+
+    monkeypatch.setattr("injector.injector.login", failing_login)
+    monkeypatch.setattr("injector.injector.send_logs", send_logs_mock)
+    monkeypatch.setattr(sys, "argv", ["injector.py"])
+
+    main()  # must not raise
+
+    send_logs_mock.assert_not_called()
+    assert "Login failed" in capsys.readouterr().out
 
 
 # ── send_logs (SS-065 regression) ────────────────────────────────
