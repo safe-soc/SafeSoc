@@ -35,6 +35,7 @@ cloud/AWS-IAM-backend/staticfiles/
 # ── SafeSOC runtime artifacts ───────────────────────
 backend/reports/
 ml/model/
+ml/data/
 *.pkl
 celerybeat-schedule
 
