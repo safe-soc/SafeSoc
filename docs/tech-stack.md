@@ -14,37 +14,26 @@ Two independent codebases exist in this repository with two independent stacks: 
 | `pydantic` | `>=2.6.0` | Data validation / `NormalizedLog` schema |
 | `pydantic-settings` | `>=2.1.0` | Env-based config (`core/config.py`) |
 | `python-dotenv` | `>=1.0.0` | `.env` loading |
-| `requests` | `>=2.31.0` | Used by `injector/injector.py` (and would be used by TI clients once built) |
+| `requests` | `>=2.31.0` | Used by `injector/injector.py`, `clients/telegram.py`, TI/LLM HTTP clients |
+| `sqlalchemy[asyncio]` | `>=2.0.0` | ORM — Postgres models (SS-007-009) |
+| `asyncpg` | `>=0.29.0` | Async PostgreSQL driver |
+| `alembic` | `>=1.13.0` | Postgres migrations |
+| `redis` | `>=5.0.0` | Correlation windows, session context, pub/sub, rate limits (SS-010) |
+| `celery` | `>=5.3.0` | Background task queue — enrichment, correlation, scoring, reporting, notifications (SS-011) |
+| `bcrypt` | `>=4.0.0` | Password hashing (SS-012) |
+| `pyjwt` | `>=2.8.0` | JWT issuance/verification (SS-013) |
+| `scikit-learn` | `>=1.4.0` | Isolation Forest anomaly detection (SS-049-050) |
+| `weasyprint` | `>=61.0` | PDF report generation (SS-052) |
+| `pytest`, `pytest-asyncio`, `httpx` | — | Test suite (545 tests, SS-002) |
 
-This is exactly enough to run the implemented ingestion/alerts/health surface. **Nothing else is installed.**
+This is the full dependency set for every implemented feature — nothing in `core/config.py` currently lacks a corresponding installed package.
 
-### 1.2 Referenced in code/config but not yet a dependency
-
-`backend/app/core/config.py` already defines settings for services whose client libraries aren't in `requirements.txt` yet:
-
-| Target technology | Config present? | Package present in `requirements.txt`? |
-|---|---|---|
-| PostgreSQL (async) | Yes — `postgres_url` property | No — needs `sqlalchemy`, `asyncpg`, `alembic` |
-| Redis | Yes — `redis_url` property | No — needs `redis` |
-| JWT auth | Yes — `JWT_SECRET`, `JWT_ALGORITHM`, `JWT_EXPIRY_HOURS` | No — needs `python-jose` or `pyjwt`, plus `bcrypt`/`passlib` |
-| Ollama (local LLM) | Yes — `OLLAMA_HOST/PORT/MODEL`, `ollama_url` | No — `clients/ollama.py` is an empty stub |
-| Groq (cloud LLM) | Yes — `GROQ_API_KEY`, `GROQ_MODEL` | No — `clients/groq.py` is an empty stub |
-| VirusTotal | Yes — `VT_API_KEY`, rate limit | No — `clients/virustotal.py` is an empty stub |
-| AbuseIPDB | Yes — `ABUSEIPDB_API_KEY`, rate limit | No — `clients/abuseipdb.py` is an empty stub |
-| Telegram (notifications) | No dedicated setting yet | No — `clients/telegram.py` is an empty stub |
-| Celery (background tasks) | No dedicated setting | No — `tasks/celery_app.py` is an empty stub; no message broker (e.g. `celery`, `redis`/`rabbitmq`) declared |
-| WeasyPrint (PDF reports) | `REPORT_OUTPUT_DIR` etc. defined | No |
-| Isolation Forest (anomaly detection) | `ANOMALY_MODEL_PATH`, `ANOMALY_THRESHOLD` defined | No — needs `scikit-learn`; `ml/` directory is empty |
-| Wazuh integration | `LogSource.WAZUH` enum only | No adapter/library |
-
-This is a config-first codebase: settings were scaffolded ahead of the code that will consume them, per the modular directory layout described in the report (§5.2).
-
-### 1.3 Deployment/runtime
+### 1.2 Deployment/runtime
 
 | Component | Status |
 |---|---|
 | `backend/Dockerfile` | Implemented — `python:3.12-slim`, installs `requirements.txt`, runs `uvicorn app.main:app --reload` |
-| Root `docker-compose.yml` (backend + OpenSearch) | Implemented — `docker compose up --build`, see `deployment.md` |
+| Root `docker-compose.yml` (OpenSearch, PostgreSQL, Redis, backend, Celery worker, Celery beat) | Implemented — `docker compose up --build`, see `deployment.md` |
 
 ## 2. CloudLens (`cloud/`)
 
@@ -96,8 +85,12 @@ Run locally: `cd frontend && npm install && npm run dev` (serves on `http://loca
 | API framework | FastAPI | ✅ FastAPI |
 | Schema validation | Pydantic | ✅ Pydantic |
 | Log storage | OpenSearch | ✅ OpenSearch |
-| Relational storage | PostgreSQL | ❌ not installed |
-| Real-time/cache state | Redis | ❌ not installed |
-| LLM inference | Ollama (local) / Groq (cloud) | ❌ neither installed |
-| Endpoint detection | Wazuh | ❌ no integration code |
+| Relational storage | PostgreSQL | ✅ PostgreSQL (SQLAlchemy async + Alembic) |
+| Real-time/cache state | Redis | ✅ Redis |
+| Task queue | — | ✅ Celery |
+| Auth | JWT + RBAC | ✅ PyJWT + bcrypt |
+| LLM inference | Ollama (local) / Groq (cloud) | ✅ both, provider-switchable via `LLM_PROVIDER` |
+| Anomaly detection | Isolation Forest | ✅ scikit-learn |
+| PDF reporting | — | ✅ WeasyPrint |
+| Endpoint detection | Wazuh | ✅ adapter implemented (`adapters/wazuh.py`) |
 | Deployment | Docker Compose (single command) | ✅ `docker compose up --build` |

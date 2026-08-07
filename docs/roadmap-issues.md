@@ -1,8 +1,8 @@
 # SafeSOC — Phase 2 Implementation Roadmap & Issue Backlog
 
-This document breaks every remaining (non-implemented or partially-implemented) feature into fileable GitHub Issues, grouped into milestones representing development sprints. It is built from the current state of the code and `docs/` — **not** the Phase 1 report in isolation — so it reflects what's actually in the repository today, including work completed in later documentation sessions (e.g. `.env.example`, `.github/workflows/ci.yml`, `README.md`, and `CLAUDE.md` are now populated; a root `docker-compose.yml` is still missing).
+This document originally broke every remaining (non-implemented or partially-implemented) feature into fileable GitHub Issues, grouped into milestones representing development sprints. **As of this update (SS-068), SS-001 through SS-067 are all implemented and closed** — each carries a `**Status:** ✅ Done (<date>)` line (dates taken from the commit that implemented it). Only SS-068 (this documentation-sync pass) remains open.
 
-There is no GitHub remote configured on this repository yet (`git remote -v` is empty), so nothing here has been filed automatically. Each entry below is written to be copy-pasted into `gh issue create` (or the GitHub UI) once a remote exists.
+Every issue below was filed as a real GitHub issue (`gh issue create`) against this repository's remote and closed on completion — this file is kept as the durable historical record of what each issue actually specified, not a live backlog anymore.
 
 ## How to read this document
 
@@ -34,7 +34,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 | 13 | Synthetic Data & Demo Mode | Realistic attack scenarios for testing/demo | SS-064–065 | ~4d |
 | 14 | Non-Functional Hardening & QA | Perf, security, docs sync | SS-066–068 | ~7d |
 
-**Total: 68 issues, ~145 person-days.** For a 4-person part-time student team this is roughly the scope of a full second semester — treat the milestone order as the recommended build sequence, not a commitment to build everything.
+**Total: 68 issues, ~145 person-days.** SS-001 through SS-067 (67 issues) are done; SS-068 (this doc-sync pass) is the only one still open, and per its own description is meant to recur periodically rather than be a one-time close-out.
 
 ---
 
@@ -137,6 +137,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 **Why now:** almost every remaining milestone (auth, TI cache, correlation windows, incidents, reporting) needs one or both of these databases. Building the plumbing once, early, avoids rework.
 
 #### SS-007 — PostgreSQL driver, async engine, and connection module
+**Status:** ✅ Done (2026-08-06)
 **Description:** Add `sqlalchemy[asyncio]`, `asyncpg`, and `alembic` to `backend/requirements.txt`, and implement `backend/app/db/postgresql.py` (currently empty) with an async engine/session factory built from `settings.postgres_url`.
 **Priority:** Critical · **Effort:** S · **Dependencies:** SS-001 (needs Postgres in compose)
 **Acceptance Criteria:**
@@ -150,6 +151,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `docker-compose.yml`
 
 #### SS-008 — Alembic migration bootstrap + base model conventions
+**Status:** ✅ Done (2026-08-06)
 **Description:** `backend/alembic.ini` already exists but `backend/migrations/versions/` is empty and no SQLAlchemy `Base`/model convention exists. Wire Alembic to the async engine and establish the base declarative model class.
 **Priority:** Critical · **Effort:** S · **Dependencies:** SS-007
 **Acceptance Criteria:**
@@ -162,6 +164,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/migrations/versions/0001_*.py` (new)
 
 #### SS-009 — Core `tenant` and `user` tables
+**Status:** ✅ Done (2026-08-06)
 **Description:** Define the first real SQLAlchemy models — `Tenant` and `User` (with `UserRole` from `core/enums.py`, bcrypt password hash column) — needed by Milestone 3's auth work.
 **Priority:** Critical · **Effort:** M · **Dependencies:** SS-008
 **Acceptance Criteria:**
@@ -174,6 +177,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/migrations/versions/0002_*.py` (new)
 
 #### SS-010 — Redis client module
+**Status:** ✅ Done (2026-08-06)
 **Description:** Implement `backend/app/db/redis.py` (currently empty) using `settings.redis_url`, add `redis` to `backend/requirements.txt`, add a `redis` service to compose.
 **Priority:** High · **Effort:** XS · **Dependencies:** SS-001
 **Acceptance Criteria:**
@@ -186,6 +190,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `docker-compose.yml`
 
 #### SS-011 — Celery app + broker wiring
+**Status:** ✅ Done (2026-08-06)
 **Description:** `backend/app/tasks/celery_app.py` is an empty stub with no broker configured. Wire it to Redis (already being added in SS-010), and add a worker service to compose so `tasks/`/`workers/` code in later milestones has somewhere to run.
 **Priority:** High · **Effort:** S · **Dependencies:** SS-010
 **Acceptance Criteria:**
@@ -204,6 +209,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 **Why now:** per `docs/architecture.md` §4, `tenant_id` is currently caller-supplied and unauthenticated — anyone can read or write any tenant's data. This is the highest-severity gap between the report's design and reality, and every user-facing feature after this point (incidents, reports, investigation) needs to know who's asking.
 
 #### SS-012 — User registration + bcrypt password hashing
+**Status:** ✅ Done (2026-08-06)
 **Description:** Implement password hashing/verification (bcrypt via `passlib` or similar) and a registration flow creating `User` rows scoped to a `Tenant`.
 **Priority:** Critical · **Effort:** M · **Dependencies:** SS-009
 **Acceptance Criteria:**
@@ -216,6 +222,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/requirements.txt` (`passlib[bcrypt]` or `bcrypt`)
 
 #### SS-013 — JWT issuance & validation
+**Status:** ✅ Done (2026-08-06)
 **Description:** Implement `core/security.py` (currently empty) to issue/verify JWTs using `settings.JWT_SECRET`/`JWT_ALGORITHM`/`JWT_EXPIRY_HOURS`, embedding `tenant_id`, `user_id`, and `role` in the token claims.
 **Priority:** Critical · **Effort:** M · **Dependencies:** SS-012
 **Acceptance Criteria:**
@@ -227,6 +234,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/requirements.txt`
 
 #### SS-014 — Auth endpoints (`routers/v1/auth.py`)
+**Status:** ✅ Done (2026-08-06)
 **Description:** Implement the currently-empty `auth.py` router: `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`.
 **Priority:** Critical · **Effort:** M · **Dependencies:** SS-013
 **Acceptance Criteria:**
@@ -239,6 +247,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `docs/api-design.md`
 
 #### SS-015 — Auth dependency injection (`core/dependencies.py`)
+**Status:** ✅ Done (2026-08-06)
 **Description:** Implement a FastAPI dependency that extracts and validates the JWT from the `Authorization` header, resolving it to a `(tenant_id, user_id, role)` context injectable into any route.
 **Priority:** Critical · **Effort:** S · **Dependencies:** SS-013
 **Acceptance Criteria:**
@@ -248,6 +257,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/app/core/dependencies.py`
 
 #### SS-016 — Derive `tenant_id` from JWT on ingest & alerts
+**Status:** ✅ Done (2026-08-06)
 **Description:** Replace the current caller-supplied `tenant_id` in `POST /api/v1/ingest` and `GET /api/v1/alerts` with the authenticated value from SS-015, closing the isolation gap documented in `docs/architecture.md` §4.
 **Priority:** Critical · **Effort:** S · **Dependencies:** SS-015
 **Acceptance Criteria:**
@@ -260,6 +270,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `docs/architecture.md`
 
 #### SS-017 — RBAC enforcement (admin/analyst/viewer)
+**Status:** ✅ Done (2026-08-06)
 **Description:** Add a `require_role(...)` dependency (or decorator) enforcing the `UserRole` levels described in the SRS (§3.2): admins get full access, analysts get alert/incident/investigation access, viewers get read-only.
 **Priority:** High · **Effort:** M · **Dependencies:** SS-015
 **Acceptance Criteria:**
@@ -275,6 +286,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 **Why now:** the ingestion pipeline only ever sees `synthetic` data today; without real adapters, every downstream feature (enrichment, correlation, risk scoring) can only ever be demonstrated on fake data.
 
 #### SS-018 — Wazuh adapter
+**Status:** ✅ Done (2026-08-06)
 **Description:** Implement `backend/app/adapters/wazuh.py` (new — `adapters/` currently only has an empty `__init__.py`) to transform a raw Wazuh alert JSON payload into `NormalizedLog` fields, mapping Wazuh rule IDs to `mitre_technique`/`mitre_tactic` where available.
 **Priority:** High · **Effort:** M · **Dependencies:** none (can start anytime after Milestone 1)
 **Acceptance Criteria:**
@@ -286,6 +298,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/tests/test_adapters.py` (new)
 
 #### SS-019 — AWS CloudTrail adapter
+**Status:** ✅ Done (2026-08-06)
 **Description:** Implement `backend/app/adapters/cloudtrail.py` (new) to transform a CloudTrail event record into `NormalizedLog` (`log_type="cloud"`, `source="aws_cloudtrail"`).
 **Priority:** Medium · **Effort:** M · **Dependencies:** none
 **Acceptance Criteria:**
@@ -296,6 +309,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/tests/test_adapters.py`
 
 #### SS-020 — AWS GuardDuty adapter
+**Status:** ✅ Done (2026-08-06)
 **Description:** Implement `backend/app/adapters/guardduty.py` (new) to transform a GuardDuty finding into `NormalizedLog` (`source="aws_guardduty"`), mapping GuardDuty severity (0.1–8.9 float) to the `Severity` enum.
 **Priority:** Medium · **Effort:** M · **Dependencies:** none
 **Acceptance Criteria:**
@@ -306,6 +320,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/tests/test_adapters.py`
 
 #### SS-021 — Adapter dispatch wired into ingestion
+**Status:** ✅ Done (2026-08-06)
 **Description:** `services/ingestion.py` currently does no per-source transformation. Add a registry that dispatches to the correct adapter (SS-018/019/020) based on the `source` field before schema validation.
 **Priority:** High · **Effort:** S · **Dependencies:** SS-018, SS-019, SS-020
 **Acceptance Criteria:**
@@ -321,6 +336,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 ## Milestone 5 — Threat Intelligence Enrichment
 
 #### SS-022 — VirusTotal client
+**Status:** ✅ Done (2026-08-06)
 **Description:** Implement `backend/app/clients/virustotal.py` (currently empty) — IP and file-hash reputation lookups against the VT API, respecting `VT_RATE_LIMIT_PER_MINUTE`.
 **Priority:** High · **Effort:** M · **Dependencies:** none
 **Acceptance Criteria:**
@@ -332,6 +348,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/tests/test_clients.py` (new, with mocked HTTP)
 
 #### SS-023 — AbuseIPDB client
+**Status:** ✅ Done (2026-08-06)
 **Description:** Implement `backend/app/clients/abuseipdb.py` (currently empty) — IP reputation lookups, respecting `ABUSEIPDB_RATE_LIMIT_PER_DAY`.
 **Priority:** High · **Effort:** S · **Dependencies:** none
 **Acceptance Criteria:**
@@ -342,6 +359,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/tests/test_clients.py`
 
 #### SS-024 — Threat intel cache table
+**Status:** ✅ Done (2026-08-06)
 **Description:** Add a `ti_cache` Postgres table (indicator, provider, result JSON, `is_malicious`, `expires_at`) implementing the cache-before-call behavior described in the SRS (§3.3): 7-day TTL for malicious indicators, 24-hour for clean.
 **Priority:** High · **Effort:** S · **Dependencies:** SS-008
 **Acceptance Criteria:**
@@ -352,6 +370,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/migrations/versions/000X_*.py` (new)
 
 #### SS-025 — Enrichment service
+**Status:** ✅ Done (2026-08-06)
 **Description:** Implement `backend/app/services/enrichment.py` (currently empty): given a `NormalizedLog` with an IP/hash/domain, check cache first (SS-024), call the appropriate client (SS-022/023) on a miss, write back to cache and to the OpenSearch document's `ti_result`/`ti_enriched`/`risk_score` fields.
 **Priority:** High · **Effort:** M · **Dependencies:** SS-022, SS-023, SS-024
 **Acceptance Criteria:**
@@ -361,6 +380,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/app/services/enrichment.py`
 
 #### SS-026 — Async enrichment wired post-ingestion
+**Status:** ✅ Done (2026-08-06)
 **Description:** Trigger SS-025 as a Celery task after a log is accepted by `/api/v1/ingest`, so enrichment never blocks the ingestion response (per ADR-005 in `docs/decisions.md`, which currently holds true only because no enrichment code exists yet).
 **Priority:** High · **Effort:** S · **Dependencies:** SS-011, SS-025
 **Acceptance Criteria:**
@@ -377,6 +397,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 ## Milestone 6 — Attack Chain Correlation Engine
 
 #### SS-027 — Redis sliding window primitives
+**Status:** ✅ Done (2026-08-06)
 **Description:** Implement per-endpoint, per-tenant sliding-window storage in Redis (sorted sets keyed by `tenant_id:host_id`, 1-hour TTL per `CORRELATION_WINDOW_TTL`) that later pattern detectors can query.
 **Priority:** High · **Effort:** M · **Dependencies:** SS-010
 **Acceptance Criteria:**
@@ -386,6 +407,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/app/services/correlation.py`
 
 #### SS-028 — Correlation pattern detectors (6 patterns)
+**Status:** ✅ Done (2026-08-06)
 **Description:** Implement the six attack patterns from the SRS (§3.3): credential brute force, successful compromise, recon-to-exploitation, privilege escalation, data exfiltration, lateral movement — each as a function evaluating a host's sliding window (SS-027) against a rule.
 **Priority:** High · **Effort:** L · **Dependencies:** SS-027
 **Acceptance Criteria:**
@@ -396,6 +418,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/tests/test_correlation.py` (new)
 
 #### SS-029 — MITRE ATT&CK technique/tactic mapping table
+**Status:** ✅ Done (2026-08-06)
 **Description:** Build a lookup table (static data file or Postgres table) mapping detected pattern types to MITRE ATT&CK technique/tactic IDs, referenced by SS-028's output.
 **Priority:** Medium · **Effort:** S · **Dependencies:** none
 **Acceptance Criteria:**
@@ -405,6 +428,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/app/services/correlation.py` (or a new `backend/app/core/mitre_mapping.py`)
 
 #### SS-030 — Correlation worker
+**Status:** ✅ Done (2026-08-06)
 **Description:** Implement `backend/app/workers/correlation_worker.py` (currently empty) — a Celery task or long-running consumer that runs SS-028's detectors against every newly ingested alert, per the "within seconds of ingestion" requirement (SRS §3.3).
 **Priority:** High · **Effort:** M · **Dependencies:** SS-011, SS-028
 **Acceptance Criteria:**
@@ -415,6 +439,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/app/routers/v1/ingest.py`
 
 #### SS-031 — Auto-create incident + dashboard notification on chain detection
+**Status:** ✅ Done (2026-08-06)
 **Description:** When SS-030 detects a chain above the confidence threshold, automatically create a linked incident (depends on Milestone 7's incident model) and push a notification (WebSocket, once the frontend exists — see Milestone 12).
 **Priority:** Medium · **Effort:** S · **Dependencies:** SS-030, SS-035 (incident model)
 **Acceptance Criteria:**
@@ -429,6 +454,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 ## Milestone 7 — Endpoint Risk Scoring & Incident Management
 
 #### SS-032 — Risk scoring service
+**Status:** ✅ Done (2026-08-07)
 **Description:** Implement `backend/app/services/risk_scoring.py` (currently empty) using the weight constants already defined in `core/config.py` (`RISK_SCORE_CRITICAL/HIGH/MEDIUM/LOW`, TI/anomaly/after-hours/MITRE bonuses, time decay).
 **Priority:** High · **Effort:** M · **Dependencies:** SS-025 (enrichment feeds risk), SS-028 (correlation feeds risk)
 **Acceptance Criteria:**
@@ -440,6 +466,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/tests/test_risk_scoring.py` (new)
 
 #### SS-033 — Scheduled risk recalculation task
+**Status:** ✅ Done (2026-08-07)
 **Description:** Implement `backend/app/tasks/scoring.py` (currently empty) as a periodic Celery beat task recalculating all endpoint scores (needed for the time-decay behavior in SS-032 to actually manifest over time, not just at alert-ingestion time).
 **Priority:** Medium · **Effort:** S · **Dependencies:** SS-011, SS-032
 **Acceptance Criteria:**
@@ -448,6 +475,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/app/tasks/scoring.py`
 
 #### SS-034 — Endpoints listing API
+**Status:** ✅ Done (2026-08-07)
 **Description:** Implement `backend/app/routers/v1/endpoints.py` (currently empty): `GET /api/v1/endpoints` returning known hosts with current risk score/level, sorted by risk descending.
 **Priority:** High · **Effort:** S · **Dependencies:** SS-032, SS-016 (tenant-scoped)
 **Acceptance Criteria:**
@@ -459,6 +487,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `docs/api-design.md`
 
 #### SS-035 — Incident model + migration
+**Status:** ✅ Done (2026-08-06)
 **Description:** Add an `Incident` Postgres model: status (`IncidentStatus` enum), linked `alert_id`s, timestamps, assigned analyst, audit trail of state transitions.
 **Priority:** High · **Effort:** M · **Dependencies:** SS-008, SS-009
 **Acceptance Criteria:**
@@ -469,6 +498,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/migrations/versions/000X_*.py` (new)
 
 #### SS-036 — Incident CRUD + lifecycle endpoints
+**Status:** ✅ Done (2026-08-06)
 **Description:** Implement `backend/app/routers/v1/incidents.py` (currently empty): create, list, get, and transition (`open` → `investigating` → `resolved`/`false_positive`) endpoints.
 **Priority:** High · **Effort:** M · **Dependencies:** SS-035, SS-016
 **Acceptance Criteria:**
@@ -480,6 +510,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `docs/api-design.md`
 
 #### SS-037 — Alert linking & investigation notes
+**Status:** ✅ Done (2026-08-06)
 **Description:** Extend incidents with the ability to link additional alerts after creation and append timestamped analyst notes, per SRS §3.3.
 **Priority:** Medium · **Effort:** S · **Dependencies:** SS-036
 **Acceptance Criteria:**
@@ -496,6 +527,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 **Context:** CloudLens (`cloud/`) is a fully working, separate application. This milestone is entirely about bridging it into SafeSOC's unified alert queue — no changes to CloudLens's own scanning logic are anticipated.
 
 #### SS-038 — CloudLens `Finding` → `NormalizedLog` adapter
+**Status:** ✅ Done (2026-08-06)
 **Description:** Implement a transform from CloudLens's `Finding` model (`category`, `title`, `description`, `severity`, `affected_resource`, `remediation` — see `cloud/AWS-IAM-backend/core/models.py`) into `NormalizedLog` (`log_type="cloud"`, `source="aws_cloudtrail"` or a new dedicated source value).
 **Priority:** Medium · **Effort:** M · **Dependencies:** none (CloudLens's shape is stable)
 **Acceptance Criteria:**
@@ -506,6 +538,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/app/schemas/log.py` (only if a new optional field is genuinely needed)
 
 #### SS-039 — Sync mechanism: CloudLens findings → `/api/v1/ingest`
+**Status:** ✅ Done (2026-08-06)
 **Description:** Build the bridge that actually moves data — either CloudLens's Django backend calls SafeSOC's `/api/v1/ingest` after a scan completes (push), or SafeSOC polls CloudLens's API on a schedule (pull). Push is simpler given CloudLens already has a notification hook (`engine/notifier.py`) to model this after.
 **Priority:** Medium · **Effort:** M · **Dependencies:** SS-038, SS-016 (needs a service-level auth mechanism, not a user JWT)
 **Acceptance Criteria:**
@@ -516,6 +549,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/app/routers/v1/cloud.py`
 
 #### SS-040 — Cloud findings surfaced via `routers/v1/cloud.py`
+**Status:** ✅ Done (2026-08-06)
 **Description:** Implement the currently-empty `cloud.py` router — at minimum, a way to view/filter cloud-sourced alerts distinctly if needed, even though they now flow through the same `/api/v1/alerts` endpoint as everything else.
 **Priority:** Low · **Effort:** S · **Dependencies:** SS-039
 **Acceptance Criteria:**
@@ -525,6 +559,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/app/routers/v1/cloud.py`
 
 #### SS-041 — Harmonize CloudLens risk score with SafeSOC risk scoring
+**Status:** ✅ Done (2026-08-07)
 **Description:** CloudLens computes its own 0–100 account-level risk score independently of SafeSOC's endpoint risk scoring (SS-032). Decide and implement how the two relate — e.g. CloudLens's score contributes to a tenant-level rollup, or cloud findings' severities feed into `risk_scoring.py`'s existing per-alert weighting.
 **Priority:** Low · **Effort:** M · **Dependencies:** SS-032, SS-039
 **Acceptance Criteria:**
@@ -539,6 +574,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 ## Milestone 9 — Natural Language Investigation Assistant
 
 #### SS-042 — Ollama client
+**Status:** ✅ Done (2026-08-07)
 **Description:** Implement `backend/app/clients/ollama.py` (currently empty) — HTTP client against a local Ollama instance (`settings.ollama_url`), running `OLLAMA_MODEL` (`mistral:7b` by default).
 **Priority:** Medium · **Effort:** S · **Dependencies:** none
 **Acceptance Criteria:**
@@ -547,6 +583,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/app/clients/ollama.py`
 
 #### SS-043 — Groq client (cloud fallback)
+**Status:** ✅ Done (2026-08-07)
 **Description:** Implement `backend/app/clients/groq.py` (currently empty) as the cloud-based alternative when `LLM_PROVIDER=groq`.
 **Priority:** Low · **Effort:** S · **Dependencies:** none
 **Acceptance Criteria:**
@@ -555,6 +592,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/app/clients/groq.py`
 
 #### SS-044 — Intent classification (8 supported intents)
+**Status:** ✅ Done (2026-08-07)
 **Description:** Implement classification of a natural-language query into one of the 8 SRS-defined intents (auth failures, IP activity, endpoint snapshot, top alerts, user activity, cloud events, risky endpoints, attack chain status).
 **Priority:** Medium · **Effort:** M · **Dependencies:** SS-042
 **Acceptance Criteria:**
@@ -564,6 +602,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/app/services/investigation.py`
 
 #### SS-045 — MCP tool definitions for data retrieval
+**Status:** ✅ Done (2026-08-07)
 **Description:** Implement `backend/app/mcp/__init__.py` (currently empty) with typed tool definitions (one per intent from SS-044) that the LLM orchestrates calls to, per the report's stated architecture (§3.3) — the LLM should orchestrate pre-built queries, not generate raw database queries itself.
 **Priority:** Medium · **Effort:** L · **Dependencies:** SS-044, SS-032 (risky-endpoints tool needs risk scoring), SS-031 (attack-chain-status tool needs correlation)
 **Acceptance Criteria:**
@@ -574,6 +613,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/app/mcp/tools.py` (new)
 
 #### SS-046 — Conversation context/session state
+**Status:** ✅ Done (2026-08-07)
 **Description:** Enable follow-up questions that reference previously discussed entities without restating them (SRS §3.3), requiring session state — likely Redis-backed given SS-010.
 **Priority:** Medium · **Effort:** M · **Dependencies:** SS-010, SS-045
 **Acceptance Criteria:**
@@ -583,6 +623,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/app/services/investigation.py`
 
 #### SS-047 — Investigation endpoint
+**Status:** ✅ Done (2026-08-07)
 **Description:** Implement `backend/app/routers/v1/investigate.py` (currently empty): `POST /api/v1/investigate` accepting a natural-language query and conversation/session ID, returning the assistant's response.
 **Priority:** Medium · **Effort:** S · **Dependencies:** SS-046
 **Acceptance Criteria:**
@@ -598,6 +639,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 ## Milestone 10 — Anomaly Detection
 
 #### SS-048 — Synthetic normal-behavior training data generator
+**Status:** ✅ Done (2026-08-07)
 **Description:** Extend the injector or add a standalone script to generate 30 days of "normal" synthetic behavior (per SRS §3.3) suitable for unsupervised training — distinct from the attack-scenario generation in Milestone 13.
 **Priority:** Medium · **Effort:** S · **Dependencies:** none
 **Acceptance Criteria:**
@@ -606,6 +648,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `injector/` (new script) or `ml/` (new training-data generator)
 
 #### SS-049 — Isolation Forest training pipeline
+**Status:** ✅ Done (2026-08-07)
 **Description:** Add `scikit-learn` to `backend/requirements.txt`, build a training script that fits an Isolation Forest on SS-048's data and saves the model to `ANOMALY_MODEL_PATH` (`ml/model/isolation_forest.pkl`, per existing config).
 **Priority:** Medium · **Effort:** M · **Dependencies:** SS-048
 **Acceptance Criteria:**
@@ -616,6 +659,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/requirements.txt`
 
 #### SS-050 — Anomaly scoring service
+**Status:** ✅ Done (2026-08-07)
 **Description:** Implement `backend/app/services/anomaly.py` (currently empty): load the SS-049 model, extract features from an alert (login patterns, connection diversity, process frequency, temporal features per SRS §3.3), score 0–1, flag if above `ANOMALY_THRESHOLD` (0.7).
 **Priority:** Medium · **Effort:** M · **Dependencies:** SS-049
 **Acceptance Criteria:**
@@ -625,6 +669,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/app/services/anomaly.py`
 
 #### SS-051 — Z-score network volume spike detection
+**Status:** ✅ Done (2026-08-07)
 **Description:** Implement the statistical complement to SS-050 described in SRS §3.3 — Z-score analysis flagging sudden network traffic volume spikes (potential exfiltration), using `NETWORK_ANOMALY_ZSCORE_THRESHOLD`.
 **Priority:** Low · **Effort:** S · **Dependencies:** SS-027 (reuses the sliding-window infra from correlation, if available by this point)
 **Acceptance Criteria:**
@@ -637,6 +682,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 ## Milestone 11 — Automated Reporting & Notifications
 
 #### SS-052 — PDF report generation
+**Status:** ✅ Done (2026-08-07)
 **Description:** Add `weasyprint` to `backend/requirements.txt`, implement `backend/app/services/reporting.py` (currently empty) to render the weekly digest described in SRS §3.3 (executive summary, alert trends, critical incidents, top-risk endpoints, TI findings, cloud posture, recommendations) to PDF, saved under `REPORT_OUTPUT_DIR`.
 **Priority:** Medium · **Effort:** L · **Dependencies:** SS-032 (risk data), SS-036 (incident data), SS-025 (TI data), SS-039 (cloud posture data) — this issue is naturally last in its milestone since it aggregates everything else
 **Acceptance Criteria:**
@@ -647,6 +693,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/requirements.txt`
 
 #### SS-053 — Weekly report scheduling
+**Status:** ✅ Done (2026-08-07)
 **Description:** Implement `backend/app/tasks/reporting.py` (currently empty) as a Celery beat task firing per `REPORT_SCHEDULE_DAY`/`REPORT_SCHEDULE_HOUR`, generating a report per tenant.
 **Priority:** Medium · **Effort:** S · **Dependencies:** SS-011, SS-052
 **Acceptance Criteria:**
@@ -656,6 +703,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/app/tasks/reporting.py`
 
 #### SS-054 — Reports listing/download endpoint
+**Status:** ✅ Done (2026-08-07)
 **Description:** Implement `backend/app/routers/v1/reports.py` (currently empty): list generated reports for the caller's tenant, download a specific one.
 **Priority:** Medium · **Effort:** S · **Dependencies:** SS-052, SS-016
 **Acceptance Criteria:**
@@ -666,6 +714,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `docs/api-design.md`
 
 #### SS-055 — Telegram client for SafeSOC
+**Status:** ✅ Done (2026-08-07)
 **Description:** Implement `backend/app/clients/telegram.py` (currently empty) — SafeSOC's own Telegram notifier, structurally similar to CloudLens's existing `cloud/AWS-IAM-backend/engine/notifier.py` but for SafeSOC alerts/incidents rather than IAM findings. Don't share code across the two codebases (different stacks); mirror the pattern instead.
 **Priority:** Low · **Effort:** S · **Dependencies:** none
 **Acceptance Criteria:**
@@ -674,6 +723,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `backend/app/clients/telegram.py`
 
 #### SS-056 — Notification service + worker
+**Status:** ✅ Done (2026-08-07)
 **Description:** Implement `backend/app/services/notifications.py` and `backend/app/workers/notification_worker.py` (both currently empty) to push real-time critical-event notifications (per SRS §3.2's "SMB IT Administrator... receives immediate notification of critical events").
 **Priority:** Low · **Effort:** M · **Dependencies:** SS-011, SS-055, SS-031 (chain detection is a notification trigger)
 **Acceptance Criteria:**
@@ -689,6 +739,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 **Note:** `frontend/` currently contains only `.gitkeep` — no framework decision has been made. CloudLens's frontend (React + TypeScript + Vite + Tailwind) is a reasonable default to match, for stack consistency and shared team familiarity, but this is a real decision to make explicitly, not just default into.
 
 #### SS-057 — Frontend framework scaffold
+**Status:** ✅ Done (2026-08-07)
 **Description:** Decide and bootstrap the SafeSOC dashboard's frontend stack (recommend matching CloudLens: React + TS + Vite + Tailwind), with routing, an API client layer, and auth token storage/refresh wired to Milestone 3's endpoints.
 **Priority:** Medium · **Effort:** M · **Dependencies:** SS-014 (needs working auth endpoints to build against)
 **Acceptance Criteria:**
@@ -699,6 +750,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `docs/tech-stack.md`
 
 #### SS-058 — Auth/login UI
+**Status:** ✅ Done (2026-08-07)
 **Description:** Login form, token storage, auto-refresh, protected-route wrapper.
 **Priority:** Medium · **Effort:** S · **Dependencies:** SS-057
 **Acceptance Criteria:**
@@ -707,6 +759,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `frontend/src/pages/Login.tsx` (or equivalent, once scaffold exists)
 
 #### SS-059 — Alert queue view
+**Status:** ✅ Done (2026-08-07)
 **Description:** Paginated, filterable alert list backed by `GET /api/v1/alerts`, matching the filters already supported server-side (severity, log_type, source, host, timerange).
 **Priority:** Medium · **Effort:** M · **Dependencies:** SS-058
 **Acceptance Criteria:**
@@ -715,6 +768,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `frontend/src/pages/Alerts.tsx` (new)
 
 #### SS-060 — Endpoint risk dashboard view
+**Status:** ✅ Done (2026-08-07)
 **Description:** View backed by `GET /api/v1/endpoints` (SS-034), sorted by risk, with drill-down to that endpoint's recent alerts.
 **Priority:** Medium · **Effort:** M · **Dependencies:** SS-058, SS-034
 **Acceptance Criteria:**
@@ -723,6 +777,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `frontend/src/pages/Endpoints.tsx` (new)
 
 #### SS-061 — Incident management UI
+**Status:** ✅ Done (2026-08-07)
 **Description:** List, view, and transition incidents; link alerts; add notes — backed by Milestone 7's endpoints.
 **Priority:** Medium · **Effort:** L · **Dependencies:** SS-058, SS-036
 **Acceptance Criteria:**
@@ -731,6 +786,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `frontend/src/pages/Incidents.tsx` (new)
 
 #### SS-062 — Investigation chat UI
+**Status:** ✅ Done (2026-08-07)
 **Description:** Chat interface backed by `POST /api/v1/investigate` (SS-047), maintaining the session/conversation ID across turns.
 **Priority:** Medium · **Effort:** M · **Dependencies:** SS-058, SS-047
 **Acceptance Criteria:**
@@ -739,6 +795,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `frontend/src/pages/Investigate.tsx` (new)
 
 #### SS-063 — Real-time updates (WebSocket)
+**Status:** ✅ Done (2026-08-07)
 **Description:** Add a WebSocket channel to the backend (`main.py`, currently REST-only) for pushing new-alert/new-incident/chain-detected events, consumed by the frontend for live dashboard updates without polling.
 **Priority:** Low · **Effort:** L · **Dependencies:** SS-031, SS-057
 **Acceptance Criteria:**
@@ -754,6 +811,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 ## Milestone 13 — Synthetic Data & Demo Mode
 
 #### SS-064 — Multi-scenario attack simulation in injector
+**Status:** ✅ Done (2026-08-07)
 **Description:** Extend `injector/injector.py` (currently generates only randomized `authentication`-type logs) to support named attack scenarios — brute force, lateral movement, data exfiltration, etc. — that produce sequences correlation (Milestone 6) is designed to detect. This closes the gap flagged in `docs/requirements.md` §3 between the report's claims and the actual injector.
 **Priority:** Medium · **Effort:** M · **Dependencies:** none (useful immediately; especially valuable once SS-028 exists to test against)
 **Acceptance Criteria:**
@@ -763,6 +821,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `injector/injector.py`
 
 #### SS-065 — Demo mode
+**Status:** ✅ Done (2026-08-07)
 **Description:** Add a mode that pre-loads a coherent, historical dataset with active attack chains already present, for live demos/reviews (per SRS §3.3's "comprehensive demo mode").
 **Priority:** Low · **Effort:** S · **Dependencies:** SS-064
 **Acceptance Criteria:**
@@ -775,6 +834,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 ## Milestone 14 — Non-Functional Hardening & QA
 
 #### SS-066 — Load/performance test harness
+**Status:** ✅ Done (2026-08-07)
 **Description:** Build a repeatable benchmark (e.g. `locust` or a simple async script) verifying the SRS's ≥100 events/sec ingestion and <500ms alert-query targets — currently unverified by any automated test (per `docs/requirements.md` §4).
 **Priority:** Medium · **Effort:** M · **Dependencies:** SS-001 (needs a running stack to benchmark against)
 **Acceptance Criteria:**
@@ -785,6 +845,7 @@ IDs are sequential across the whole backlog (`SS-001`...) so they can be referen
 - `docs/testing.md`
 
 #### SS-067 — Security review pass
+**Status:** ✅ Done (2026-08-07)
 **Description:** Review the implemented surface against OWASP Top 10 concerns — especially now that auth (Milestone 3) exists: injection risk in OpenSearch queries, JWT handling, secrets management, rate limiting on auth endpoints.
 **Priority:** High · **Effort:** M · **Dependencies:** SS-013, SS-016 (needs auth to exist to review it)
 **Acceptance Criteria:**

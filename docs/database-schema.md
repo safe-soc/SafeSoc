@@ -1,6 +1,6 @@
 # SafeSOC — Database Schema
 
-SafeSOC's target storage layer is three-tier (OpenSearch + PostgreSQL + Redis, per `tech-stack.md`). Only OpenSearch is implemented today.
+SafeSOC's storage layer is three-tier (OpenSearch + PostgreSQL + Redis, per `tech-stack.md`). All three are implemented.
 
 ## 1. OpenSearch — `safesoc-alerts-{YYYY}.{MM}` (Implemented)
 
@@ -37,32 +37,42 @@ The mapping mirrors the `NormalizedLog` Pydantic schema (`backend/app/schemas/lo
 | Process | `process_id` | `integer` | Optional |
 | Process | `command_line` | `text` | Optional |
 | Raw | `raw_log` | `text`, `index: false` | Stored but not searchable; default `"{}"` |
-| Enrichment | `ti_enriched` | `boolean` | Defaults `false` — no writer sets this to `true` yet |
-| Enrichment | `ti_result.*` | nested object | Schema defined (`TIResult` in `schemas/log.py`); never populated — enrichment isn't implemented |
-| Enrichment | `risk_score` | `integer` | Defaults `0`; no scoring service writes to it |
-| Enrichment | `anomaly_score` | `float` | Optional; no anomaly service writes to it |
+| Enrichment | `ti_enriched` | `boolean` | Defaults `false`, set `true` by `services/enrichment.py` once a TI lookup completes (SS-025) |
+| Enrichment | `ti_result.*` | nested object | Schema defined (`TIResult` in `schemas/log.py`); populated by `services/enrichment.py` (SS-025) |
+| Enrichment | `risk_score` | `integer` | Defaults `0`; written by `services/risk_scoring.py` / `tasks/scoring.py` (SS-032–033) |
+| Enrichment | `anomaly_score` | `float` | Optional; written by `services/anomaly.py` (SS-050) |
 
 **Not implemented despite being described in the report:**
 - Bulk write batching at 500 docs/request — `bulk_index_logs()` sends one bulk request per monthly-index group with no internal chunking; a single oversized batch is sent as one request to OpenSearch rather than split into 500-doc chunks. (Note: `SS-005` caps the *total* logs per ingest request at `INGEST_BATCH_SIZE`, which is a different thing from chunking a single bulk write into sub-batches.)
 
-## 2. PostgreSQL (Planned)
+## 2. PostgreSQL (Implemented)
 
-`backend/app/db/postgresql.py` is an empty file. `backend/app/core/config.py` already defines connection settings (`POSTGRES_HOST/PORT/DB/USER/PASSWORD`, plus `postgres_url` / `postgres_url_sync` properties for async and sync drivers), and `backend/alembic.ini` exists at the backend root — but:
+`backend/app/db/postgresql.py` provides an async engine/session factory (`async_session_factory`, `get_db()` FastAPI dependency) built from `settings.postgres_url` (SS-007). Alembic migrations live under `backend/migrations/versions/`. `sqlalchemy[asyncio]`, `asyncpg`, and `alembic` are all in `backend/requirements.txt`.
 
-- No SQLAlchemy models exist (`backend/app/models/__init__.py` is empty).
-- No Alembic migration has ever been generated (`backend/migrations/versions/` contains only `.gitkeep`).
-- `asyncpg`/`sqlalchemy`/`alembic` are **not** in `backend/requirements.txt` yet, so the app can't currently connect even if code were added.
+| Table | Model | Purpose |
+|---|---|---|
+| `tenants` | `models/tenant.py::Tenant` | Root of multi-tenant isolation: `id` (UUID PK), `name`, `created_at`. |
+| `users` | `models/user.py::User` | Login identity scoped to a tenant: `id`, `tenant_id` (FK), `email`, `password_hash` (bcrypt), `role` (`user_role` enum: admin/analyst/viewer), `created_at`. Unique on `(tenant_id, email)`. |
+| `incidents` | `models/incident.py::Incident` | `id`, `tenant_id` (FK), `status` (`incident_status` enum: open/investigating/resolved/false_positive), `alert_ids` (JSON list), `assigned_analyst_id` (FK, nullable), `created_at`/`updated_at`. |
+| `incident_state_transitions` | `models/incident.py::IncidentStateTransition` | Append-only audit log: one row per status change (including creation, `from_status=NULL` → `OPEN`), with the acting user and timestamp. Never updated or deleted. |
+| `incident_notes` | `models/incident.py::IncidentNote` | Append-only analyst notes attached to an incident: `incident_id` (FK), `author_user_id` (FK), `body`, `created_at`. |
+| `ti_cache` | `models/ti_cache.py::TICache` | Cache-before-call TTL cache for TI provider lookups: `indicator`, `provider` (`ti_provider` enum), `result` (JSON), `is_malicious`, `expires_at`. Unique on `(indicator, provider)`. Expiry computed via `compute_expiry()`: 7-day TTL for malicious indicators, 24h for clean (`TI_CACHE_MALICIOUS_TTL`/`TI_CACHE_CLEAN_TTL`). |
+| `endpoints` | `models/endpoint.py::Endpoint` | A known host's most recently computed risk score/level: `tenant_id` (FK), `host_id`, `risk_score`, `risk_level` (`risk_level` enum), `updated_at`. Unique on `(tenant_id, host_id)`. Upserted by the periodic risk-recalculation task (SS-033), not created by ingestion directly. |
 
-Per the SRS (§3.3, §3.5), PostgreSQL is intended to hold: tenants, users, incidents, threat-intel cache. None of these tables are defined anywhere in the repo — table design is a Phase 2 task, not merely an implementation gap.
+## 3. Redis (Implemented)
 
-## 3. Redis (Planned)
+`backend/app/db/redis.py::get_client()` returns an async client built from `settings.redis_url` (SS-010). `redis` is in `backend/requirements.txt`. Used for:
 
-`backend/app/db/redis.py` is an empty file. `redis_url` is already computed in `core/config.py`. Per the SRS, Redis is intended for: attack-chain correlation sliding windows (1-hour TTL, `CORRELATION_WINDOW_TTL` already defined in config), task queues, and session data. None of this exists yet, and `redis` is not in `backend/requirements.txt`.
+- **Attack-chain correlation sliding windows** (SS-027): sorted sets keyed `correlation:window:{tenant_id}:{host_id}`, one member per event, TTL refreshed to `CORRELATION_WINDOW_TTL` (1 hour default) on every write.
+- **Investigation conversation/session context** (SS-046): a namespaced key per `(tenant_id, session_id)`, TTL refreshed on every write (`INVESTIGATION_SESSION_TTL_SECONDS`, 10 minutes default).
+- **Real-time event pub/sub** (SS-063): a per-tenant channel that `routers/ws.py` subscribes to, publishing new-alert/chain-detected events pushed by the ingestion and correlation paths.
+- **Auth rate-limit counters** (SS-067): fixed-window counters (`ratelimit:login:{tenant_id}:{email}`, `ratelimit:register:{client_ip}`), TTL set on the first increment of each window.
+- **Celery broker + result backend** (SS-011): task queuing for enrichment, correlation, scoring, reporting, and notification workers.
 
 ## 4. Summary
 
 | Store | Purpose (per SRS) | Status |
 |---|---|---|
 | OpenSearch | Log/alert storage & search | Implemented |
-| PostgreSQL | Tenants, users, incidents, TI cache | Planned — no models, no migrations, no driver dependency |
-| Redis | Correlation windows, queues, sessions | Planned — no client, no dependency |
+| PostgreSQL | Tenants, users, incidents, TI cache, endpoints | Implemented |
+| Redis | Correlation windows, sessions, pub/sub, rate limits, Celery broker | Implemented |

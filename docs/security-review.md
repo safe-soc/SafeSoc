@@ -86,7 +86,7 @@ No middleware sets these. SafeSOC's backend is a JSON API with no server-rendere
 
 ## Verification
 
-- Full backend suite: `pytest` from `backend/` — 541 passed (including the new/updated tests above), 0 failed.
+- Full backend suite: `pytest` from `backend/` — 545 passed (including the new/updated tests above, plus BUG-001/BUG-002's own regression tests added afterward), 0 failed.
 - Docker verification: see the SS-067 commit's PR/issue comment for the live run confirming the rate limiter returns 429 after the configured attempt count against a running stack, and that the startup guard's warning log line appears on a fresh container start with the default `JWT_SECRET`.
 
 ## Out of scope for this pass

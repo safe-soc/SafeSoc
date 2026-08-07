@@ -1,6 +1,6 @@
 # SafeSOC — API Design
 
-This document describes the actual FastAPI surface of `backend/app`. Endpoints are grouped into **Implemented** (working code, testable via `/docs`) and **Planned** (router file exists as an empty stub; shape below is inferred from the SRS, not from code — treat as a design proposal, not a contract).
+This document describes the actual FastAPI surface of `backend/app`. As of SS-068, every documented endpoint below is **Implemented** and testable via `/docs` — no stub routers remain (see "No stub routers remain" near the end of this file).
 
 Base URL (local dev): `http://localhost:8000`
 Versioned prefix: `/api/v1` (`API_PREFIX` in `core/config.py`, though routers currently hardcode `/api/v1` in their own `prefix=` rather than reading that setting).
@@ -271,21 +271,39 @@ Downloads a specific report as `application/pdf`. `filename` is resolved only in
 { "error": "Report '<filename>' not found.", "status_code": 404 }
 ```
 
+### `POST /api/v1/cloud/findings`
+
+`backend/app/routers/v1/cloud.py` → `services/ingestion.py: process_ingest_batch()`. Authenticated via `X-Service-Token` (must match `settings.CLOUDLENS_SERVICE_TOKEN`), **not** a user JWT — CloudLens is a same-deployment backend service pushing data on a scan's behalf, not an interactive user (SS-039). Closed by default: an unset `CLOUDLENS_SERVICE_TOKEN` rejects every request rather than silently allowing an unauthenticated one; the comparison is constant-time (`hmac.compare_digest`, SS-067).
+
+**Request**
+```json
+{ "tenant_id": "...", "findings": [ { "id": 42, "category": "Privilege Escalation", "title": "...", "severity": "HIGH", "affected_resource": "user-dave", "remediation": "..." } ] }
+```
+Each finding is converted to `NormalizedLog` shape by `adapters/cloudlens.py` (SS-038) and routed through the exact same batch-processing pipeline `POST /api/v1/ingest` uses — partial-success semantics, enrichment, and correlation all apply identically.
+
+**Response 200**
+```json
+{ "accepted": 1, "rejected": 0, "alert_ids": ["..."], "errors": null }
+```
+
+### `GET /api/v1/cloud/summary`
+
+`backend/app/routers/v1/cloud.py` → `db/opensearch.py: get_cloud_summary()`. Any authenticated role, JWT required (unlike `/findings` above).
+
+Aggregate stats for cloud-sourced alerts (`source=cloudlens`) scoped to the authenticated tenant — total count, breakdowns by severity and category, and the number of distinct affected resources. Cloud-sourced alerts are also queryable via the generic `GET /api/v1/alerts?source=cloudlens`; this endpoint adds only the aggregate counts that a paginated list can't provide directly.
+
+**Query params:** `timerange_hours` (1–720, default 24).
+
+**Response 200**
+```json
+{ "total": 3, "by_severity": { "critical": 1, "high": 2 }, "by_category": { "Privilege Escalation": 3 }, "distinct_affected_resources": 2 }
+```
+
 ---
 
-## Planned Endpoints (stub routers, no logic)
+## No stub routers remain
 
-These router files exist under `backend/app/routers/v1/` but are **empty** — no path operations are registered, and none of them are included in `main.py`. Shapes below are proposals derived from the SRS, not implementations.
-
-| File | Intended purpose (SRS §3.3) |
-|---|---|
-| `cloud.py` | Surface CloudLens findings (or ingest them via the adapter pipeline) in the unified alert view |
-
-`endpoints.py`, `investigate.py`, and `reports.py` are no longer stubs — `GET /api/v1/endpoints` (SS-034), `POST /api/v1/investigate` (SS-047), and `GET /api/v1/reports`(`/{filename}`) (SS-054) are all implemented (see above).
-
-`incidents.py` is no longer a stub — CRUD and lifecycle transitions are implemented (see above); alert linking and investigation notes remain planned (SS-037).
-
-Because the routers above aren't registered in `main.py`, hitting any of their implied paths today returns FastAPI's default `404`.
+Every router file under `backend/app/routers/v1/` has real path operations registered in `main.py`. As of SS-067/SS-068, all previously-listed items here — `cloud.py`, `endpoints.py`, `investigate.py`, `reports.py`, `incidents.py` (including alert linking and investigation notes, SS-037) — are implemented (see above).
 
 ## API Documentation Access
 

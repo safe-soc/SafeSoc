@@ -2,14 +2,14 @@
 
 ## 1. Current State: Automated Backend Tests Exist (SS-002)
 
-`backend/tests/` now contains a real suite: 37 tests across `test_schemas.py`, `test_ingestion.py`, `test_opensearch.py`, and `test_exceptions.py`, plus shared fixtures in `conftest.py`. `pytest`, `pytest-asyncio`, and `httpx` are in `backend/requirements.txt`. Run it:
+`backend/tests/` now contains a real suite: **545 tests** across 53 files, one per major module/feature (`test_schemas.py`, `test_ingestion.py`, `test_opensearch.py`, `test_exceptions.py`, `test_auth.py`/`test_auth_router.py`, `test_correlation.py`/`test_correlation_worker.py`, `test_incidents.py`/`test_incidents_router.py`, `test_investigation.py`/`test_investigate_router.py`, `test_anomaly.py`, `test_reporting.py`, `test_notifications.py`, `test_rate_limit.py`, `test_rbac.py`, `test_tenant_isolation.py`, and more), plus shared fixtures in `conftest.py`. `pytest`, `pytest-asyncio`, and `httpx` are in `backend/requirements.txt`. Run it:
 
 ```bash
 cd backend
 pytest
 ```
 
-All 37 pass, offline — no live OpenSearch, Docker, or network access required. OpenSearch interactions are mocked (`mock_bulk_index_logs`, `mock_opensearch_unreachable` fixtures in `conftest.py`) rather than hitting a real cluster.
+All 545 pass, offline — no live OpenSearch, Postgres, Redis, Docker, or network access required. External dependencies are mocked at their call sites (`mock_bulk_index_logs`, `mock_opensearch_unreachable`, and per-test Celery/Redis/HTTP mocks) rather than hitting live infrastructure.
 
 **Now automatic:** `.github/workflows/ci.yml`'s `safesoc-backend` job runs this suite (`pytest`, after the install and import-check steps) on every push/PR — a failing test fails the build (SS-003).
 
@@ -32,18 +32,32 @@ None of this is captured as code that can be re-run to catch a regression.
 
 ## 4. Current Coverage vs. Remaining Gaps
 
-| Area | Status | Notes |
+Coverage now spans every implemented feature, not just the original SS-001–006 ingestion path:
+
+| Area | Status | Test file(s) |
 |---|---|---|
-| `schemas/log.py` | **Covered** | Valid construction, defaults, auto-generated `alert_id`, rejection of each of the 9 required fields individually, invalid enum values, the schema's own documented example |
-| `services/ingestion.py` | **Covered** | All-valid batch, mixed valid/invalid (partial failure), all-invalid (no write attempted), empty batch, `tenant_id`/`source` default injection |
-| `db/opensearch.py` (`_build_index_name`) | **Covered** | Month padding, December/January year boundaries, default-to-current-time |
-| `db/opensearch.py` (`check_connection`) | **Covered** | Ping succeeds, ping returns `False`, client construction raises |
-| `routers/health.py` (`GET /health`) | **Covered** | Both degraded (OpenSearch unreachable) and healthy (connected) responses, via `TestClient` |
-| `core/exceptions.py` (`safesoc_exception_handler`) | **Covered** | Documented `{"error", "status_code"}` shape for both `IngestionError` (422) and `OpenSearchError` (503), via an isolated test app; end-to-end wiring proven via the two `routers/v1/ingest.py` cases below (SS-004) |
-| `routers/v1/ingest.py` | **Covered** | `422` on payload missing both `log`/`logs`; `422` when `logs` isn't a list; `INGEST_BATCH_SIZE` cap — exactly-at-limit accepted, one-over-limit rejected with no write attempted (SS-005) — all assert the typed-exception response body, not just the status code |
+| Ingestion (`schemas/log.py`, `services/ingestion.py`, `routers/v1/ingest.py`) | **Covered** | `test_schemas.py`, `test_ingestion.py`, `test_adapters.py` |
+| OpenSearch (`db/opensearch.py`) | **Covered** | `test_opensearch.py` |
+| Auth (JWT, bcrypt, register/login/refresh, rate limiting) | **Covered** | `test_auth.py`, `test_auth_router.py`, `test_jwt.py`, `test_security.py`, `test_rate_limit.py`, `test_startup.py` |
+| RBAC / tenant isolation | **Covered** | `test_rbac.py`, `test_dependencies.py`, `test_tenant_isolation.py` |
+| Threat intel enrichment | **Covered** | `test_enrichment.py`, `test_enrichment_task.py`, `test_clients.py` |
+| Correlation engine + MITRE mapping | **Covered** | `test_correlation.py`, `test_correlation_worker.py`, `test_mitre_mapping.py` |
+| Risk scoring + endpoints | **Covered** | `test_risk_scoring.py`, `test_scoring_task.py`, `test_endpoints_router.py`, `test_models.py` |
+| Incident management | **Covered** | `test_incidents.py`, `test_incidents_router.py` |
+| CloudLens bridge | **Covered** | `test_cloud_router.py` |
+| NL investigation assistant | **Covered** | `test_investigation.py`, `test_investigate_router.py`, `test_mcp_tools.py`, `test_ollama_client.py`, `test_groq_client.py` |
+| Anomaly detection | **Covered** | `test_anomaly.py`, `test_ml_generate_training_data.py`, `test_ml_train.py` |
+| Reporting | **Covered** | `test_reporting.py`, `test_reporting_task.py`, `test_reports_router.py` |
+| Notifications (Telegram) | **Covered** | `test_notifications.py`, `test_notification_worker.py`, `test_telegram_client.py` |
+| Real-time (WebSocket, Redis pub/sub) | **Covered** | `test_ws_router.py`, `test_realtime.py`, `test_redis.py` |
+| Postgres engine/session | **Covered** | `test_postgresql.py` |
+| Celery app/broker config | **Covered** | `test_celery_app.py` |
+| Injector (scenarios, demo mode) | **Covered** | `test_injector_scenarios.py`, `test_injector_demo.py` |
+| Load/performance benchmark math | **Covered** | `test_benchmark.py` |
+| `routers/health.py`, `core/exceptions.py` | **Covered** | `test_exceptions.py` |
 | `routers/v1/alerts.py` | Not covered | Query parameter bounds (`timerange_hours` 1–720, `size` 1–500) — left for a follow-up test issue |
 
-`pytest` + `pytest-asyncio` + `httpx` (FastAPI `TestClient`) is now the actual stack, not just a recommendation.
+`pytest` + `pytest-asyncio` + `httpx` (FastAPI `TestClient`) is the actual stack.
 
 ## 5. Non-Functional Testing (SS-066)
 
@@ -68,7 +82,7 @@ These numbers describe a single-node Docker Compose dev setup, not a production 
 
 | Test type | Status |
 |---|---|
-| Unit/integration tests (backend) | **37 tests, passing** (`schemas`, `services/ingestion`, `db/opensearch`, `routers/health`, `core/exceptions` + `routers/v1/ingest` error paths incl. batch-size cap) — **runs in CI** on every push/PR |
+| Unit/integration tests (backend) | **545 tests, passing** across every implemented feature (see §4) — **runs in CI** on every push/PR |
 | Unit/integration tests (CloudLens) | None exist |
 | CI pipeline | `safesoc-backend` job runs install → import check → `pytest`; `cloudlens-*` jobs remain smoke checks (Django check, frontend lint/typecheck/build) — no CloudLens test suite exists yet |
 | Manual verification | Performed for Phase 1 ingestion pipeline (per report), not reproducible from repo alone |

@@ -1,7 +1,7 @@
 # SafeSOC — Product Roadmap
 
 **Audience:** contributors, reviewers, and (eventually) adopters.
-**Status:** planning document — no code has been written against this roadmap yet.
+**Status:** v0.1.0 through v0.9.0 are shipped; v1.0.0 is mostly shipped (SS-071/SS-072 outstanding — see the table below). v1.1+ and v2.0 remain planning-only.
 
 This document reframes SafeSOC's 68-issue Phase 2 engineering backlog ([`docs/roadmap-issues.md`](docs/roadmap-issues.md)) as a **release plan**, and extends it with the issues a real open-source SOC platform needs but a college-project backlog doesn't naturally produce (plugin architecture, security policy, release automation, observability, and so on).
 
@@ -50,18 +50,20 @@ Every feature below carries one of four tags:
 
 ## Release Plan at a Glance
 
+**Note on Status vs. `CHANGELOG.md`:** this table groups issues by *product* release; `CHANGELOG.md` groups the same issues by the order they actually landed (which followed `docs/roadmap-issues.md`'s milestone order, not this table's grouping). Both are accurate — they're just different cuts of the same 68-issue backlog. See `CHANGELOG.md` for actual ship dates.
+
 | Release | Focus | Issues | MVP items | Est. effort | Status |
 |---|---|---|---|---|---|
-| [v0.1.0](#v010--repository-foundation) | Repository Foundation | SS-001–006 | 3 of 6 | ~1.5–2 wks | Planned |
-| [v0.2.0](#v020--authentication--multi-tenancy) | Auth & Multi-Tenancy | SS-007–017, SS-070 | 10 of 11 | ~4 wks | Planned |
-| [v0.3.0](#v030--core-ingestion-platform) | Core Ingestion Platform | SS-018–021, SS-064 | 4 of 5 | ~2 wks | Planned |
-| [v0.4.0](#v040--threat-intelligence) | Threat Intelligence | SS-022–026 | 5 of 5 | ~2 wks | Planned |
-| [v0.5.0](#v050--cloud-security-integration) | Cloud Security Integration | SS-038–041 | 2 of 4 | ~1.5–2 wks | Planned |
-| [v0.6.0](#v060--incident-management) | Incident Management | SS-027–037 | 10 of 11 | ~4–5 wks | Planned |
-| [v0.7.0](#v070--dashboard--user-experience) | Dashboard & UX | SS-057–063 | 5 of 7 | ~4 wks | Planned |
-| [v0.8.0](#v080--ai-investigation-assistant) | AI Investigation Assistant | SS-042–047 | 4 of 6 | ~3 wks | Planned |
-| [v0.9.0](#v090--detection--analytics) | Detection & Analytics | SS-048–051 | 3 of 4 | ~2 wks | Planned |
-| [v1.0.0](#v100--production-ready-college-submission) | Production Ready | SS-065–068, SS-071–072, SS-052–056 | 6 of 8 | ~2–3 wks + reporting | **Submission target** |
+| [v0.1.0](#v010--repository-foundation) | Repository Foundation | SS-001–006 | 3 of 6 | ~1.5–2 wks | ✅ Shipped |
+| [v0.2.0](#v020--authentication--multi-tenancy) | Auth & Multi-Tenancy | SS-007–017, SS-070 | 10 of 11 | ~4 wks | Partially shipped — SS-007–017 done; SS-070 (API versioning policy) not started |
+| [v0.3.0](#v030--core-ingestion-platform) | Core Ingestion Platform | SS-018–021, SS-064 | 4 of 5 | ~2 wks | ✅ Shipped |
+| [v0.4.0](#v040--threat-intelligence) | Threat Intelligence | SS-022–026 | 5 of 5 | ~2 wks | ✅ Shipped |
+| [v0.5.0](#v050--cloud-security-integration) | Cloud Security Integration | SS-038–041 | 2 of 4 | ~1.5–2 wks | ✅ Shipped |
+| [v0.6.0](#v060--incident-management) | Incident Management | SS-027–037 | 10 of 11 | ~4–5 wks | ✅ Shipped |
+| [v0.7.0](#v070--dashboard--user-experience) | Dashboard & UX | SS-057–063 | 5 of 7 | ~4 wks | ✅ Shipped |
+| [v0.8.0](#v080--ai-investigation-assistant) | AI Investigation Assistant | SS-042–047 | 4 of 6 | ~3 wks | ✅ Shipped |
+| [v0.9.0](#v090--detection--analytics) | Detection & Analytics | SS-048–051 | 3 of 4 | ~2 wks | ✅ Shipped |
+| [v1.0.0](#v100--production-ready-college-submission) | Production Ready | SS-065–068, SS-071–072, SS-052–056 | 6 of 8 | ~2–3 wks + reporting | Partially shipped — SS-052–056, SS-065–067 done, SS-068 recurring/ongoing; SS-071 (audit log) and SS-072 (installer script) not started |
 | [v1.1+](#v11--open-source-improvements) | Open Source Improvements | SS-069, SS-073–079 | 0 (by definition) | open-ended | Post-submission |
 | [v2.0](#v20--advanced-ai-soc-platform) | Advanced AI SOC Platform | SS-080–082 | 0 (by definition) | unscheduled | Speculative |
 

@@ -16,7 +16,7 @@ Format: each entry records a decision, its rationale, and its current implementa
 
 **Decision:** Source-specific parsing/transformation logic (Wazuh, AWS CloudTrail, AWS GuardDuty, synthetic) is isolated in an `adapters/` layer, separate from the universal ingestion pipeline.
 **Rationale:** New sources can be added without touching validation, storage, or downstream processing logic.
-**Status: Partially implemented.** The `adapters/` package exists and the ingestion pipeline is structured to accommodate it, but it currently contains no adapter code — `backend/app/adapters/__init__.py` is empty. Only the synthetic source is exercised, and even that isn't routed through a real adapter; the ingest endpoint just defaults `source` to `"synthetic"`. The pattern is validated architecturally, not yet proven with a second source.
+**Status: Implemented.** `adapters/{wazuh,cloudtrail,guardduty,cloudlens}.py` (SS-018–020, SS-038) each implement `transform(raw) -> dict`; `services/ingestion.py::ADAPTER_REGISTRY` dispatches a batch to the matching adapter by its `source` field (SS-021). The pattern is now proven with four real sources, not just architecturally validated.
 
 ---
 
@@ -48,7 +48,7 @@ Format: each entry records a decision, its rationale, and its current implementa
 
 **Decision (implicit, observed in code, not stated in the report):** `backend/app/core/config.py` defines settings for nearly every Phase 2 feature (Postgres, Redis, JWT, LLM providers, TI APIs, correlation, risk scoring, anomaly detection, reporting) before the corresponding code exists.
 **Rationale (inferred):** Establishes the configuration surface/contract early so Phase 2 work can proceed against a stable settings object rather than renegotiating env var names per feature.
-**Status: Implemented for config; not yet consumed.** Useful as a forward-looking scaffold, but it means `core/config.py` currently overstates what the running application actually does — a reader of that file alone would assume more is built than actually is. Worth keeping in mind when onboarding new contributors.
+**Status: Implemented for config, and now fully consumed.** As of Milestone 14 (SS-001–067), every settings section `core/config.py` defines is read by the feature it configures — the scaffold-ahead-of-code gap this ADR originally described has closed. The one remaining exception is `SECRET_KEY` (line 31), which is genuinely unused anywhere in `backend/app` — worth removing or wiring up in a future cleanup pass (flagged in `docs/security-review.md` finding #10). New settings should still be added ahead of their consuming feature per this ADR's original pattern.
 
 ---
 
@@ -56,7 +56,7 @@ Format: each entry records a decision, its rationale, and its current implementa
 
 **Decision:** Rather than rewriting the existing CloudLens AWS IAM analyzer into the SafeSOC backend, it's retained as-is (Django + React, own Docker Compose) and will be integrated later by adapting its findings to the `NormalizedLog` schema and pushing them through the shared ingestion pipeline.
 **Rationale:** CloudLens is already validated against a live AWS environment; a rewrite would risk regressing a working tool for architectural purity.
-**Status: Decision made, integration not started.** CloudLens remains fully separate; `routers/v1/cloud.py` in the SafeSOC backend (the intended integration point) is an empty stub.
+**Status: Implemented (SS-038–040).** `cloud/AWS-IAM-backend/engine/safesoc_bridge.py` pushes each scan's findings to `POST /api/v1/cloud/findings` (service-token authenticated) after a scan completes; `backend/app/adapters/cloudlens.py` converts them to `NormalizedLog` shape and routes them through the same ingestion pipeline as every other source. CloudLens itself remains a separate application (Django + React, own Docker Compose) — only its findings flow into SafeSOC, not the application itself.
 
 ---
 
@@ -64,7 +64,7 @@ Format: each entry records a decision, its rationale, and its current implementa
 
 **Decision:** Rather than separate databases/schemas per tenant, all tenants share one OpenSearch cluster/index set, with `tenant_id` as a mandatory filter on every read and write.
 **Rationale:** Most cost-effective way to serve many small tenants on shared infrastructure (report §1.5).
-**Status: Partially implemented.** The filtering mechanism is real (`search_alerts()` always requires and applies `tenant_id`). What's missing is *trust* in that value — there is no authentication layer deriving `tenant_id` from a verified identity, so today it's caller-supplied and unenforced. The isolation model is sound; the enforcement is not yet in place.
+**Status: Implemented.** The filtering mechanism is real (`search_alerts()` always requires and applies `tenant_id`), and as of SS-016, `tenant_id` is now derived from a verified JWT rather than caller-supplied — every endpoint except `GET /health` requires authentication, and a mismatched `tenant_id` anywhere in a request is rejected with `403` rather than trusted. Role-based access within a tenant (SS-017) and auth rate limiting (SS-067) are layered on top. See `docs/security-review.md` for what's still deliberately deferred (e.g. no admin-invite flow gating who can register against a given tenant).
 
 ---
 

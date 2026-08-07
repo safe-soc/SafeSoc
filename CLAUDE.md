@@ -10,40 +10,43 @@ SafeSOC — an AI-assisted, multi-tenant Security Operations Platform for SMBs, 
 
 - This is the **canonical, finalized** repository structure. Do not propose repo restructuring, directory moves, or renames unless explicitly asked. This has already been audited once; don't re-audit unprompted.
 - `docs/` is the authoritative status record. Every file there follows an **Implemented / Partial / Planned** convention — check it before assuming a feature exists.
-- A large fraction of `backend/app/` is **empty placeholder files** (0 bytes) — the directory layout for Phase 2 was scaffolded ahead of the code that will fill it. An empty file at the expected path is normal here, not a bug to "fix" by writing something into it unprompted.
+- **As of SS-068 (documentation sync), the full 68-issue roadmap through Milestone 14 is implemented** — `docs/roadmap-issues.md` marks SS-001 through SS-067 as done. `backend/app/middleware/` is the only genuinely-empty directory left in `backend/app/`; a handful of standalone future-work items (audit logging, an installer script, formal API versioning) tracked in `PRODUCT_ROADMAP.md` past SS-068 are the only things not yet built. An empty file elsewhere is a real gap worth flagging, not the default expectation it used to be.
 
 ## Repository layout
 
 ```
-backend/          SafeSOC FastAPI backend — the real Phase 1 implementation
-frontend/         SafeSOC React dashboard — not started (contains only .gitkeep)
-injector/         Standalone synthetic log generator (injector.py) — implemented, basic
-ml/               Anomaly detection model artifacts — empty, Phase 2
-scripts/          Empty, Phase 2
-cloud/            CloudLens — a separate, fully working AWS IAM risk analyzer
+backend/          SafeSOC FastAPI backend — fully implemented (Milestones 1-14)
+frontend/         SafeSOC React dashboard — implemented (Milestone 12, SS-057-063)
+injector/         Standalone synthetic log generator + demo mode — implemented (SS-064/065)
+ml/               Isolation Forest anomaly model: training data, training script, trained model — implemented (SS-048-051)
+scripts/          Empty — no installer/setup script exists yet (see PRODUCT_ROADMAP.md)
+cloud/            CloudLens — a separate, fully working AWS IAM risk analyzer, bridged into SafeSOC's ingestion pipeline (SS-038-041)
   AWS-IAM-backend/   Django + DRF + Boto3 + NetworkX
   AWS-IAM-frontend/  React + TypeScript + Vite
 docs/             Project documentation — status source of truth (see below)
-infrastructure/   Empty, Phase 2
+infrastructure/   Empty — no IaC exists yet
 assets/           Diagrams (architecture.drawio, er-diagram.drawio)
 .github/          CI workflow, PR template, CODEOWNERS
 ```
 
-## What's actually implemented (backend/)
+## What's implemented (backend/)
 
-Only these carry real logic: `core/config.py`, `core/enums.py`, `schemas/log.py` (the `NormalizedLog` schema), `db/opensearch.py`, `db/mappings/alert_mapping.py`, `services/ingestion.py`, `routers/health.py`, `routers/v1/ingest.py`, `routers/v1/alerts.py`, `main.py`, `utils/logger.py`, `core/exceptions.py` (defined but its handler isn't registered in `main.py`).
+Every `backend/app/` subpackage carries real logic now — routers (`health`, `ingest`, `alerts`, `auth`, `incidents`, `cloud`, `endpoints`, `investigate`, `reports`, `ws`), `services/` (ingestion, enrichment, correlation, risk_scoring, incidents, investigation, anomaly, reporting, notifications, realtime, rate_limit), `workers/` (correlation_worker, notification_worker), `tasks/` (enrichment, scoring, reporting, celery_app), `clients/` (virustotal, abuseipdb, ollama, groq, telegram), `mcp/tools.py`, `adapters/` (wazuh, cloudtrail, guardduty, cloudlens), `models/` (tenant, user, incident, ti_cache, endpoint), and both `db/postgresql.py` and `db/redis.py`.
 
-Everything else under `backend/app/` — `auth.py`, `cloud.py`, `endpoints.py`, `incidents.py`, `investigate.py`, `reports.py`, all of `clients/`, most of `services/`, all of `tasks/`, `workers/`, `mcp/`, `middleware/`, `models/`, `db/postgresql.py`, `db/redis.py`, `adapters/` — is an empty stub. `core/config.py` already defines settings for all of it (Postgres, Redis, JWT, LLM providers, TI APIs, correlation, risk scoring, anomaly detection, reporting), so don't infer a feature is live just because its config exists.
+**`backend/app/middleware/` is the one exception** — still an empty stub. Nothing currently needs it; don't fill it in unprompted.
 
-Full status tables: `docs/architecture.md`, `docs/requirements.md`, `docs/project-roadmap.md`.
+`core/config.py` defines settings for every feature above; each one is now actually consumed by the code that needs it (this used to not be true — check `docs/decisions.md` ADR-006 for the history, not the current state).
+
+Full status tables: `docs/architecture.md`, `docs/requirements.md`, `docs/project-roadmap.md`, `docs/roadmap-issues.md`.
 
 ## Known gaps to keep in mind
 
-- **No authentication.** `tenant_id` is caller-supplied on every request, unauthenticated. Don't describe multi-tenancy as "secured" — the filtering logic is real, the trust boundary isn't.
-- **Root `docker-compose.yml` exists** (backend + OpenSearch, healthcheck-gated startup) — `docker compose up --build` from repo root. `cloud/docker-compose.yml` remains a separate, CloudLens-only stack, not orchestrated together with the root one. See `docs/deployment.md`.
-- **No automated tests.** `backend/tests/` has empty `__init__.py`/`conftest.py` only. `.github/workflows/ci.yml` runs import/build smoke checks, not a test suite.
-- **`.env.example`** documents every setting `core/config.py` defines — most of it isn't consumed by any running code yet. Don't assume a documented env var implies a working integration.
-- CloudLens (`cloud/`) is real and working but **not integrated** — its findings don't flow into SafeSOC's ingestion pipeline yet. `routers/v1/cloud.py` (the intended bridge) is an empty stub.
+- **Authentication is real.** JWT (register/login/refresh), bcrypt password hashing, and role-based access (`admin`/`analyst`/`viewer` via `core/dependencies.py::require_role`) are all implemented and enforced (SS-012-017). `tenant_id` is derived from the verified JWT, not caller-supplied. Login/register are rate-limited (SS-067). See `docs/security-review.md` for the full security posture, including what's still deliberately deferred (e.g. JWT refresh doesn't re-check the DB for user existence, no security-headers middleware).
+- **Root `docker-compose.yml` exists** (OpenSearch + Postgres + Redis + backend + worker + beat, healthcheck-gated startup) — `docker compose up --build` from repo root. `cloud/docker-compose.yml` remains a separate, CloudLens-only stack, not orchestrated together with the root one. See `docs/deployment.md`.
+- **545 automated backend tests exist and run in CI** (`backend/tests/`, `pytest`). `.github/workflows/ci.yml` runs install → import check → the real test suite, not just smoke checks.
+- **`.env.example`** documents most settings `core/config.py` defines and is now largely accurate about what's `[ACTIVE]` vs consumed — but keep it in sync when adding new settings (see `docs/security-review.md`'s note on the SS-067 rate-limit settings as an example of ones that needed adding).
+- CloudLens (`cloud/`) is real, working, **and integrated** — `POST /api/v1/cloud/findings` (service-token authenticated) routes its findings through the same ingestion pipeline as everything else (SS-038-040).
+- The injector's standalone CLI (`injector/injector.py`) and `injector/demo.py` both authenticate before sending logs (BUG-001 fix) — running either against a fresh environment with no demo tenant provisioned yet will fail login with a clear error message directing you to run `demo.py` first, or to pass explicit `--tenant-id`/`--email`/`--password`.
 
 ## Conventions to follow when writing backend code
 

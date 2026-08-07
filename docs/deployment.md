@@ -2,14 +2,14 @@
 
 ## 1. Current State vs. Report
 
-The Phase 1 report (§4.5, §5.6) describes a root `docker-compose.yml` orchestrating two services (`opensearch`, `backend`) for single-command startup. This now exists and has been verified working end-to-end (SS-001).
+The Phase 1 report (§4.5, §5.6) describes a root `docker-compose.yml` for single-command startup. This now exists and has grown from the original 2-service (`opensearch`, `backend`) stack to a 6-service stack as the Postgres/Redis/Celery tiers landed (SS-001, SS-007, SS-010, SS-011) — verified working end-to-end.
 
 | Artifact | Location | Status |
 |---|---|---|
 | Backend Dockerfile | `backend/Dockerfile` | Implemented |
-| Root `docker-compose.yml` (SafeSOC backend + OpenSearch) | `docker-compose.yml` | **Implemented** — healthcheck-gated startup, verified end-to-end |
+| Root `docker-compose.yml` (OpenSearch, PostgreSQL, Redis, backend, Celery worker, Celery beat) | `docker-compose.yml` | **Implemented** — healthcheck-gated startup, verified end-to-end |
 | CloudLens `docker-compose.yml` | `cloud/docker-compose.yml` | Implemented, but scoped only to CloudLens (Django + React), independent of the SafeSOC backend |
-| `.env.example` | repo root | Implemented — documents every setting in `core/config.py`, tagged `[ACTIVE]`/`[PHASE 2]` |
+| `.env.example` | repo root | Implemented — documents settings in `core/config.py`, tagged `[ACTIVE]`/`[PHASE 2]` |
 
 ## 2. Backend Dockerfile (Implemented)
 
@@ -33,10 +33,14 @@ From the repository root:
 docker compose up --build
 ```
 
-This starts two services, defined in `docker-compose.yml`:
+This starts six services, defined in `docker-compose.yml`:
 
 - **`opensearch`** — single-node OpenSearch 2.x, security plugin disabled for local dev, persisted to a named volume (`opensearch-data`), with a healthcheck (`curl .../_cluster/health`) polled every 10s.
-- **`backend`** — builds `backend/Dockerfile`, waits for `opensearch`'s healthcheck to report healthy (`depends_on: condition: service_healthy`) before starting, mounts `./backend` into the container for live-reload during development, and is pointed at the `opensearch` service by container hostname (`OPENSEARCH_HOST=opensearch`) rather than `localhost`.
+- **`postgres`** — PostgreSQL 16, healthcheck-gated, persisted to a named volume.
+- **`redis`** — Redis 7, healthcheck-gated.
+- **`backend`** — builds `backend/Dockerfile`, waits for all three healthchecks above before starting, mounts `./backend` into the container for live-reload during development, and is pointed at each dependency by container hostname (`OPENSEARCH_HOST=opensearch`, `POSTGRES_HOST=postgres`, `REDIS_HOST=redis`) rather than `localhost`.
+- **`worker`** — `celery -A app.tasks.celery_app worker`, runs the enrichment/correlation/scoring/reporting/notification background tasks.
+- **`beat`** — `celery -A app.tasks.celery_app beat`, dispatches the scheduled risk-recalculation and weekly-report tasks on their configured intervals.
 
 No `.env` file is required to start — both services have working defaults. Verify it's up:
 
@@ -45,11 +49,19 @@ curl http://localhost:8000/health
 # {"status":"healthy","version":"1.0.0","checks":{"opensearch":"connected"}}
 ```
 
-Generate test data:
+Every endpoint except `/health` requires a JWT (SS-016). The fastest way to get one plus a realistic demo tenant:
 
 ```bash
-python injector/injector.py http://localhost:8000/api/v1/ingest 20
+python injector/demo.py
 ```
+
+Or generate additional ad-hoc test data against that same tenant:
+
+```bash
+python injector/injector.py --scenario brute_force
+```
+
+`injector.py` logs in automatically (see `README.md`'s quickstart for the `--tenant-id`/`--email`/`--password`/`--no-auth` options).
 
 **Port overrides:** if `9200` or `8000` are already in use on your machine (e.g. by another OpenSearch/Wazuh setup), override the host-side ports without editing the compose file:
 
@@ -75,12 +87,13 @@ OPENSEARCH_PORT=9201 BACKEND_PORT=8001 docker compose up --build
 
 ## 5. CloudLens Deployment (Implemented, Separate)
 
-`cloud/docker-compose.yml` provisions CloudLens (Django backend + React frontend) independently. See `cloud/README.md` / `cloud/AWS-IAM-backend/README.md` for its own setup instructions. It is **not** part of the SafeSOC backend's deployment and requires no OpenSearch — it uses its own SQLite/PostgreSQL database. It is not orchestrated by the root `docker-compose.yml`; the two remain separate stacks until CloudLens integration (see `docs/roadmap-issues.md` SS-038–041) lands.
+`cloud/docker-compose.yml` provisions CloudLens (Django backend + React frontend) independently. See `cloud/README.md` / `cloud/AWS-IAM-backend/README.md` for its own setup instructions. It is **not** part of the SafeSOC backend's deployment and requires no OpenSearch — it uses its own SQLite/PostgreSQL database. It is not orchestrated by the root `docker-compose.yml`; the two remain separate stacks, though CloudLens's own container now pushes findings into SafeSOC's running backend over HTTP (`POST /api/v1/cloud/findings`, SS-038–041) — separate deployments, integrated data flow.
 
 ## 6. CI/CD
 
-`.github/workflows/ci.yml` runs on every push/PR: the `safesoc-backend` job installs deps, runs an import smoke check, then runs the real backend `pytest` suite (40 tests as of SS-006); the two `cloudlens-*` jobs remain smoke checks (Django `manage.py check`, frontend lint/typecheck/build) — see `docs/testing.md`.
+`.github/workflows/ci.yml` runs on every push/PR: the `safesoc-backend` job installs deps, runs an import smoke check, then runs the real backend `pytest` suite (545 tests); the two `cloudlens-*` jobs remain smoke checks (Django `manage.py check`, frontend lint/typecheck/build) — see `docs/testing.md`.
 
-## 7. Planned (not yet built)
+## 7. Not Yet Built
 
-- A production compose/deployment path once PostgreSQL, Redis, and the Processing-layer services exist — SS-007 onward.
+- A production-hardened deployment path (this compose file is a dev/demo setup — single OpenSearch node, no TLS termination, no secrets manager).
+- `SS-071` (audit log) and `SS-072` (installer/setup script) — see `PRODUCT_ROADMAP.md`.
