@@ -189,3 +189,64 @@ def test_cli_rejects_an_unknown_scenario_name(monkeypatch, capsys):
 
     with pytest.raises(SystemExit):
         main()
+
+
+# ── send_logs (SS-065 regression) ────────────────────────────────
+
+def test_send_logs_omits_tenant_id_when_authenticated(monkeypatch):
+    """
+    Regression test: send_logs() unconditionally including the
+    module-level TENANT_ID ("acme-corp") in the payload broke every
+    authenticated caller (e.g. demo.py) against a real tenant, since
+    tenant_id is derived from the token server-side (SS-016) and any
+    payload tenant_id must match exactly or the whole batch 403s.
+    Caught live: demo.py's first real run failed with exactly that.
+    """
+    from injector.injector import send_logs
+
+    captured = {}
+
+    class _FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"accepted": 0, "rejected": 0, "alert_ids": []}
+
+    def fake_post(url, json, headers=None, timeout=None):
+        captured["json"] = json
+        captured["headers"] = headers
+        return _FakeResponse()
+
+    monkeypatch.setattr("injector.injector.requests.post", fake_post)
+
+    send_logs("http://example.test/ingest", [{"log_type": "authentication"}], token="real-jwt")
+
+    assert "tenant_id" not in captured["json"]
+    assert captured["headers"] == {"Authorization": "Bearer real-jwt"}
+
+
+def test_send_logs_includes_tenant_id_when_unauthenticated(monkeypatch):
+    """Existing unauthenticated behavior (no token) is unchanged."""
+    from injector.injector import TENANT_ID, send_logs
+
+    captured = {}
+
+    class _FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"accepted": 0, "rejected": 0, "alert_ids": []}
+
+    def fake_post(url, json, headers=None, timeout=None):
+        captured["json"] = json
+        captured["headers"] = headers
+        return _FakeResponse()
+
+    monkeypatch.setattr("injector.injector.requests.post", fake_post)
+
+    send_logs("http://example.test/ingest", [{"log_type": "authentication"}])
+
+    assert captured["json"]["tenant_id"] == TENANT_ID
+    assert captured["headers"] is None

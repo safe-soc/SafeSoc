@@ -59,14 +59,29 @@ def generate_log(
     }
 
 
-def send_logs(target_url: str, logs: list[dict]) -> dict:
-    """POST a batch of logs to the ingestion endpoint."""
+def send_logs(target_url: str, logs: list[dict], token: Optional[str] = None) -> dict:
+    """
+    POST a batch of logs to the ingestion endpoint. `token` is optional
+    and omitted by default (unchanged existing behavior). The endpoint
+    has required a valid JWT since SS-016 either way — callers running
+    against a real deployment (e.g. demo.py, SS-065) need to pass one.
+
+    tenant_id is only included when unauthenticated: once a token is
+    present, tenant_id is derived from it server-side, and any payload
+    tenant_id must match exactly (SS-016) or the whole batch is
+    rejected (403) — the module-level TENANT_ID constant won't match a
+    real caller's actual tenant, so it's omitted rather than sent wrong.
+    """
     payload = {
-        "tenant_id": TENANT_ID,
         "source": "synthetic",
         "logs": logs,
     }
-    response = requests.post(target_url, json=payload, timeout=10)
+    if token:
+        headers = {"Authorization": f"Bearer {token}"}
+    else:
+        payload["tenant_id"] = TENANT_ID
+        headers = None
+    response = requests.post(target_url, json=payload, headers=headers, timeout=10)
     response.raise_for_status()
     return response.json()
 

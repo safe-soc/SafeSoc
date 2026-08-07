@@ -204,3 +204,102 @@ def test_evaluate_correlation_runs_the_async_flow_via_asyncio_run(monkeypatch):
     correlation_worker.evaluate_correlation.run("xyz-789")
 
     assert calls == ["xyz-789"]
+
+
+# ── Worker-shared engine reliability (SS-065 regression) ────────
+#
+# Same class of bug as tasks/scoring.py's own regression tests — see
+# that module's comment. Observed live here specifically under a
+# realistic burst of concurrent ingestion (SS-065's demo mode): without
+# this, correlation tasks failed with "attached to a different loop".
+
+@pytest.mark.asyncio
+async def test_disposes_the_engine_before_and_after_detecting_a_chain(monkeypatch):
+    tenant_id = uuid.uuid4()
+    doc = {
+        "alert_id": "abc-123",
+        "tenant_id": str(tenant_id),
+        "host_id": "DESKTOP-042",
+        "log_type": "authentication",
+        "action": "failed_login",
+        "severity": "low",
+    }
+    chain = DetectedChain(
+        pattern=CorrelationPattern.CREDENTIAL_BRUTE_FORCE,
+        confidence=0.8,
+        alert_ids=("a1", "a2"),
+        mitre_technique_ids=("T1110",),
+        mitre_tactic="Credential Access",
+    )
+    incident = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1", "a2"])
+
+    monkeypatch.setattr(correlation_worker, "get_alert_by_id", AsyncMock(return_value=doc))
+    monkeypatch.setattr(correlation_worker, "add_event", AsyncMock())
+    monkeypatch.setattr(correlation_worker, "evaluate_host", AsyncMock(return_value=[chain]))
+    monkeypatch.setattr(correlation_worker, "async_session_factory", lambda: _FakeSessionCM())
+    monkeypatch.setattr(correlation_worker, "create_or_merge_incident", AsyncMock(return_value=incident))
+    monkeypatch.setattr(correlation_worker, "notify_attack_chain", Mock())
+    monkeypatch.setattr(correlation_worker, "publish_event", AsyncMock())
+    mock_engine = AsyncMock()
+    monkeypatch.setattr(correlation_worker, "engine", mock_engine)
+
+    await correlation_worker._evaluate_correlation_async("abc-123")
+
+    assert mock_engine.dispose.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_disposes_the_engine_even_if_incident_creation_raises(monkeypatch):
+    tenant_id = uuid.uuid4()
+    doc = {
+        "alert_id": "abc-123",
+        "tenant_id": str(tenant_id),
+        "host_id": "DESKTOP-042",
+        "log_type": "authentication",
+        "action": "failed_login",
+        "severity": "low",
+    }
+    chain = DetectedChain(
+        pattern=CorrelationPattern.CREDENTIAL_BRUTE_FORCE,
+        confidence=0.8,
+        alert_ids=("a1", "a2"),
+        mitre_technique_ids=("T1110",),
+        mitre_tactic="Credential Access",
+    )
+
+    monkeypatch.setattr(correlation_worker, "get_alert_by_id", AsyncMock(return_value=doc))
+    monkeypatch.setattr(correlation_worker, "add_event", AsyncMock())
+    monkeypatch.setattr(correlation_worker, "evaluate_host", AsyncMock(return_value=[chain]))
+    monkeypatch.setattr(correlation_worker, "async_session_factory", lambda: _FakeSessionCM())
+    monkeypatch.setattr(
+        correlation_worker, "create_or_merge_incident", AsyncMock(side_effect=RuntimeError("postgres down"))
+    )
+    mock_engine = AsyncMock()
+    monkeypatch.setattr(correlation_worker, "engine", mock_engine)
+
+    with pytest.raises(RuntimeError):
+        await correlation_worker._evaluate_correlation_async("abc-123")
+
+    assert mock_engine.dispose.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_does_not_dispose_the_engine_when_no_chain_is_detected(monkeypatch):
+    """Correlation runs once per alert — unconditionally disposing when nothing was detected would be wasteful."""
+    doc = {
+        "alert_id": "abc-123",
+        "tenant_id": str(uuid.uuid4()),
+        "host_id": "DESKTOP-042",
+        "log_type": "authentication",
+        "action": "failed_login",
+        "severity": "low",
+    }
+    monkeypatch.setattr(correlation_worker, "get_alert_by_id", AsyncMock(return_value=doc))
+    monkeypatch.setattr(correlation_worker, "add_event", AsyncMock())
+    monkeypatch.setattr(correlation_worker, "evaluate_host", AsyncMock(return_value=[]))
+    mock_engine = AsyncMock()
+    monkeypatch.setattr(correlation_worker, "engine", mock_engine)
+
+    await correlation_worker._evaluate_correlation_async("abc-123")
+
+    mock_engine.dispose.assert_not_called()

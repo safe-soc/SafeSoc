@@ -11,7 +11,7 @@ import asyncio
 import uuid
 
 from app.db.opensearch import get_alert_by_id
-from app.db.postgresql import async_session_factory
+from app.db.postgresql import async_session_factory, engine
 from app.services.correlation import add_event, evaluate_host
 from app.services.incidents import create_or_merge_incident
 from app.services.notifications import notify_attack_chain
@@ -53,33 +53,50 @@ async def _evaluate_correlation_async(alert_id: str) -> None:
     if not chains:
         return
 
-    async with async_session_factory() as db:
-        for chain in chains:
-            incident = await create_or_merge_incident(db, uuid.UUID(tenant_id), host_id, chain)
-            logger.info(
-                "Correlation chain detected",
-                tenant_id=tenant_id,
-                host_id=host_id,
-                pattern=chain.pattern.value,
-                confidence=round(chain.confidence, 2),
-                alert_ids=list(chain.alert_ids),
-                mitre_technique_ids=list(chain.mitre_technique_ids),
-                mitre_tactic=chain.mitre_tactic,
-                incident_id=str(incident.id),
-            )
-            # Real-time Telegram notification (SS-056) — a no-op if
-            # TELEGRAM_BOT_TOKEN/CHAT_ID aren't configured (SS-055),
-            # same as the critical-alert path below never blocks anything.
-            notify_attack_chain(host_id, chain, incident.id)
-            # Live dashboard push (SS-063) — the frontend's open dashboard
-            # updates without a manual refresh (AC).
-            await publish_event(
-                tenant_id,
-                "chain_detected",
-                {
-                    "incident_id": str(incident.id),
-                    "host_id": host_id,
-                    "pattern": chain.pattern.value,
-                    "confidence": round(chain.confidence, 2),
-                },
-            )
+    # Same worker-shared-engine reliability requirement as tasks/scoring.py
+    # and tasks/reporting.py (see scoring.py's own comment for the full
+    # explanation): dispose both before first use and after finishing,
+    # since this Celery worker process's asyncpg connection pool is
+    # shared across every task type it runs and can be left poisoned by
+    # any of them between invocations — observed live under a realistic
+    # burst of concurrent ingestion (SS-065's demo mode): correlation
+    # tasks failed with "attached to a different loop" until this was
+    # added. Scoped to just this Postgres-touching block, not the whole
+    # function, since correlation runs once per *alert* — unlike
+    # scoring/reporting's fixed schedule, unconditionally disposing on
+    # every invocation (most of which detect no chain and never touch
+    # Postgres at all) would be wasteful.
+    await engine.dispose()
+    try:
+        async with async_session_factory() as db:
+            for chain in chains:
+                incident = await create_or_merge_incident(db, uuid.UUID(tenant_id), host_id, chain)
+                logger.info(
+                    "Correlation chain detected",
+                    tenant_id=tenant_id,
+                    host_id=host_id,
+                    pattern=chain.pattern.value,
+                    confidence=round(chain.confidence, 2),
+                    alert_ids=list(chain.alert_ids),
+                    mitre_technique_ids=list(chain.mitre_technique_ids),
+                    mitre_tactic=chain.mitre_tactic,
+                    incident_id=str(incident.id),
+                )
+                # Real-time Telegram notification (SS-056) — a no-op if
+                # TELEGRAM_BOT_TOKEN/CHAT_ID aren't configured (SS-055),
+                # same as the critical-alert path below never blocks anything.
+                notify_attack_chain(host_id, chain, incident.id)
+                # Live dashboard push (SS-063) — the frontend's open dashboard
+                # updates without a manual refresh (AC).
+                await publish_event(
+                    tenant_id,
+                    "chain_detected",
+                    {
+                        "incident_id": str(incident.id),
+                        "host_id": host_id,
+                        "pattern": chain.pattern.value,
+                        "confidence": round(chain.confidence, 2),
+                    },
+                )
+    finally:
+        await engine.dispose()
