@@ -244,6 +244,33 @@ Natural-language security queries, orchestrated rather than free-form: the query
 
 **Response time (SRS target: 15s).** The LLM answer-generation step is bounded by `settings.INVESTIGATION_LLM_TIMEOUT_SECONDS` (10s default); if the configured LLM is slow, unreachable, or errors, the endpoint degrades to a templated summary of the tool's data instead of failing or blocking the response — classification, context resolution, and the tool query itself are the only unavoidable latency, and are normally sub-second.
 
+### `GET /api/v1/reports`
+
+`backend/app/routers/v1/reports.py` → `services/reporting.py: list_reports()`. Any authenticated role.
+
+Lists PDF security reports (SS-052, generated on a weekly schedule by SS-053, or on demand) for the authenticated tenant, newest first. Reports are stored under `settings.REPORT_OUTPUT_DIR/{tenant_id}/` — the filesystem path itself is the tenant-isolation boundary, not just a query filter.
+
+**Response 200**
+```json
+{
+  "reports": [
+    { "filename": "20260807T060000Z.pdf", "generated_at": "2026-08-07T06:00:00Z", "size_bytes": 10983 }
+  ]
+}
+```
+An empty list if the tenant has no generated reports yet.
+
+### `GET /api/v1/reports/{filename}`
+
+`backend/app/routers/v1/reports.py` → `services/reporting.py: get_report_path()`. Any authenticated role.
+
+Downloads a specific report as `application/pdf`. `filename` is resolved only inside the authenticated tenant's own report directory — a filename that exists under a *different* tenant's directory (even guessed exactly right) returns the same `404` as one that doesn't exist at all, and any `/`, `\`, or `..` in `filename` is rejected outright, so tenant isolation holds regardless of what's supplied.
+
+**Response 404**
+```json
+{ "error": "Report '<filename>' not found.", "status_code": 404 }
+```
+
 ---
 
 ## Planned Endpoints (stub routers, no logic)
@@ -253,9 +280,8 @@ These router files exist under `backend/app/routers/v1/` but are **empty** — n
 | File | Intended purpose (SRS §3.3) |
 |---|---|
 | `cloud.py` | Surface CloudLens findings (or ingest them via the adapter pipeline) in the unified alert view |
-| `reports.py` | List/download generated PDF digests |
 
-`endpoints.py` and `investigate.py` are no longer stubs — `GET /api/v1/endpoints` (SS-034) and `POST /api/v1/investigate` (SS-047) are both implemented (see above).
+`endpoints.py`, `investigate.py`, and `reports.py` are no longer stubs — `GET /api/v1/endpoints` (SS-034), `POST /api/v1/investigate` (SS-047), and `GET /api/v1/reports`(`/{filename}`) (SS-054) are all implemented (see above).
 
 `incidents.py` is no longer a stub — CRUD and lifecycle transitions are implemented (see above); alert linking and investigation notes remain planned (SS-037).
 

@@ -290,3 +290,49 @@ async def generate_report(db: AsyncSession, tenant_id: uuid.UUID, days: int = 7,
 
     _write_pdf(html_content, report_path)
     return report_path
+
+
+@dataclass(frozen=True)
+class ReportInfo:
+    filename: str
+    generated_at: datetime
+    size_bytes: int
+
+
+def _tenant_report_dir(tenant_id: uuid.UUID) -> Path:
+    return Path(settings.REPORT_OUTPUT_DIR) / str(tenant_id)
+
+
+def list_reports(tenant_id: uuid.UUID) -> list[ReportInfo]:
+    """List a tenant's generated reports (SS-054), newest first. Empty if the tenant has none yet — not an error."""
+    report_dir = _tenant_report_dir(tenant_id)
+    if not report_dir.is_dir():
+        return []
+
+    reports = []
+    for path in report_dir.glob("*.pdf"):
+        try:
+            generated_at = datetime.strptime(path.stem, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue  # not one of our own generated filenames — skip rather than error
+        reports.append(ReportInfo(filename=path.name, generated_at=generated_at, size_bytes=path.stat().st_size))
+
+    return sorted(reports, key=lambda r: r.generated_at, reverse=True)
+
+
+def get_report_path(tenant_id: uuid.UUID, filename: str) -> Optional[Path]:
+    """
+    Resolve `filename` to a report file scoped to tenant_id (SS-054).
+    None if it doesn't exist under this tenant's own report directory
+    — including a filename that exists under a *different* tenant's
+    directory, or a path-traversal attempt, so cross-tenant access
+    isn't just hard to guess, it's structurally unreachable regardless
+    of what filename is supplied (AC).
+    """
+    if "/" in filename or "\\" in filename or ".." in filename:
+        return None
+
+    candidate = _tenant_report_dir(tenant_id) / filename
+    if not candidate.is_file():
+        return None
+    return candidate

@@ -1,5 +1,5 @@
 """
-SafeSOC — Reporting Service Tests (SS-052)
+SafeSOC — Reporting Service Tests (SS-052, SS-054)
 Data gathering and HTML rendering are tested directly — the actual
 WeasyPrint PDF-writing call (_write_pdf) is mocked everywhere here,
 since it needs a native library (Pango) this dev environment doesn't
@@ -252,3 +252,86 @@ async def test_generate_report_saves_under_a_tenant_scoped_directory(monkeypatch
     called_html, called_path = mock_write_pdf.call_args[0]
     assert called_path == result_path
     assert "<html>" in called_html
+
+
+# ── list_reports / get_report_path (SS-054) ─────────────────────
+
+def _touch_report(tenant_dir, filename: str, content: bytes = b"%PDF-1.7 fake") -> None:
+    tenant_dir.mkdir(parents=True, exist_ok=True)
+    (tenant_dir / filename).write_bytes(content)
+
+
+def test_list_reports_is_empty_for_a_tenant_with_no_directory_yet(monkeypatch, tmp_path):
+    monkeypatch.setattr(reporting.settings, "REPORT_OUTPUT_DIR", str(tmp_path))
+
+    assert reporting.list_reports(uuid.uuid4()) == []
+
+
+def test_list_reports_returns_newest_first(monkeypatch, tmp_path):
+    tenant_id = uuid.uuid4()
+    monkeypatch.setattr(reporting.settings, "REPORT_OUTPUT_DIR", str(tmp_path))
+    tenant_dir = tmp_path / str(tenant_id)
+    _touch_report(tenant_dir, "20260101T060000Z.pdf")
+    _touch_report(tenant_dir, "20260201T060000Z.pdf")
+
+    reports = reporting.list_reports(tenant_id)
+
+    assert [r.filename for r in reports] == ["20260201T060000Z.pdf", "20260101T060000Z.pdf"]
+    assert reports[0].size_bytes > 0
+
+
+def test_list_reports_only_sees_this_tenants_own_directory(monkeypatch, tmp_path):
+    tenant_a, tenant_b = uuid.uuid4(), uuid.uuid4()
+    monkeypatch.setattr(reporting.settings, "REPORT_OUTPUT_DIR", str(tmp_path))
+    _touch_report(tmp_path / str(tenant_a), "20260101T060000Z.pdf")
+    _touch_report(tmp_path / str(tenant_b), "20260101T060000Z.pdf")
+
+    reports_a = reporting.list_reports(tenant_a)
+
+    assert len(reports_a) == 1
+
+
+def test_list_reports_skips_files_not_matching_the_naming_convention(monkeypatch, tmp_path):
+    tenant_id = uuid.uuid4()
+    monkeypatch.setattr(reporting.settings, "REPORT_OUTPUT_DIR", str(tmp_path))
+    _touch_report(tmp_path / str(tenant_id), "not-a-timestamp.pdf")
+
+    assert reporting.list_reports(tenant_id) == []
+
+
+def test_get_report_path_resolves_an_existing_report(monkeypatch, tmp_path):
+    tenant_id = uuid.uuid4()
+    monkeypatch.setattr(reporting.settings, "REPORT_OUTPUT_DIR", str(tmp_path))
+    _touch_report(tmp_path / str(tenant_id), "20260101T060000Z.pdf")
+
+    path = reporting.get_report_path(tenant_id, "20260101T060000Z.pdf")
+
+    assert path is not None
+    assert path.is_file()
+
+
+def test_get_report_path_returns_none_for_a_nonexistent_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(reporting.settings, "REPORT_OUTPUT_DIR", str(tmp_path))
+
+    assert reporting.get_report_path(uuid.uuid4(), "does-not-exist.pdf") is None
+
+
+def test_get_report_path_cannot_reach_a_different_tenants_report_by_guessing_the_filename(monkeypatch, tmp_path):
+    """AC: tenant isolation — a filename that exists under a *different* tenant must not resolve."""
+    tenant_a, tenant_b = uuid.uuid4(), uuid.uuid4()
+    monkeypatch.setattr(reporting.settings, "REPORT_OUTPUT_DIR", str(tmp_path))
+    _touch_report(tmp_path / str(tenant_b), "20260101T060000Z.pdf")  # exists, but under tenant_b
+
+    path = reporting.get_report_path(tenant_a, "20260101T060000Z.pdf")
+
+    assert path is None
+
+
+def test_get_report_path_rejects_path_traversal_attempts(monkeypatch, tmp_path):
+    tenant_a, tenant_b = uuid.uuid4(), uuid.uuid4()
+    monkeypatch.setattr(reporting.settings, "REPORT_OUTPUT_DIR", str(tmp_path))
+    _touch_report(tmp_path / str(tenant_b), "secret.pdf")
+
+    traversal_attempt = f"../{tenant_b}/secret.pdf"
+    assert reporting.get_report_path(tenant_a, traversal_attempt) is None
+    assert reporting.get_report_path(tenant_a, f"..\\{tenant_b}\\secret.pdf") is None

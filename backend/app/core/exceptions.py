@@ -81,6 +81,12 @@ class InvalidServiceTokenError(SafeSOCError):
         super().__init__(message, status_code=401)
 
 
+class ReportNotFoundError(SafeSOCError):
+    """Raised when a report doesn't exist under the caller's own tenant — including one that belongs to a different tenant."""
+    def __init__(self, filename: str):
+        super().__init__(f"Report '{filename}' not found.", status_code=404)
+
+
 async def safesoc_exception_handler(request: Request, exc: SafeSOCError):
     return JSONResponse(
         status_code=exc.status_code,
