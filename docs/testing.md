@@ -45,9 +45,24 @@ None of this is captured as code that can be re-run to catch a regression.
 
 `pytest` + `pytest-asyncio` + `httpx` (FastAPI `TestClient`) is now the actual stack, not just a recommendation.
 
-## 5. Non-Functional Testing (Planned)
+## 5. Non-Functional Testing (SS-066)
 
-The SRS's throughput target (≥100 events/sec) and latency targets (<500ms alert queries, <15s NL assistant) have no corresponding load or performance tests in the repo. The report's ~50ms figure for 10-log batches (§6.2) was an informal, manual observation, not a benchmark harness.
+A repeatable load/performance benchmark now exists: `backend/tests/perf/benchmark.py`. It's a standalone script, not part of the `pytest` suite CI runs (CI has no live backend stack to benchmark against) — the pure aggregation/percentile math it uses is covered by `backend/tests/test_benchmark.py` instead. Run it against a real running stack:
+
+```bash
+python backend/tests/perf/benchmark.py --token <a valid JWT> [--base-url http://localhost:8000]
+```
+
+**Measured results** (Docker Compose, default resource limits, 2026-08-08 — two runs, to confirm the numbers are repeatable, not a one-off):
+
+| Target (SRS) | Run 1 | Run 2 | Result |
+|---|---|---|---|
+| Ingestion ≥100 events/sec | 582.3 events/sec (1000 events, 1.72s, 0 failed batches) | 452.8 events/sec (1000 events, 2.21s, 0 failed batches) | **PASS** — 4.5–5.8x the target |
+| Alert queries <500ms | p50 98.6ms / p95 158.7ms / max 182.8ms (50/50 successful) | p50 73.7ms / p95 130.7ms / max 234.6ms (50/50 successful) | **PASS** — p95 well under target both runs |
+
+The NL assistant's <15s target is separately measured in `docs/api-design.md`'s `POST /api/v1/investigate` section (SS-047) — not part of this benchmark, since it depends on LLM availability rather than ingestion/query throughput.
+
+These numbers describe a single-node Docker Compose dev setup, not a production deployment — re-run this benchmark against the actual target environment before relying on it for capacity planning.
 
 ## 6. Summary
 

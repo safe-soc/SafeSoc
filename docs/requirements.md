@@ -38,8 +38,8 @@ SafeSOC is intended to sit between expensive enterprise SIEMs and unmanaged open
 
 | Requirement | Status | Notes |
 |---|---|---|
-| ≥100 log events/sec ingestion | **Unverified** | No load test exists in the repo (see `testing.md`). The report cites ~50ms for 10-log batches as an informal observation, not an automated benchmark. |
-| Alert queries < 500ms | **Unverified** | Same as above — no automated performance test. |
+| ≥100 log events/sec ingestion | **Implemented, verified** | `backend/tests/perf/benchmark.py` (SS-066): 582.3 and 452.8 events/sec measured across two runs (Docker Compose, dev setup) — see `testing.md` §5 for full results. |
+| Alert queries < 500ms | **Implemented, verified** | Same benchmark: p95 158.7ms and 130.7ms across two runs, well under target — see `testing.md` §5. |
 | NL assistant responds within 15s | **Not applicable yet** | Feature not implemented. |
 | Docker services restart automatically on failure | **Implemented** | `docker-compose.yml` sets `restart: unless-stopped` on both services (see `deployment.md`). |
 | Single-command startup (`docker compose up`) | **Implemented** | `docker compose up --build` from repo root; verified end-to-end — OpenSearch reaches healthy, backend starts after it, all four implemented endpoints respond correctly. |
