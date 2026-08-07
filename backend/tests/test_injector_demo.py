@@ -108,36 +108,57 @@ def test_login_returns_the_access_token(monkeypatch):
     assert token == "fake-token"
 
 
-def test_list_incident_ids_returns_a_set_of_ids(monkeypatch):
+def test_list_incidents_returns_the_raw_incident_dicts(monkeypatch):
     response = Mock(status_code=200)
-    response.json.return_value = {"incidents": [{"id": "a1"}, {"id": "a2"}]}
+    response.json.return_value = {"incidents": [{"id": "a1", "alert_ids": ["x"]}, {"id": "a2", "alert_ids": ["y"]}]}
     response.raise_for_status = Mock()
     monkeypatch.setattr(demo.requests, "get", Mock(return_value=response))
 
-    ids = demo._list_incident_ids("http://api.test", "token")
+    incidents = demo._list_incidents("http://api.test", "token")
 
-    assert ids == {"a1", "a2"}
+    assert incidents == [{"id": "a1", "alert_ids": ["x"]}, {"id": "a2", "alert_ids": ["y"]}]
 
 
-def test_wait_for_new_incident_returns_the_first_new_id(monkeypatch):
+def test_wait_for_incident_with_alert_returns_the_id_of_a_freshly_created_incident(monkeypatch):
+    """The common case: none of the just-sent alert_ids belonged to any prior incident, so a new one was created."""
     response = Mock(status_code=200)
-    response.json.return_value = {"incidents": [{"id": "already-known"}, {"id": "brand-new"}]}
+    response.json.return_value = {
+        "incidents": [{"id": "unrelated", "alert_ids": ["z"]}, {"id": "brand-new", "alert_ids": ["a1", "a2"]}]
+    }
     response.raise_for_status = Mock()
     monkeypatch.setattr(demo.requests, "get", Mock(return_value=response))
 
-    result = demo._wait_for_new_incident("http://api.test", "token", {"already-known"}, timeout_seconds=5)
+    result = demo._wait_for_incident_with_alert("http://api.test", "token", ["a1"], timeout_seconds=5)
 
     assert result == "brand-new"
 
 
-def test_wait_for_new_incident_times_out_and_returns_none(monkeypatch):
+def test_wait_for_incident_with_alert_finds_a_merge_into_an_already_open_incident(monkeypatch):
+    """
+    BUG-002 regression: a chain re-detected on a still-open incident
+    (e.g. demo.py's own IN_PROGRESS_HOST, left open by design) merges
+    into that *existing* incident rather than creating a new one — this
+    must still count as success, not a timeout, since the incident's
+    alert_ids now contain what was just sent.
+    """
     response = Mock(status_code=200)
-    response.json.return_value = {"incidents": [{"id": "already-known"}]}
+    response.json.return_value = {"incidents": [{"id": "already-open-incident", "alert_ids": ["old-1", "a1"]}]}
+    response.raise_for_status = Mock()
+    monkeypatch.setattr(demo.requests, "get", Mock(return_value=response))
+
+    result = demo._wait_for_incident_with_alert("http://api.test", "token", ["a1"], timeout_seconds=5)
+
+    assert result == "already-open-incident"
+
+
+def test_wait_for_incident_with_alert_times_out_and_returns_none(monkeypatch):
+    response = Mock(status_code=200)
+    response.json.return_value = {"incidents": [{"id": "unrelated", "alert_ids": ["z"]}]}
     response.raise_for_status = Mock()
     monkeypatch.setattr(demo.requests, "get", Mock(return_value=response))
     monkeypatch.setattr(demo.time, "sleep", Mock())  # don't actually wait in tests
 
-    result = demo._wait_for_new_incident("http://api.test", "token", {"already-known"}, timeout_seconds=0.01)
+    result = demo._wait_for_incident_with_alert("http://api.test", "token", ["a1"], timeout_seconds=0.01)
 
     assert result is None
 

@@ -116,25 +116,44 @@ def _send_history(ingest_url: str, token: str) -> int:
     return result["accepted"]
 
 
-def _list_incident_ids(api_base: str, token: str) -> set[str]:
+def _list_incidents(api_base: str, token: str) -> list[dict]:
     response = requests.get(
         f"{api_base}/api/v1/incidents",
         headers={"Authorization": f"Bearer {token}"},
-        params={"size": 200},
+        params={"size": 500},  # the router's own max; see _wait_for_incident_with_alert's docstring
         timeout=10,
     )
     response.raise_for_status()
-    return {i["id"] for i in response.json()["incidents"]}
+    return response.json()["incidents"]
 
 
-def _wait_for_new_incident(api_base: str, token: str, known_ids: set[str], *, timeout_seconds: float = 15.0) -> Optional[str]:
-    """Correlation runs asynchronously (a Celery task per ingested alert) — poll until a new incident appears."""
+def _wait_for_incident_with_alert(
+    api_base: str, token: str, alert_ids: list[str], *, timeout_seconds: float = 15.0
+) -> Optional[str]:
+    """
+    Correlation runs asynchronously (a Celery task per ingested alert) —
+    poll until some incident's alert_ids overlaps with the ones just sent.
+
+    BUG-002: this used to capture the incident-id set *before* sending,
+    then poll for any id not in that set. That broke specifically for
+    IN_PROGRESS_HOST, whose incident is deliberately left open (SS-065)
+    so it's still "active" the next time demo.py runs against this same
+    idempotent tenant. create_or_merge_incident (SS-031) correctly
+    *merges* a re-detected chain into that still-open incident rather
+    than minting a new one — exactly right behavior — but "any id not
+    already known" treats a correct merge as "nothing happened" and
+    waits out the full timeout for an ID that was never going to appear,
+    producing the reported "no incident detected within the timeout"
+    warning. Checking for alert_id overlap instead is correct either
+    way: a fresh incident or a merge into an existing one both contain
+    the alert_ids this call just sent.
+    """
+    wanted = set(alert_ids)
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        current_ids = _list_incident_ids(api_base, token)
-        new_ids = current_ids - known_ids
-        if new_ids:
-            return next(iter(new_ids))
+        for incident in _list_incidents(api_base, token):
+            if wanted & set(incident["alert_ids"]):
+                return incident["id"]
         time.sleep(1)
     return None
 
@@ -170,18 +189,16 @@ def main():
     print(f"  {accepted} accepted")
 
     print(f"Sending an in-progress attack chain (host: {IN_PROGRESS_HOST})...")
-    known_ids = _list_incident_ids(args.api_base, token)
-    send_logs(ingest_url, SCENARIOS["brute_force"](IN_PROGRESS_HOST), token=token)
-    in_progress_id = _wait_for_new_incident(args.api_base, token, known_ids)
+    sent = send_logs(ingest_url, SCENARIOS["brute_force"](IN_PROGRESS_HOST), token=token)
+    in_progress_id = _wait_for_incident_with_alert(args.api_base, token, sent["alert_ids"])
     if in_progress_id:
         print(f"  Incident {in_progress_id} created — left open (in progress)")
     else:
         print("  WARNING: no incident detected within the timeout — is the correlation worker running?")
 
     print(f"Sending a resolved attack chain (host: {RESOLVED_HOST})...")
-    known_ids = _list_incident_ids(args.api_base, token)
-    send_logs(ingest_url, SCENARIOS["successful_compromise"](RESOLVED_HOST), token=token)
-    resolved_id = _wait_for_new_incident(args.api_base, token, known_ids)
+    sent = send_logs(ingest_url, SCENARIOS["successful_compromise"](RESOLVED_HOST), token=token)
+    resolved_id = _wait_for_incident_with_alert(args.api_base, token, sent["alert_ids"])
     if resolved_id:
         _transition(args.api_base, token, resolved_id, "investigating")
         _transition(args.api_base, token, resolved_id, "resolved")
