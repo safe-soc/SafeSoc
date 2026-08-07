@@ -4,6 +4,7 @@ Broker/result-backend wiring against Redis; task modules register against this a
 """
 
 from celery import Celery
+from celery.schedules import crontab
 
 from app.core.config import settings
 
@@ -16,7 +17,7 @@ celery_app = Celery(
     # imported (and their @celery_app.task-decorated functions registered)
     # — otherwise a task is queueable from the producer side (which imports
     # it directly) but silently unknown to the worker.
-    include=["app.tasks.enrichment", "app.tasks.scoring", "app.workers.correlation_worker"],
+    include=["app.tasks.enrichment", "app.tasks.scoring", "app.tasks.reporting", "app.workers.correlation_worker"],
 )
 
 # A hung (not just refused) broker connection would silently defeat ADR-005's
@@ -38,6 +39,20 @@ celery_app.conf.beat_schedule = {
     "recalculate-risk-scores": {
         "task": "app.tasks.scoring.recalculate_all_risk_scores",
         "schedule": settings.RISK_RECALC_INTERVAL_MINUTES * 60,
+    },
+    # Weekly report digest (SS-053) — a fixed day-of-week/hour-of-day, not
+    # a simple interval, so this uses a crontab schedule rather than the
+    # plain-seconds schedule above.
+    #
+    # settings.REPORT_SCHEDULE_DAY uses Python's datetime.weekday()
+    # convention (0=Monday..6=Sunday — see core/config.py's own comment),
+    # but Celery's crontab day_of_week uses cron's convention (0=Sunday..
+    # 6=Saturday) — (day + 1) % 7 converts between them. Verified live:
+    # without this conversion, the documented default (0, "Monday")
+    # actually scheduled for Sunday.
+    "generate-tenant-reports": {
+        "task": "app.tasks.reporting.generate_all_tenant_reports",
+        "schedule": crontab(hour=settings.REPORT_SCHEDULE_HOUR, day_of_week=(settings.REPORT_SCHEDULE_DAY + 1) % 7),
     },
 }
 
