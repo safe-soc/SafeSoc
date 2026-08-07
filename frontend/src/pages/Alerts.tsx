@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import Layout from '../components/Layout';
 import LevelBadge from '../components/LevelBadge';
 import { api } from '../lib/api';
@@ -14,10 +15,16 @@ import { LOG_SOURCES, LOG_TYPES, SEVERITIES, type Alert, type AlertSearchRespons
 const PAGE_SIZE = 50;
 
 export default function Alerts() {
+  // Pre-fills the host filter when arriving from an Endpoints drill-down
+  // link (SS-060, /alerts?host_id=...) — read once on mount, not kept
+  // in sync afterward, since this is a starting filter, not a two-way
+  // URL-state binding the rest of this page doesn't otherwise have.
+  const [searchParams] = useSearchParams();
+
   const [severity, setSeverity] = useState('');
   const [logType, setLogType] = useState('');
   const [source, setSource] = useState('');
-  const [hostId, setHostId] = useState('');
+  const [hostId, setHostId] = useState(() => searchParams.get('host_id') ?? '');
   const [timerangeHours, setTimerangeHours] = useState(24);
   const [page, setPage] = useState(1);
 

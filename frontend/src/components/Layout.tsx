@@ -12,6 +12,7 @@ import { useAuth } from '../hooks/useAuth';
 const NAV_LINKS = [
   { to: '/dashboard', label: 'Dashboard' },
   { to: '/alerts', label: 'Alerts' },
+  { to: '/endpoints', label: 'Endpoints' },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {

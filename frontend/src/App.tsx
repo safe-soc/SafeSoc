@@ -3,6 +3,7 @@ import { AuthProvider } from './context/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Alerts from './pages/Alerts';
 import Dashboard from './pages/Dashboard';
+import Endpoints from './pages/Endpoints';
 import Login from './pages/Login';
 
 function App() {
@@ -14,6 +15,7 @@ function App() {
           <Route element={<ProtectedRoute />}>
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/alerts" element={<Alerts />} />
+            <Route path="/endpoints" element={<Endpoints />} />
           </Route>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
         </Routes>
