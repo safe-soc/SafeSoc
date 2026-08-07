@@ -12,6 +12,12 @@ Contributions are summed across all of a host's alerts, then the total
 is decayed by how long it's been since the host's *most recent* alert
 (RISK_TIME_DECAY_PER_HOUR) — "no recent activity" decays the whole
 score, not each alert individually — and capped at 100.
+
+Source-agnostic by design (SS-041, docs/decisions.md ADR-009): a
+CloudLens finding is just another alert with a severity by the time it
+reaches here (source="cloudlens", SS-038/SS-039), scored through this
+same formula rather than importing CloudLens's own separate
+account-level score.
 """
 
 import uuid

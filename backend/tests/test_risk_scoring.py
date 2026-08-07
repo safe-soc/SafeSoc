@@ -330,3 +330,21 @@ async def test_list_endpoints_returns_empty_list_when_none_exist():
 # meaningfully prove real ordering, same caveat as elsewhere in this
 # codebase (e.g. tests/test_incidents.py). Verified against live
 # Postgres in Docker instead.
+
+
+# ── SS-041: cloud findings harmonize through the same formula (ADR-009) ──
+
+def test_cloudlens_sourced_alerts_score_through_the_same_formula_as_any_other_alert():
+    """
+    ADR-009: SafeSOC doesn't import CloudLens's own account-level score -
+    cloud findings (source="cloudlens", severity already mapped by the
+    SS-038 adapter) contribute via the exact same severity/MITRE/TI/
+    anomaly/after-hours formula as any other alert, no special-casing.
+    """
+    cloud_alert = _alert(severity="critical", mitre_technique=None, timestamp=_BUSINESS_HOURS)
+    cloud_alert["source"] = "cloudlens"  # present on the real document; must not change scoring
+
+    result = calculate_risk_score([cloud_alert], now=_now_at(_BUSINESS_HOURS))
+
+    # Identical to a same-severity alert from any other source.
+    assert result.score == settings.RISK_SCORE_CRITICAL
