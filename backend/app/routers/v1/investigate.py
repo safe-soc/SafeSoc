@@ -1,0 +1,110 @@
+"""
+SafeSOC — Investigation API
+POST /api/v1/investigate — accepts a natural-language query and an
+optional conversation/session ID, returning the assistant's response
+(SS-047). Requires a valid JWT (SS-015); tenant_id is derived from the
+token, not the caller (SS-016).
+
+Orchestrates the pieces built across this milestone: classify the
+query and resolve conversation context (SS-044/SS-046), call the
+matching MCP tool (SS-045), then ask the configured LLM provider
+(SS-042/SS-043) to turn the tool's structured result into a
+conversational answer.
+"""
+
+import asyncio
+import uuid
+
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.clients import groq, ollama
+from app.core.config import settings
+from app.core.dependencies import CurrentUser, get_current_user
+from app.core.enums import Intent
+from app.db.postgresql import get_db
+from app.mcp import TOOLS
+from app.schemas.investigation import InvestigateRequest, InvestigateResponse
+from app.services.investigation import resolve_query
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+router = APIRouter(prefix="/api/v1", tags=["investigate"])
+
+_UNKNOWN_INTENT_ANSWER = (
+    "I couldn't determine what you're asking. Try asking about failed logins, IP activity, "
+    "an endpoint's status, top alerts, user activity, cloud findings, risky endpoints, or "
+    "attack chain status."
+)
+
+
+def _fallback_answer(intent: Intent, tool_result: BaseModel) -> str:
+    """A simple, deterministic summary used when the LLM is unavailable or too slow to ask."""
+    data = tool_result.model_dump()
+    label = intent.value.replace("_", " ")
+    if "total" in data:
+        return f"Found {data['total']} result(s) for your {label} query."
+    if "endpoints" in data:
+        return f"Found {len(data['endpoints'])} endpoint(s) for your {label} query."
+    return f"Here is the data for your {label} query."
+
+
+async def _generate_answer(query: str, intent: Intent, tool_result: BaseModel) -> str:
+    """
+    Ask the configured LLM provider to summarize tool_result in answer
+    to `query`. Bounded by INVESTIGATION_LLM_TIMEOUT_SECONDS so a slow
+    or unreachable LLM can't blow the SRS's 15-second response target
+    (AC) — any failure or timeout degrades to a templated summary of
+    the same data rather than failing the request.
+    """
+    llm_client = groq if settings.LLM_PROVIDER == "groq" else ollama
+    prompt = (
+        "You are a security operations assistant. Answer the analyst's question "
+        "conversationally and concisely, using only the data provided below.\n\n"
+        f"Question: {query}\n"
+        f"Data (JSON): {tool_result.model_dump_json()}"
+    )
+
+    try:
+        # generate() is a blocking `requests` call — run it off the event
+        # loop so it can actually be bounded by wait_for.
+        return await asyncio.wait_for(
+            asyncio.to_thread(llm_client.generate, prompt),
+            timeout=settings.INVESTIGATION_LLM_TIMEOUT_SECONDS,
+        )
+    except Exception as e:
+        logger.warning("LLM answer generation failed, falling back to a templated summary", error=str(e))
+        return _fallback_answer(intent, tool_result)
+
+
+@router.post("/investigate", response_model=InvestigateResponse)
+async def investigate(
+    payload: InvestigateRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Answer a natural-language security question, scoped to the
+    authenticated tenant. `session_id` is optional — omit it to start a
+    new conversation (a fresh one is generated and returned); pass a
+    previous response's session_id back to ask a follow-up that can
+    reference what was already discussed (SS-046).
+    """
+    session_id = payload.session_id or str(uuid.uuid4())
+
+    intent, params = await resolve_query(str(current_user.tenant_id), session_id, payload.query)
+
+    if intent == Intent.UNKNOWN:
+        return InvestigateResponse(session_id=session_id, intent=Intent.UNKNOWN, answer=_UNKNOWN_INTENT_ANSWER, data={})
+
+    tool_result = await TOOLS[intent].call(db, current_user.tenant_id, params)
+    answer = await _generate_answer(payload.query, intent, tool_result)
+
+    return InvestigateResponse(
+        session_id=session_id,
+        intent=intent,
+        answer=answer,
+        data=tool_result.model_dump(mode="json"),
+    )

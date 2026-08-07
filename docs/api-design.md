@@ -219,6 +219,31 @@ Lists known hosts (`endpoints` table, upserted by the scheduled recalculation ta
 ```
 An empty list if the tenant has no known endpoints yet (no alerts have been scored for any host).
 
+### `POST /api/v1/investigate`
+
+`backend/app/routers/v1/investigate.py` → `services/investigation.py` (SS-044 classify_intent, SS-046 resolve_query) → `mcp/tools.py` (SS-045) → `clients/ollama.py` or `clients/groq.py` (SS-042/SS-043, selected by `settings.LLM_PROVIDER`). Any authenticated role.
+
+Natural-language security queries, orchestrated rather than free-form: the query is classified into one of 8 supported intents, resolved against the conversation's prior context if it's a follow-up, routed to the matching pre-built MCP tool (never a raw LLM-generated database query, per the report's §3.3 architecture), and the tool's structured result is handed to the configured LLM to phrase as a conversational answer.
+
+**Request body**
+```json
+{ "query": "Show me failed logins for host DESKTOP-042", "session_id": null }
+```
+`session_id` is optional — omit it (or pass `null`) to start a new conversation; a fresh one is generated and returned. Pass a previous response's `session_id` back to ask a follow-up that can reference what was already discussed (SS-046) — e.g. "what about yesterday?" after asking about a specific host.
+
+**Response 200**
+```json
+{
+  "session_id": "3fae8f0a-...",
+  "intent": "auth_failures",
+  "answer": "There were 2 failed login attempts on DESKTOP-042 in the last 24 hours.",
+  "data": { "total": 2, "alerts": [ { "...": "matching alert documents" } ] }
+}
+```
+`data` is the raw structured result from the intent's MCP tool (shape varies by intent — see `mcp/tools.py`'s per-tool output models). A query that doesn't classify into any of the 8 supported intents returns `intent: "unknown"`, an explanatory `answer`, and `data: {}` — not a silently wrong guess.
+
+**Response time (SRS target: 15s).** The LLM answer-generation step is bounded by `settings.INVESTIGATION_LLM_TIMEOUT_SECONDS` (10s default); if the configured LLM is slow, unreachable, or errors, the endpoint degrades to a templated summary of the tool's data instead of failing or blocking the response — classification, context resolution, and the tool query itself are the only unavoidable latency, and are normally sub-second.
+
 ---
 
 ## Planned Endpoints (stub routers, no logic)
@@ -228,10 +253,9 @@ These router files exist under `backend/app/routers/v1/` but are **empty** — n
 | File | Intended purpose (SRS §3.3) |
 |---|---|
 | `cloud.py` | Surface CloudLens findings (or ingest them via the adapter pipeline) in the unified alert view |
-| `investigate.py` | Natural-language query endpoint backed by the MCP-orchestrated assistant |
 | `reports.py` | List/download generated PDF digests |
 
-`endpoints.py` is no longer a stub — `GET /api/v1/endpoints` is implemented (see above, SS-034).
+`endpoints.py` and `investigate.py` are no longer stubs — `GET /api/v1/endpoints` (SS-034) and `POST /api/v1/investigate` (SS-047) are both implemented (see above).
 
 `incidents.py` is no longer a stub — CRUD and lifecycle transitions are implemented (see above); alert linking and investigation notes remain planned (SS-037).
 

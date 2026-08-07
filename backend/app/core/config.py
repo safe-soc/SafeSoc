@@ -120,6 +120,14 @@ class Settings(BaseSettings):
     # pattern as CORRELATION_WINDOW_TTL below.
     INVESTIGATION_SESSION_TTL_SECONDS: int = 600  # 10 minutes
 
+    # POST /api/v1/investigate (SS-047) must meet the SRS's 15-second
+    # response time target even when the LLM is slow/unreachable — this
+    # bounds just the answer-generation step, leaving headroom under 15s
+    # for the (normally sub-second) classification + tool query that
+    # happen first. A timeout here falls back to a templated summary of
+    # the tool's raw data rather than failing the request.
+    INVESTIGATION_LLM_TIMEOUT_SECONDS: int = 10
+
     # ──────────────────────────────────────────────
     # Correlation Engine
     # ──────────────────────────────────────────────
