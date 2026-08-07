@@ -133,3 +133,11 @@ async def recalculate_endpoint_score(
     await db.commit()
     await db.refresh(endpoint)
     return endpoint
+
+
+async def list_endpoints(db: AsyncSession, tenant_id: uuid.UUID) -> list[Endpoint]:
+    """List a tenant's known endpoints, sorted by risk score descending (SS-034)."""
+    result = await db.execute(
+        select(Endpoint).where(Endpoint.tenant_id == tenant_id).order_by(Endpoint.risk_score.desc())
+    )
+    return list(result.scalars().all())

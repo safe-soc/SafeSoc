@@ -10,7 +10,7 @@ import pytest
 from app.core.config import settings
 from app.core.enums import RiskLevel
 from app.models.endpoint import Endpoint
-from app.services.risk_scoring import calculate_risk_score, recalculate_endpoint_score
+from app.services.risk_scoring import calculate_risk_score, list_endpoints, recalculate_endpoint_score
 
 # Wednesday, business hours (08:00-18:00 UTC) -> not after-hours.
 _BUSINESS_HOURS = "2026-08-05T12:00:00+00:00"
@@ -223,6 +223,12 @@ class _FakeResult:
     def scalar_one_or_none(self):
         return self._rows[0] if self._rows else None
 
+    def scalars(self):
+        return self
+
+    def all(self):
+        return list(self._rows)
+
 
 class _FakeSession:
     def __init__(self, existing_endpoints=None):
@@ -293,3 +299,34 @@ async def test_recalculate_endpoint_score_reflects_zero_alerts_as_zero_risk():
 
     assert endpoint.risk_score == 0
     assert endpoint.risk_level == RiskLevel.LOW
+
+
+# ── SS-034: list_endpoints ─────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_list_endpoints_returns_the_tenants_known_endpoints():
+    tenant_id = uuid.uuid4()
+    existing = [
+        Endpoint(id=uuid.uuid4(), tenant_id=tenant_id, host_id="DESKTOP-042", risk_score=20, risk_level=RiskLevel.LOW),
+        Endpoint(id=uuid.uuid4(), tenant_id=tenant_id, host_id="WEB-SERVER-01", risk_score=80, risk_level=RiskLevel.CRITICAL),
+    ]
+    session = _FakeSession(existing_endpoints=existing)
+
+    endpoints = await list_endpoints(session, tenant_id)
+
+    assert len(endpoints) == 2
+    assert {e.host_id for e in endpoints} == {"DESKTOP-042", "WEB-SERVER-01"}
+
+
+@pytest.mark.asyncio
+async def test_list_endpoints_returns_empty_list_when_none_exist():
+    session = _FakeSession()
+
+    assert await list_endpoints(session, uuid.uuid4()) == []
+
+
+# Note: sorting by risk_score descending happens in the SQL ORDER BY
+# clause itself - a fake session that hands back a canned list can't
+# meaningfully prove real ordering, same caveat as elsewhere in this
+# codebase (e.g. tests/test_incidents.py). Verified against live
+# Postgres in Docker instead.

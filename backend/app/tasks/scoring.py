@@ -12,7 +12,7 @@ import uuid
 
 from app.core.config import settings
 from app.db.opensearch import get_known_endpoints, search_alerts
-from app.db.postgresql import async_session_factory
+from app.db.postgresql import async_session_factory, engine
 from app.services.risk_scoring import recalculate_endpoint_score
 from app.tasks.celery_app import celery_app
 from app.utils.logger import get_logger
@@ -27,20 +27,32 @@ def recalculate_all_risk_scores() -> None:
 
 
 async def _recalculate_all_risk_scores_async() -> None:
-    endpoints = await get_known_endpoints(timerange_hours=settings.RISK_RECALC_LOOKBACK_HOURS)
-    if not endpoints:
-        return
+    try:
+        endpoints = await get_known_endpoints(timerange_hours=settings.RISK_RECALC_LOOKBACK_HOURS)
+        if not endpoints:
+            return
 
-    async with async_session_factory() as db:
-        for entry in endpoints:
-            alerts_result = await search_alerts(
-                tenant_id=entry["tenant_id"],
-                host_id=entry["host_id"],
-                timerange_hours=settings.RISK_RECALC_LOOKBACK_HOURS,
-                size=500,
-            )
-            await recalculate_endpoint_score(
-                db, uuid.UUID(entry["tenant_id"]), entry["host_id"], alerts_result["alerts"]
-            )
+        async with async_session_factory() as db:
+            for entry in endpoints:
+                alerts_result = await search_alerts(
+                    tenant_id=entry["tenant_id"],
+                    host_id=entry["host_id"],
+                    timerange_hours=settings.RISK_RECALC_LOOKBACK_HOURS,
+                    size=500,
+                )
+                await recalculate_endpoint_score(
+                    db, uuid.UUID(entry["tenant_id"]), entry["host_id"], alerts_result["alerts"]
+                )
 
-    logger.info("Recalculated risk scores", endpoint_count=len(endpoints))
+        logger.info("Recalculated risk scores", endpoint_count=len(endpoints))
+    finally:
+        # asyncio.run() tears down its event loop when this task ends, but
+        # the SQLAlchemy engine (db/postgresql.py) is a process-wide
+        # singleton shared across every task this worker process runs.
+        # Its pooled connections are bound to the loop that created them,
+        # so leaving them open would break the *next* scheduled run (a
+        # fresh asyncio.run() call, a fresh loop) with "Future attached to
+        # a different loop" - observed live. Disposing here forces the
+        # pool to reconnect fresh next time, scoped to whatever loop is
+        # current then.
+        await engine.dispose()

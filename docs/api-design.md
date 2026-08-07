@@ -204,6 +204,21 @@ Lifecycle state machine (SS-036) — the only path is `open` → `investigating`
 - `404` — incident doesn't exist for this tenant.
 - `409` — the requested `to_status` isn't reachable from the incident's current status (`InvalidStateTransitionError`).
 
+### `GET /api/v1/endpoints`
+
+`backend/app/routers/v1/endpoints.py` → `services/risk_scoring.py: list_endpoints()`. Any authenticated role.
+
+Lists known hosts (`endpoints` table, upserted by the scheduled recalculation task, SS-033) for the authenticated tenant, sorted by `risk_score` descending.
+
+**Response 200**
+```json
+[
+  { "id": "...", "tenant_id": "...", "host_id": "WEB-SERVER-01", "risk_score": 80, "risk_level": "critical", "updated_at": "..." },
+  { "id": "...", "tenant_id": "...", "host_id": "DESKTOP-042", "risk_score": 20, "risk_level": "low", "updated_at": "..." }
+]
+```
+An empty list if the tenant has no known endpoints yet (no alerts have been scored for any host).
+
 ---
 
 ## Planned Endpoints (stub routers, no logic)
@@ -213,9 +228,10 @@ These router files exist under `backend/app/routers/v1/` but are **empty** — n
 | File | Intended purpose (SRS §3.3) |
 |---|---|
 | `cloud.py` | Surface CloudLens findings (or ingest them via the adapter pipeline) in the unified alert view |
-| `endpoints.py` | List monitored hosts with current risk score/level |
 | `investigate.py` | Natural-language query endpoint backed by the MCP-orchestrated assistant |
 | `reports.py` | List/download generated PDF digests |
+
+`endpoints.py` is no longer a stub — `GET /api/v1/endpoints` is implemented (see above, SS-034).
 
 `incidents.py` is no longer a stub — CRUD and lifecycle transitions are implemented (see above); alert linking and investigation notes remain planned (SS-037).
 

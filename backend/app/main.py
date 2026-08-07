@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.exceptions import SafeSOCError, safesoc_exception_handler
 from app.routers import health
-from app.routers.v1 import auth, cloud, incidents, ingest
+from app.routers.v1 import auth, cloud, endpoints, incidents, ingest
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -37,6 +37,7 @@ app.include_router(alerts.router)
 app.include_router(auth.router)
 app.include_router(incidents.router)
 app.include_router(cloud.router)
+app.include_router(endpoints.router)
 
 
 @app.on_event("startup")
