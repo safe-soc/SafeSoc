@@ -6,11 +6,18 @@
 
 import type { IncidentStatus } from '../lib/types';
 
-const COLORS: Record<IncidentStatus, string> = {
-  open: 'bg-blue-600/80 text-blue-50',
-  investigating: 'bg-yellow-600/80 text-yellow-50',
-  resolved: 'bg-green-600/80 text-green-50',
-  false_positive: 'bg-slate-600 text-slate-100',
+const STYLES: Record<IncidentStatus, string> = {
+  open: 'bg-blue-500/10 text-blue-300 ring-1 ring-inset ring-blue-500/30',
+  investigating: 'bg-yellow-500/10 text-yellow-300 ring-1 ring-inset ring-yellow-500/30',
+  resolved: 'bg-green-500/10 text-green-300 ring-1 ring-inset ring-green-500/30',
+  false_positive: 'bg-slate-800 text-slate-400 ring-1 ring-inset ring-slate-700',
+};
+
+const DOT: Record<IncidentStatus, string> = {
+  open: 'bg-blue-400',
+  investigating: 'bg-yellow-400',
+  resolved: 'bg-green-400',
+  false_positive: 'bg-slate-500',
 };
 
 const LABELS: Record<IncidentStatus, string> = {
@@ -22,7 +29,8 @@ const LABELS: Record<IncidentStatus, string> = {
 
 export default function StatusBadge({ status }: { status: IncidentStatus }) {
   return (
-    <span className={`inline-block rounded px-2 py-0.5 text-xs font-medium ${COLORS[status]}`}>
+    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${STYLES[status]}`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${DOT[status]} ${status === 'investigating' ? 'animate-pulse' : ''}`} />
       {LABELS[status]}
     </span>
   );

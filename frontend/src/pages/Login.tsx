@@ -38,9 +38,14 @@ export default function Login() {
     <div className="flex min-h-screen items-center justify-center bg-slate-950">
       <form
         onSubmit={handleSubmit}
-        className="w-full max-w-sm space-y-4 rounded-lg border border-slate-800 bg-slate-900 p-8"
+        className="w-full max-w-sm space-y-4 rounded-xl border border-slate-800 bg-slate-900 p-8 shadow-xl shadow-black/30"
       >
-        <h1 className="text-2xl font-bold text-slate-100">SafeSOC</h1>
+        <div className="flex items-center gap-2.5">
+          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-600 text-base font-bold text-white">
+            S
+          </span>
+          <h1 className="text-2xl font-bold text-slate-100">SafeSOC</h1>
+        </div>
         <p className="text-sm text-slate-400">Sign in to your organization's SOC dashboard.</p>
 
         <div>
@@ -98,6 +103,8 @@ export default function Login() {
         >
           {isSubmitting ? 'Signing in…' : 'Sign in'}
         </button>
+
+        <p className="pt-2 text-center text-xs text-slate-600">SafeSOC v1.0.0</p>
       </form>
     </div>
   );

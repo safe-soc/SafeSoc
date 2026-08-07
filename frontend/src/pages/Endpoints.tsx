@@ -1,32 +1,46 @@
 /**
  * SafeSOC — Endpoint Risk Dashboard View (SS-060)
- * Backed by GET /api/v1/endpoints (SS-034), already sorted by risk
- * score descending server-side. Each row drills down to that
- * endpoint's recent alerts by reusing the Alerts view (SS-059) with
- * its host filter pre-applied, rather than building a second alert
- * list.
+ * Backed by GET /api/v1/endpoints (SS-034). Each row drills down to
+ * that endpoint's recent alerts by reusing the Alerts view (SS-059)
+ * with its host filter pre-applied, rather than building a second
+ * alert list.
+ *
+ * GET /api/v1/endpoints has no host_os field — the small OS icon per
+ * row is a best-effort lookup against recently-seen alerts for that
+ * host (lib/alertLookup.ts), not a real endpoint property; a host with
+ * no matching alert in the lookup window just shows a generic icon.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Layout from '../components/Layout';
+import PageHeader from '../components/PageHeader';
 import LevelBadge from '../components/LevelBadge';
+import EmptyState from '../components/EmptyState';
+import TableSkeleton from '../components/TableSkeleton';
+import OsIcon from '../components/OsIcon';
+import { EndpointIcon, SortIcon } from '../components/icons';
 import { api } from '../lib/api';
-import type { Severity } from '../lib/types';
+import { fetchAlertLookup } from '../lib/alertLookup';
+import { formatDateTime } from '../lib/format';
+import type { Endpoint } from '../lib/types';
 
-interface Endpoint {
-  id: string;
-  tenant_id: string;
-  host_id: string;
-  risk_score: number;
-  risk_level: Severity;
-  updated_at: string;
-}
+type SortKey = 'risk_score' | 'host_id' | 'updated_at';
+
+const RISK_BAR_COLOR: Record<string, string> = {
+  low: 'bg-slate-500',
+  medium: 'bg-yellow-500',
+  high: 'bg-orange-500',
+  critical: 'bg-red-500',
+};
 
 export default function Endpoints() {
   const [endpoints, setEndpoints] = useState<Endpoint[]>([]);
+  const [osByHost, setOsByHost] = useState<Map<string, string>>(new Map());
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [sortKey, setSortKey] = useState<SortKey>('risk_score');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
 
   useEffect(() => {
     let cancelled = false;
@@ -41,64 +55,123 @@ export default function Endpoints() {
       .finally(() => {
         if (!cancelled) setIsLoading(false);
       });
+
+    // Best-effort only — a failure here just means OS icons stay generic.
+    fetchAlertLookup()
+      .then((lookup) => {
+        if (!cancelled) setOsByHost(lookup.osForHost);
+      })
+      .catch(() => undefined);
+
     return () => {
       cancelled = true;
     };
   }, []);
 
+  const sorted = useMemo(() => {
+    const copy = [...endpoints];
+    copy.sort((a, b) => {
+      let result = 0;
+      if (sortKey === 'host_id') result = a.host_id.localeCompare(b.host_id);
+      else if (sortKey === 'updated_at') result = a.updated_at.localeCompare(b.updated_at);
+      else result = a.risk_score - b.risk_score;
+      return sortDirection === 'asc' ? result : -result;
+    });
+    return copy;
+  }, [endpoints, sortKey, sortDirection]);
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDirection((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDirection('desc');
+    }
+  };
+
+  const highRiskCount = endpoints.filter((e) => e.risk_level === 'high' || e.risk_level === 'critical').length;
+
+  const SortableHeader = ({ label, sortKeyName }: { label: string; sortKeyName: SortKey }) => (
+    <th className="px-4 py-3 font-medium">
+      <button
+        type="button"
+        onClick={() => toggleSort(sortKeyName)}
+        className="flex items-center gap-1 transition-colors hover:text-slate-200"
+      >
+        {label}
+        <SortIcon direction={sortKey === sortKeyName ? sortDirection : 'none'} className="h-3.5 w-3.5" />
+      </button>
+    </th>
+  );
+
   return (
     <Layout>
-      <h1 className="text-xl font-semibold">Endpoints</h1>
-      <p className="mt-1 text-sm text-slate-400">Known hosts, sorted by risk score. Click a host for its recent alerts.</p>
+      <PageHeader
+        title="Endpoints"
+        description={`Known hosts, sorted by risk score.${
+          highRiskCount > 0 ? ` ${highRiskCount} at high or critical risk.` : ''
+        } Click a host for its recent alerts.`}
+      />
 
       {error && <p className="mt-4 text-sm text-red-400">{error}</p>}
 
-      <div className="mt-4 overflow-x-auto rounded border border-slate-800">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-slate-900 text-slate-400">
-            <tr>
-              <th className="px-3 py-2">Host</th>
-              <th className="px-3 py-2">Risk Score</th>
-              <th className="px-3 py-2">Risk Level</th>
-              <th className="px-3 py-2">Last Updated</th>
-            </tr>
-          </thead>
-          <tbody>
-            {isLoading ? (
+      <div className="mt-4 overflow-hidden rounded-xl border border-slate-800">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-slate-900/80 text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <td colSpan={4} className="px-3 py-6 text-center text-slate-500">
-                  Loading…
-                </td>
+                <SortableHeader label="Host" sortKeyName="host_id" />
+                <SortableHeader label="Risk Score" sortKeyName="risk_score" />
+                <th className="px-4 py-3 font-medium">Risk Level</th>
+                <SortableHeader label="Last Updated" sortKeyName="updated_at" />
               </tr>
-            ) : endpoints.length === 0 ? (
-              <tr>
-                <td colSpan={4} className="px-3 py-6 text-center text-slate-500">
-                  No endpoints have been scored yet.
-                </td>
-              </tr>
-            ) : (
-              endpoints.map((endpoint) => (
-                <tr key={endpoint.id} className="border-t border-slate-800 hover:bg-slate-900/60">
-                  <td className="px-3 py-2">
-                    <Link
-                      to={`/alerts?host_id=${encodeURIComponent(endpoint.host_id)}`}
-                      className="font-mono text-blue-400 hover:underline"
-                    >
-                      {endpoint.host_id}
-                    </Link>
-                  </td>
-                  <td className="px-3 py-2 text-slate-300">{endpoint.risk_score}</td>
-                  <td className="px-3 py-2">
-                    <LevelBadge level={endpoint.risk_level} />
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-slate-300">
-                    {new Date(endpoint.updated_at).toLocaleString()}
+            </thead>
+            <tbody>
+              {isLoading ? (
+                <TableSkeleton rows={8} columns={4} />
+              ) : sorted.length === 0 ? (
+                <tr>
+                  <td colSpan={4}>
+                    <EmptyState
+                      icon={<EndpointIcon className="h-10 w-10 text-slate-700" />}
+                      title="No endpoints have been scored yet"
+                      description="Endpoints appear here once the risk scoring task has evaluated their alert history."
+                    />
                   </td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+              ) : (
+                sorted.map((endpoint) => (
+                  <tr key={endpoint.id} className="border-t border-slate-800/70 transition-colors hover:bg-slate-900/50">
+                    <td className="px-4 py-3">
+                      <Link
+                        to={`/alerts?host_id=${encodeURIComponent(endpoint.host_id)}`}
+                        className="inline-flex items-center gap-2 font-mono text-slate-200 hover:text-blue-400 hover:underline"
+                      >
+                        <OsIcon os={osByHost.get(endpoint.host_id)} />
+                        {endpoint.host_id}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <div className="h-1.5 w-24 overflow-hidden rounded-full bg-slate-800">
+                          <div
+                            className={`h-full rounded-full ${RISK_BAR_COLOR[endpoint.risk_level] ?? 'bg-slate-500'}`}
+                            style={{ width: `${Math.min(100, Math.max(2, endpoint.risk_score))}%` }}
+                          />
+                        </div>
+                        <span className="w-8 tabular-nums text-slate-300">{endpoint.risk_score}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <LevelBadge level={endpoint.risk_level} />
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-slate-400">{formatDateTime(endpoint.updated_at)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </Layout>
   );

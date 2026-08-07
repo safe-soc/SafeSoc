@@ -4,20 +4,37 @@
  * Only transition buttons the backend's own state machine allows for
  * the incident's CURRENT status are ever rendered (AC) — driven by
  * ALLOWED_TRANSITIONS, the same map services/incidents.py enforces.
+ *
+ * Per-alert host/severity/MITRE detail is a best-effort lookup against
+ * a recent alert fetch (lib/alertLookup.ts) — the Incident resource
+ * itself only carries alert_ids (bare strings); an alert outside that
+ * lookup window falls back to showing just its ID.
  */
 
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import Layout from '../components/Layout';
+import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
+import LevelBadge from '../components/LevelBadge';
+import MitreBadge from '../components/MitreBadge';
+import Spinner from '../components/Spinner';
 import { api } from '../lib/api';
+import { fetchAlertLookup, type AlertLookup } from '../lib/alertLookup';
+import { formatDateTime, formatRelativeTime } from '../lib/format';
 import { ALLOWED_TRANSITIONS, type Incident, type IncidentNote, type IncidentStatus } from '../lib/types';
+
+const LIFECYCLE_STEPS: IncidentStatus[] = ['open', 'investigating', 'resolved'];
+
+const inputClasses =
+  'flex-1 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500';
 
 export default function IncidentDetail() {
   const { incidentId } = useParams<{ incidentId: string }>();
 
   const [incident, setIncident] = useState<Incident | null>(null);
   const [notes, setNotes] = useState<IncidentNote[]>([]);
+  const [lookup, setLookup] = useState<AlertLookup | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -45,6 +62,10 @@ export default function IncidentDetail() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    fetchAlertLookup().then(setLookup).catch(() => undefined);
+  }, []);
 
   const handleTransition = async (toStatus: IncidentStatus) => {
     if (!incidentId) return;
@@ -98,7 +119,10 @@ export default function IncidentDetail() {
   if (isLoading) {
     return (
       <Layout>
-        <p className="text-slate-500">Loading…</p>
+        <div className="flex items-center gap-2 text-slate-500">
+          <Spinner />
+          Loading incident…
+        </div>
       </Layout>
     );
   }
@@ -112,6 +136,8 @@ export default function IncidentDetail() {
   }
 
   const availableTransitions = ALLOWED_TRANSITIONS[incident.status];
+  const isFalsePositive = incident.status === 'false_positive';
+  const currentStepIndex = isFalsePositive ? -1 : LIFECYCLE_STEPS.indexOf(incident.status);
 
   return (
     <Layout>
@@ -119,20 +145,59 @@ export default function IncidentDetail() {
         ← Back to incidents
       </Link>
 
-      <div className="mt-2 flex items-center gap-3">
-        <h1 className="font-mono text-xl font-semibold">{incident.id}</h1>
-        <StatusBadge status={incident.status} />
+      <div className="mt-2">
+        <PageHeader
+          title={`Incident ${incident.id.slice(0, 8)}`}
+          description={
+            <>
+              Created {formatDateTime(incident.created_at)} · Updated {formatRelativeTime(incident.updated_at)}
+            </>
+          }
+          actions={<StatusBadge status={incident.status} />}
+        />
       </div>
-      <p className="mt-1 text-sm text-slate-400">
-        Created {new Date(incident.created_at).toLocaleString()} · Updated{' '}
-        {new Date(incident.updated_at).toLocaleString()}
-      </p>
 
       {actionError && <p className="mt-3 text-sm text-red-400">{actionError}</p>}
 
-      <section className="mt-6">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">Lifecycle</h2>
-        <div className="mt-2 flex gap-2">
+      {/* Lifecycle */}
+      <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+        <h2 className="text-sm font-semibold text-slate-200">Lifecycle</h2>
+
+        {isFalsePositive ? (
+          <p className="mt-3 text-sm text-slate-500">Marked as a false positive — no further transitions are allowed.</p>
+        ) : (
+          <div className="mt-4 flex items-center">
+            {LIFECYCLE_STEPS.map((step, index) => {
+              const isDone = index < currentStepIndex;
+              const isCurrent = index === currentStepIndex;
+              return (
+                <div key={step} className="flex flex-1 items-center last:flex-none">
+                  <div className="flex flex-col items-center gap-1.5">
+                    <div
+                      className={`flex h-7 w-7 items-center justify-center rounded-full border-2 text-xs font-semibold ${
+                        isDone
+                          ? 'border-green-500 bg-green-500/20 text-green-400'
+                          : isCurrent
+                            ? 'border-blue-500 bg-blue-500/20 text-blue-300'
+                            : 'border-slate-700 bg-slate-900 text-slate-600'
+                      }`}
+                    >
+                      {isDone ? '✓' : index + 1}
+                    </div>
+                    <span className={`text-xs capitalize ${isCurrent ? 'font-medium text-slate-200' : 'text-slate-500'}`}>
+                      {step}
+                    </span>
+                  </div>
+                  {index < LIFECYCLE_STEPS.length - 1 && (
+                    <div className={`mx-2 h-0.5 flex-1 rounded ${isDone ? 'bg-green-500/60' : 'bg-slate-800'}`} />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="mt-5 flex flex-wrap gap-2">
           {availableTransitions.length === 0 ? (
             <p className="text-sm text-slate-500">This incident is closed — no further transitions are allowed.</p>
           ) : (
@@ -141,7 +206,11 @@ export default function IncidentDetail() {
                 key={toStatus}
                 type="button"
                 onClick={() => handleTransition(toStatus)}
-                className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500"
+                className={`rounded-lg px-3.5 py-2 text-sm font-medium transition-colors ${
+                  toStatus === 'false_positive'
+                    ? 'border border-slate-700 text-slate-300 hover:bg-slate-800'
+                    : 'bg-blue-600 text-white hover:bg-blue-500'
+                }`}
               >
                 Move to {toStatus.replace('_', ' ')}
               </button>
@@ -150,16 +219,32 @@ export default function IncidentDetail() {
         </div>
       </section>
 
-      <section className="mt-6">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
-          Linked Alerts ({incident.alert_ids.length})
-        </h2>
-        <ul className="mt-2 space-y-1">
-          {incident.alert_ids.map((alertId) => (
-            <li key={alertId} className="font-mono text-sm text-slate-300">
-              {alertId}
-            </li>
-          ))}
+      {/* Linked alerts */}
+      <section className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+        <h2 className="text-sm font-semibold text-slate-200">Linked Alerts ({incident.alert_ids.length})</h2>
+        <ul className="mt-3 space-y-1.5">
+          {incident.alert_ids.map((alertId) => {
+            const resolved = lookup?.alerts.find((a) => a.alert_id === alertId);
+            const mitre = lookup?.mitreForAlert.get(alertId);
+            return (
+              <li
+                key={alertId}
+                className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-800/80 bg-slate-950/50 px-3 py-2 text-sm"
+              >
+                {resolved ? (
+                  <>
+                    <LevelBadge level={resolved.severity} />
+                    <span className="font-mono text-slate-300">{resolved.host_id}</span>
+                    <span className="text-slate-500">{resolved.action}</span>
+                    {mitre && <MitreBadge technique={mitre.technique} tactic={mitre.tactic} />}
+                    <span className="ml-auto font-mono text-xs text-slate-600">{alertId.slice(0, 8)}</span>
+                  </>
+                ) : (
+                  <span className="font-mono text-slate-400">{alertId}</span>
+                )}
+              </li>
+            );
+          })}
         </ul>
         <form onSubmit={handleLinkAlert} className="mt-3 flex gap-2">
           <input
@@ -168,32 +253,41 @@ export default function IncidentDetail() {
             placeholder="Alert ID to link"
             value={newAlertId}
             onChange={(e) => setNewAlertId(e.target.value)}
-            className="flex-1 rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
+            className={inputClasses}
           />
           <button
             type="submit"
             disabled={isSubmitting || !newAlertId.trim()}
-            className="rounded bg-slate-800 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-700 disabled:opacity-40"
+            className="rounded-lg bg-slate-800 px-3.5 py-2 text-sm text-slate-200 transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
           >
             Link alert
           </button>
         </form>
       </section>
 
-      <section className="mt-6">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">Notes</h2>
-        <ul className="mt-2 space-y-2">
-          {notes.length === 0 ? (
-            <li className="text-sm text-slate-500">No notes yet.</li>
-          ) : (
-            notes.map((note) => (
-              <li key={note.id} className="rounded border border-slate-800 bg-slate-900 p-3 text-sm">
-                <p className="text-slate-200">{note.body}</p>
-                <p className="mt-1 text-xs text-slate-500">{new Date(note.created_at).toLocaleString()}</p>
+      {/* Notes */}
+      <section className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+        <h2 className="text-sm font-semibold text-slate-200">Investigation Notes</h2>
+        {notes.length === 0 ? (
+          <p className="mt-3 text-sm text-slate-500">No notes yet — document findings as you investigate.</p>
+        ) : (
+          <ol className="mt-3 space-y-0">
+            {notes.map((note, index) => (
+              <li key={note.id} className="relative flex gap-3 pb-4 last:pb-0">
+                <div className="flex flex-col items-center">
+                  <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-blue-500" />
+                  {index < notes.length - 1 && <span className="mt-1 w-px flex-1 bg-slate-800" />}
+                </div>
+                <div className="flex-1 rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
+                  <p className="text-sm text-slate-200">{note.body}</p>
+                  <p className="mt-1.5 text-xs text-slate-500" title={formatDateTime(note.created_at)}>
+                    {formatRelativeTime(note.created_at)}
+                  </p>
+                </div>
               </li>
-            ))
-          )}
-        </ul>
+            ))}
+          </ol>
+        )}
         <form onSubmit={handleAddNote} className="mt-3 flex gap-2">
           <input
             id="newNoteBody"
@@ -201,12 +295,12 @@ export default function IncidentDetail() {
             placeholder="Add an investigation note"
             value={newNoteBody}
             onChange={(e) => setNewNoteBody(e.target.value)}
-            className="flex-1 rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
+            className={inputClasses}
           />
           <button
             type="submit"
             disabled={isSubmitting || !newNoteBody.trim()}
-            className="rounded bg-slate-800 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-700 disabled:opacity-40"
+            className="rounded-lg bg-blue-600 px-3.5 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
           >
             Add note
           </button>

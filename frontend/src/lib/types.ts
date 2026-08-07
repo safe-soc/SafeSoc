@@ -21,6 +21,7 @@ export interface Alert {
   timestamp: string;
   host_id: string;
   host_ip: string;
+  host_os?: string | null;
   user: string;
   action: string;
   description: string;
@@ -81,4 +82,16 @@ export interface InvestigateResponse {
   intent: string;
   answer: string;
   data: Record<string, unknown>;
+}
+
+// GET /api/v1/endpoints (SS-034) — no host_os field on this resource;
+// pages that want an OS hint derive it best-effort from recently-seen
+// alerts for that host_id instead (see lib/hostOs.ts).
+export interface Endpoint {
+  id: string;
+  tenant_id: string;
+  host_id: string;
+  risk_score: number;
+  risk_level: Severity;
+  updated_at: string;
 }

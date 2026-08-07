@@ -7,8 +7,13 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Layout from '../components/Layout';
+import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
+import EmptyState from '../components/EmptyState';
+import TableSkeleton from '../components/TableSkeleton';
+import { ChevronLeftIcon, ChevronRightIcon, IncidentIcon } from '../components/icons';
 import { api } from '../lib/api';
+import { formatDateTime, formatRelativeTime } from '../lib/format';
 import type { Incident, IncidentListResponse, IncidentStatus } from '../lib/types';
 
 const STATUSES: IncidentStatus[] = ['open', 'investigating', 'resolved', 'false_positive'];
@@ -52,100 +57,116 @@ export default function Incidents() {
     };
   }, [status, page]);
 
+  const rangeStart = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+  const rangeEnd = Math.min(page * PAGE_SIZE, total);
+
   return (
     <Layout>
-      <h1 className="text-xl font-semibold">Incidents</h1>
+      <PageHeader title="Incidents" description="Auto-detected attack chains and manually opened investigations." />
 
-      <div className="mt-4 flex gap-3">
-        <select
-          value={status}
-          onChange={(e) => {
-            setStatus(e.target.value);
-            setPage(1);
-          }}
-          className="rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
-        >
-          <option value="">All statuses</option>
-          {STATUSES.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        {['', ...STATUSES].map((s) => (
+          <button
+            key={s || 'all'}
+            type="button"
+            onClick={() => {
+              setStatus(s);
+              setPage(1);
+            }}
+            className={`rounded-full px-3 py-1.5 text-sm font-medium capitalize transition-colors ${
+              status === s
+                ? 'bg-blue-600 text-white'
+                : 'border border-slate-800 bg-slate-900 text-slate-400 hover:border-slate-700 hover:text-slate-200'
+            }`}
+          >
+            {s ? s.replace('_', ' ') : 'All statuses'}
+          </button>
+        ))}
       </div>
 
       {error && <p className="mt-4 text-sm text-red-400">{error}</p>}
 
-      <div className="mt-4 overflow-x-auto rounded border border-slate-800">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-slate-900 text-slate-400">
-            <tr>
-              <th className="px-3 py-2">Incident</th>
-              <th className="px-3 py-2">Status</th>
-              <th className="px-3 py-2">Alerts</th>
-              <th className="px-3 py-2">Created</th>
-              <th className="px-3 py-2">Updated</th>
-            </tr>
-          </thead>
-          <tbody>
-            {isLoading ? (
+      <div className="mt-4 overflow-hidden rounded-xl border border-slate-800">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-slate-900/80 text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <td colSpan={5} className="px-3 py-6 text-center text-slate-500">
-                  Loading…
-                </td>
+                <th className="px-4 py-3 font-medium">Incident</th>
+                <th className="px-4 py-3 font-medium">Status</th>
+                <th className="px-4 py-3 font-medium">Alerts</th>
+                <th className="px-4 py-3 font-medium">Created</th>
+                <th className="px-4 py-3 font-medium">Updated</th>
               </tr>
-            ) : incidents.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="px-3 py-6 text-center text-slate-500">
-                  No incidents match these filters.
-                </td>
-              </tr>
-            ) : (
-              incidents.map((incident) => (
-                <tr key={incident.id} className="border-t border-slate-800 hover:bg-slate-900/60">
-                  <td className="px-3 py-2">
-                    <Link to={`/incidents/${incident.id}`} className="font-mono text-blue-400 hover:underline">
-                      {incident.id.slice(0, 8)}
-                    </Link>
-                  </td>
-                  <td className="px-3 py-2">
-                    <StatusBadge status={incident.status} />
-                  </td>
-                  <td className="px-3 py-2 text-slate-300">{incident.alert_ids.length}</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-slate-300">
-                    {new Date(incident.created_at).toLocaleString()}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-slate-300">
-                    {new Date(incident.updated_at).toLocaleString()}
+            </thead>
+            <tbody>
+              {isLoading ? (
+                <TableSkeleton rows={8} columns={5} />
+              ) : incidents.length === 0 ? (
+                <tr>
+                  <td colSpan={5}>
+                    <EmptyState
+                      icon={<IncidentIcon className="h-10 w-10 text-slate-700" />}
+                      title="No incidents match these filters"
+                      description="Incidents are created automatically when the correlation engine detects an attack chain, or manually by an analyst."
+                    />
                   </td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+              ) : (
+                incidents.map((incident) => (
+                  <tr key={incident.id} className="border-t border-slate-800/70 transition-colors hover:bg-slate-900/50">
+                    <td className="px-4 py-3">
+                      <Link to={`/incidents/${incident.id}`} className="font-mono text-blue-400 hover:underline">
+                        {incident.id.slice(0, 8)}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-3">
+                      <StatusBadge status={incident.status} />
+                    </td>
+                    <td className="px-4 py-3 text-slate-300">
+                      {incident.alert_ids.length}
+                      {incident.alert_ids.length > 1 && (
+                        <span className="ml-1.5 rounded bg-slate-800 px-1.5 py-0.5 text-xs text-slate-400">chain</span>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-slate-400" title={formatDateTime(incident.created_at)}>
+                      {formatRelativeTime(incident.created_at)}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-slate-400" title={formatDateTime(incident.updated_at)}>
+                      {formatRelativeTime(incident.updated_at)}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
-      <div className="mt-4 flex items-center justify-between text-sm text-slate-400">
-        <span>{total} total incident(s)</span>
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-400">
+        <span>
+          {total === 0 ? '0 incidents' : `Showing ${rangeStart}–${rangeEnd} of ${total} incident${total === 1 ? '' : 's'}`}
+        </span>
         <div className="flex items-center gap-2">
           <button
             type="button"
             disabled={page <= 1}
             onClick={() => setPage((p) => p - 1)}
-            className="rounded bg-slate-800 px-3 py-1.5 disabled:opacity-40"
+            className="flex items-center gap-1 rounded-lg border border-slate-800 bg-slate-900 px-3 py-1.5 transition-colors hover:border-slate-700 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
           >
+            <ChevronLeftIcon className="h-4 w-4" />
             Previous
           </button>
-          <span>
+          <span className="tabular-nums">
             Page {page} of {pages || 1}
           </span>
           <button
             type="button"
             disabled={page >= pages}
             onClick={() => setPage((p) => p + 1)}
-            className="rounded bg-slate-800 px-3 py-1.5 disabled:opacity-40"
+            className="flex items-center gap-1 rounded-lg border border-slate-800 bg-slate-900 px-3 py-1.5 transition-colors hover:border-slate-700 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
           >
             Next
+            <ChevronRightIcon className="h-4 w-4" />
           </button>
         </div>
       </div>
