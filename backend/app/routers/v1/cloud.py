@@ -18,6 +18,8 @@ a user JWT: CloudLens is a same-deployment backend service pushing data
 on a scan's behalf, not an interactive user (SS-039).
 """
 
+import hmac
+
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, Query
 
 from app.core.config import settings
@@ -38,8 +40,10 @@ async def verify_service_token(x_service_token: str = Header(default="")) -> Non
     Reject unless the caller presents the configured CloudLens service
     token. Closed by default: an unset CLOUDLENS_SERVICE_TOKEN rejects
     every request rather than silently allowing an unauthenticated one.
+    Uses a constant-time comparison so response timing can't be used to
+    recover the token byte-by-byte (SS-067).
     """
-    if not settings.CLOUDLENS_SERVICE_TOKEN or x_service_token != settings.CLOUDLENS_SERVICE_TOKEN:
+    if not settings.CLOUDLENS_SERVICE_TOKEN or not hmac.compare_digest(x_service_token, settings.CLOUDLENS_SERVICE_TOKEN):
         raise InvalidServiceTokenError()
 
 

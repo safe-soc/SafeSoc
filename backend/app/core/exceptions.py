@@ -75,6 +75,12 @@ class InvalidStateTransitionError(SafeSOCError):
         )
 
 
+class RateLimitExceededError(SafeSOCError):
+    """Raised when a caller exceeds an endpoint's configured rate limit."""
+    def __init__(self, message: str = "Too many attempts. Please try again later."):
+        super().__init__(message, status_code=429)
+
+
 class InvalidServiceTokenError(SafeSOCError):
     """Raised when a service-to-service caller's X-Service-Token header is missing or wrong."""
     def __init__(self, message: str = "Invalid or missing service token."):

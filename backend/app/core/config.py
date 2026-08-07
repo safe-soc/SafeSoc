@@ -86,6 +86,20 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRY_HOURS: int = 24
 
+    # Login brute-force protection (SS-067): max failed attempts per
+    # (tenant_id, email) pair within the window before POST
+    # /api/v1/auth/login starts rejecting with 429, regardless of
+    # whether the password given is actually correct.
+    AUTH_LOGIN_RATE_LIMIT_ATTEMPTS: int = 5
+    AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS: int = 300  # 5 minutes
+
+    # Same idea for POST /api/v1/auth/register, keyed by client IP
+    # instead — registration isn't tied to one existing account the way
+    # login is, so the abuse this guards against (automated mass
+    # account creation) is naturally IP-scoped instead.
+    AUTH_REGISTER_RATE_LIMIT_ATTEMPTS: int = 10
+    AUTH_REGISTER_RATE_LIMIT_WINDOW_SECONDS: int = 300  # 5 minutes
+
     # ──────────────────────────────────────────────
     # Threat Intelligence APIs
     # ──────────────────────────────────────────────

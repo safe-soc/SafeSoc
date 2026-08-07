@@ -5,7 +5,7 @@ Request/response models for registration, login, and token refresh.
 
 import uuid
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.core.enums import UserRole
 
@@ -13,7 +13,7 @@ from app.core.enums import UserRole
 class RegisterRequest(BaseModel):
     tenant_id: uuid.UUID
     email: str
-    password: str
+    password: str = Field(min_length=8)
     role: UserRole = UserRole.VIEWER
 
     model_config = {

@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.enums import UserRole
+from app.core.exceptions import RateLimitExceededError
 from app.core.security import create_access_token, decode_access_token, hash_password
 from app.db.postgresql import get_db
 from app.main import app
@@ -68,7 +69,7 @@ def test_register_returns_201_with_created_user_and_no_password(client_with_fake
     response = client.post("/api/v1/auth/register", json={
         "tenant_id": tenant_id,
         "email": "alice@example.com",
-        "password": "hunter2",
+        "password": "hunter2-hunter2",
     })
 
     assert response.status_code == 201
@@ -89,7 +90,7 @@ def test_register_rejects_duplicate_email_with_409(client_with_fake_db):
     response = client.post("/api/v1/auth/register", json={
         "tenant_id": str(tenant_id),
         "email": "alice@example.com",
-        "password": "hunter2",
+        "password": "hunter2-hunter2",
     })
 
     assert response.status_code == 409
@@ -150,6 +151,53 @@ def test_login_rejects_unknown_email_with_401(client_with_fake_db):
     })
 
     assert response.status_code == 401
+
+
+# ── SS-067: login/register rate limiting ────────────────────────
+
+def test_login_returns_429_once_the_rate_limit_is_exceeded(client_with_fake_db, _mock_rate_limit):
+    client, fake_session = client_with_fake_db
+    tenant_id = uuid.uuid4()
+    fake_session.existing_user = User(
+        id=uuid.uuid4(), tenant_id=tenant_id, email="alice@example.com",
+        password_hash=hash_password("hunter2"), role=UserRole.VIEWER,
+    )
+    _mock_rate_limit.side_effect = RateLimitExceededError()
+
+    response = client.post("/api/v1/auth/login", json={
+        "tenant_id": str(tenant_id),
+        "email": "alice@example.com",
+        "password": "hunter2",
+    })
+
+    assert response.status_code == 429
+
+
+def test_register_returns_429_once_the_rate_limit_is_exceeded(client_with_fake_db, _mock_rate_limit):
+    client, _ = client_with_fake_db
+    _mock_rate_limit.side_effect = RateLimitExceededError()
+
+    response = client.post("/api/v1/auth/register", json={
+        "tenant_id": str(uuid.uuid4()),
+        "email": "alice@example.com",
+        "password": "hunter2-hunter2",
+    })
+
+    assert response.status_code == 429
+
+
+# ── SS-067: password policy ──────────────────────────────────────
+
+def test_register_rejects_a_password_shorter_than_8_characters(client_with_fake_db):
+    client, _ = client_with_fake_db
+
+    response = client.post("/api/v1/auth/register", json={
+        "tenant_id": str(uuid.uuid4()),
+        "email": "alice@example.com",
+        "password": "short1",
+    })
+
+    assert response.status_code == 422
 
 
 # ── POST /api/v1/auth/refresh ───────────────────────────────────

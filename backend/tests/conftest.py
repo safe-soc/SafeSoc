@@ -61,6 +61,20 @@ def _mock_notification_queueing(monkeypatch) -> Mock:
 
 
 @pytest.fixture(autouse=True)
+def _mock_rate_limit(monkeypatch) -> AsyncMock:
+    """
+    Never attempt a real Redis connection during tests. SS-067's login/
+    register rate limiting (services/rate_limit.py) hits Redis directly
+    in-request; tests that want to exercise the limiter's own logic
+    (test_rate_limit.py) or the 429 response it produces override this
+    mock explicitly instead of relying on a live Redis.
+    """
+    mock = AsyncMock()
+    monkeypatch.setattr("app.routers.v1.auth.enforce_rate_limit", mock)
+    return mock
+
+
+@pytest.fixture(autouse=True)
 def _mock_realtime_publish(monkeypatch) -> AsyncMock:
     """
     Never attempt a real Redis connection during tests. Unlike the

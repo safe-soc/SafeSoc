@@ -43,12 +43,32 @@ app.include_router(reports.router)
 app.include_router(ws.router)
 
 
+DEFAULT_JWT_SECRET = "change-me-to-a-64-char-random-string"
+
+
 @app.on_event("startup")
 async def startup():
     """Verify services on startup."""
     from app.utils.logger import get_logger
     logger = get_logger(__name__)
     logger.info("SafeSOC starting", env=settings.ENV)
+
+    # SS-067: JWT_SECRET's default is public (it's right here in source
+    # control), so every token becomes forgeable by anyone who's read
+    # this file if a deployer forgets to override it. Refuse to start
+    # in production rather than run silently insecure; still runnable
+    # in dev/test so the default remains a valid out-of-the-box value.
+    if settings.JWT_SECRET == DEFAULT_JWT_SECRET:
+        if settings.ENV == "production":
+            raise RuntimeError(
+                "JWT_SECRET is still the default value. Set a unique, random "
+                "JWT_SECRET before starting SafeSOC in production."
+            )
+        logger.warning(
+            "JWT_SECRET is still the default value — every issued token is "
+            "forgeable. This is only acceptable outside production.",
+            env=settings.ENV,
+        )
 
     from app.db.opensearch import ensure_ilm_policy
     try:
