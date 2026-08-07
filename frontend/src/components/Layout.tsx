@@ -1,12 +1,18 @@
 /**
  * SafeSOC — Dashboard Layout
- * Persistent chrome (header + logout) wrapping every authenticated
- * page. Nav links are added incrementally as each page lands.
+ * Persistent chrome (header + nav + logout) wrapping every
+ * authenticated page. Nav links are added incrementally as each page
+ * lands.
  */
 
 import type { ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+
+const NAV_LINKS = [
+  { to: '/dashboard', label: 'Dashboard' },
+  { to: '/alerts', label: 'Alerts' },
+];
 
 export default function Layout({ children }: { children: ReactNode }) {
   const { logout } = useAuth();
@@ -20,7 +26,22 @@ export default function Layout({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
-        <span className="text-lg font-semibold">SafeSOC</span>
+        <div className="flex items-center gap-6">
+          <span className="text-lg font-semibold">SafeSOC</span>
+          <nav className="flex gap-4 text-sm">
+            {NAV_LINKS.map((link) => (
+              <NavLink
+                key={link.to}
+                to={link.to}
+                className={({ isActive }) =>
+                  isActive ? 'font-medium text-white' : 'text-slate-400 hover:text-slate-200'
+                }
+              >
+                {link.label}
+              </NavLink>
+            ))}
+          </nav>
+        </div>
         <button
           type="button"
           onClick={handleLogout}
