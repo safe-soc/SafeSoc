@@ -241,3 +241,26 @@ def test_ingest_succeeds_even_if_correlation_queueing_fails(
 
     assert response.status_code == 200  # ingestion succeeds regardless of queueing outcome
     assert response.json()["accepted"] == 1
+
+
+# ── Async critical-alert notification queuing (SS-056) ─────────
+
+def test_ingest_queues_notification_for_each_accepted_alert(
+    client, base_log_fields, mock_bulk_index_logs, auth_headers, _mock_notification_queueing
+):
+    response = client.post("/api/v1/ingest", json={"log": base_log_fields}, headers=auth_headers)
+
+    assert response.status_code == 200
+    alert_id = response.json()["alert_ids"][0]
+    _mock_notification_queueing.assert_called_once_with(alert_id)
+
+
+def test_ingest_succeeds_even_if_notification_queueing_fails(
+    client, base_log_fields, mock_bulk_index_logs, auth_headers, _mock_notification_queueing
+):
+    _mock_notification_queueing.side_effect = ConnectionError("broker unreachable")
+
+    response = client.post("/api/v1/ingest", json={"log": base_log_fields}, headers=auth_headers)
+
+    assert response.status_code == 200  # ingestion succeeds regardless of queueing outcome
+    assert response.json()["accepted"] == 1

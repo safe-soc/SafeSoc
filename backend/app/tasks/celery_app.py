@@ -17,7 +17,13 @@ celery_app = Celery(
     # imported (and their @celery_app.task-decorated functions registered)
     # — otherwise a task is queueable from the producer side (which imports
     # it directly) but silently unknown to the worker.
-    include=["app.tasks.enrichment", "app.tasks.scoring", "app.tasks.reporting", "app.workers.correlation_worker"],
+    include=[
+        "app.tasks.enrichment",
+        "app.tasks.scoring",
+        "app.tasks.reporting",
+        "app.workers.correlation_worker",
+        "app.workers.notification_worker",
+    ],
 )
 
 # A hung (not just refused) broker connection would silently defeat ADR-005's

@@ -18,6 +18,7 @@ from app.schemas.log import NormalizedLog
 from app.tasks.enrichment import enrich_alert
 from app.utils.logger import get_logger
 from app.workers.correlation_worker import evaluate_correlation
+from app.workers.notification_worker import notify_if_critical
 
 logger = get_logger(__name__)
 
@@ -51,15 +52,19 @@ async def _queue_task(task, alert_id: str, *, task_name: str) -> None:
 
 def queue_post_ingest_tasks(background_tasks: BackgroundTasks, alert_ids: list[str]) -> None:
     """
-    Queue threat-intel enrichment (SS-025/026) and attack-chain
-    correlation (SS-027/028/030) for each accepted alert, as FastAPI
-    background tasks (run after the response is sent, ADR-005) so
-    neither ever delays a caller's response. Shared by every router that
-    accepts logs (POST /api/v1/ingest, POST /api/v1/cloud/findings).
+    Queue threat-intel enrichment (SS-025/026), attack-chain correlation
+    (SS-027/028/030), and critical-alert notification (SS-056) for each
+    accepted alert, as FastAPI background tasks (run after the response
+    is sent, ADR-005) so none of them ever delay a caller's response.
+    Shared by every router that accepts logs (POST /api/v1/ingest,
+    POST /api/v1/cloud/findings). Notification is a no-op for anything
+    below critical severity — decided inside the task itself, same as
+    enrichment's own no-op-if-nothing-to-enrich gating.
     """
     for alert_id in alert_ids:
         background_tasks.add_task(_queue_task, enrich_alert, alert_id, task_name="enrichment")
         background_tasks.add_task(_queue_task, evaluate_correlation, alert_id, task_name="correlation")
+        background_tasks.add_task(_queue_task, notify_if_critical, alert_id, task_name="notification")
 
 
 async def process_ingest_batch(

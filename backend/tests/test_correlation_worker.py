@@ -3,7 +3,7 @@ SafeSOC — Correlation Worker Tests
 """
 
 import uuid
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -95,6 +95,40 @@ async def test_evaluate_correlation_async_creates_an_incident_and_logs_each_dete
     assert fields["pattern"] == "credential_brute_force"
     assert fields["alert_ids"] == ["a1", "a2"]
     assert fields["incident_id"] == str(incident.id)
+
+
+@pytest.mark.asyncio
+async def test_evaluate_correlation_async_notifies_for_each_detected_chain(monkeypatch):
+    """SS-056 AC: a new attack chain triggers a notification."""
+    tenant_id = uuid.uuid4()
+    doc = {
+        "alert_id": "abc-123",
+        "tenant_id": str(tenant_id),
+        "host_id": "DESKTOP-042",
+        "log_type": "authentication",
+        "action": "failed_login",
+        "severity": "low",
+    }
+    chain = DetectedChain(
+        pattern=CorrelationPattern.CREDENTIAL_BRUTE_FORCE,
+        confidence=0.8,
+        alert_ids=("a1", "a2"),
+        mitre_technique_ids=("T1110",),
+        mitre_tactic="Credential Access",
+    )
+    incident = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1", "a2"])
+
+    monkeypatch.setattr(correlation_worker, "get_alert_by_id", AsyncMock(return_value=doc))
+    monkeypatch.setattr(correlation_worker, "add_event", AsyncMock())
+    monkeypatch.setattr(correlation_worker, "evaluate_host", AsyncMock(return_value=[chain]))
+    monkeypatch.setattr(correlation_worker, "async_session_factory", lambda: _FakeSessionCM())
+    monkeypatch.setattr(correlation_worker, "create_or_merge_incident", AsyncMock(return_value=incident))
+    mock_notify = Mock()
+    monkeypatch.setattr(correlation_worker, "notify_attack_chain", mock_notify)
+
+    await correlation_worker._evaluate_correlation_async("abc-123")
+
+    mock_notify.assert_called_once_with("DESKTOP-042", chain, incident.id)
 
 
 @pytest.mark.asyncio

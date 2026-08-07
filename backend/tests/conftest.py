@@ -15,6 +15,7 @@ from app.core.security import create_access_token
 from app.main import app
 from app.tasks.enrichment import enrich_alert
 from app.workers.correlation_worker import evaluate_correlation
+from app.workers.notification_worker import notify_if_critical
 
 
 @pytest.fixture
@@ -45,6 +46,17 @@ def _mock_correlation_queueing(monkeypatch) -> Mock:
     """
     mock = Mock()
     monkeypatch.setattr(evaluate_correlation, "delay", mock)
+    return mock
+
+
+@pytest.fixture(autouse=True)
+def _mock_notification_queueing(monkeypatch) -> Mock:
+    """
+    Same rationale as _mock_enrichment_queueing, for the third Celery
+    task POST /api/v1/ingest queues per accepted log (SS-056).
+    """
+    mock = Mock()
+    monkeypatch.setattr(notify_if_critical, "delay", mock)
     return mock
 
 
