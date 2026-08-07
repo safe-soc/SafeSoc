@@ -1,5 +1,5 @@
 """
-SafeSOC — Anomaly Detection Service Tests (SS-050)
+SafeSOC — Anomaly Detection Service Tests (SS-050, SS-051)
 """
 
 import random
@@ -219,3 +219,79 @@ def test_feature_names_match_the_training_pipelines_schema():
     from ml.train import FEATURE_NAMES as TRAIN_FEATURE_NAMES
 
     assert anomaly.FEATURE_NAMES == TRAIN_FEATURE_NAMES
+
+
+# ── SS-051: Z-score network volume spike detection ──────────────
+
+def _network_events(count: int) -> list[dict]:
+    return [{"log_type": "network", "action": "outbound_connection"} for _ in range(count)]
+
+
+def test_detect_network_volume_spike_flags_a_sudden_burst():
+    # Quiet baseline (6 network events over 60 minutes -> ~0.5 expected
+    # in a 5-minute window), then a sudden burst of 20 in the recent window.
+    baseline_events = _network_events(6)
+    recent_events = _network_events(20)
+
+    result = anomaly.detect_network_volume_spike(baseline_events, recent_events)
+
+    assert result is not None
+    assert result.z_score >= settings.NETWORK_ANOMALY_ZSCORE_THRESHOLD
+    assert result.observed_count == 20
+
+
+def test_detect_network_volume_spike_does_not_flag_steady_state_traffic():
+    # A steady rate: 60 events/hour baseline implies ~5 expected in a
+    # 5-minute recent window; observing 5 or 6 is unremarkable.
+    baseline_events = _network_events(60)
+    recent_events = _network_events(6)
+
+    result = anomaly.detect_network_volume_spike(baseline_events, recent_events)
+
+    assert result is None
+
+
+def test_detect_network_volume_spike_ignores_non_network_events():
+    baseline_events = [{"log_type": "process", "action": "process_start"} for _ in range(6)]
+    recent_events = [{"log_type": "authentication", "action": "login_success"} for _ in range(20)]
+
+    result = anomaly.detect_network_volume_spike(baseline_events, recent_events)
+
+    assert result is None  # no network events in either window -> nothing to flag
+
+
+def test_detect_network_volume_spike_flags_any_burst_from_total_silence():
+    # No baseline network activity at all (expected == 0), but a burst
+    # appears in the recent window — must still flag (guards the
+    # division-by-zero / expected==0 edge case).
+    result = anomaly.detect_network_volume_spike([], _network_events(5))
+
+    assert result is not None
+    assert result.z_score == float("inf")
+
+
+def test_detect_network_volume_spike_is_none_when_both_windows_are_silent():
+    result = anomaly.detect_network_volume_spike([], [])
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_check_network_volume_spike_queries_two_non_overlapping_windows(monkeypatch):
+    calls = []
+
+    async def fake_get_events(tenant_id, host_id, window_minutes, *, now=None):
+        calls.append((window_minutes, now))
+        return _network_events(20) if window_minutes == anomaly.RECENT_WINDOW_MINUTES else _network_events(6)
+
+    monkeypatch.setattr(anomaly, "get_events", fake_get_events)
+
+    now = 1_700_000_000.0
+    result = await anomaly.check_network_volume_spike("acme-corp", "DESKTOP-042", now=now)
+
+    assert result is not None
+    assert len(calls) == 2
+    recent_call = next(c for c in calls if c[0] == anomaly.RECENT_WINDOW_MINUTES)
+    baseline_call = next(c for c in calls if c[0] == anomaly.BASELINE_WINDOW_MINUTES)
+    assert recent_call[1] == now
+    assert baseline_call[1] == now - (anomaly.RECENT_WINDOW_MINUTES * 60)  # non-overlapping with the recent window

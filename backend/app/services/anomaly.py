@@ -1,16 +1,24 @@
 """
 SafeSOC — Anomaly Detection Service
-Isolation Forest scoring (SS-050): loads the model trained by
-ml/train.py (SS-049) and scores a host's recent behavior around a new
-alert 0-1, flagging anomalies above ANOMALY_THRESHOLD.
+Two complementary techniques from SRS §3.3:
 
-Feature extraction reuses the correlation engine's per-host sliding
-window (SS-027) rather than standing up separate storage — the same
-window the attack-chain detectors (SS-028) already read from. Window
-events are stored by app.workers.correlation_worker in a fixed,
-minimal shape: {alert_id, log_type, action, severity, destination_ip}
-— no per-event timestamp — so "temporal features" below describe the
-alert being scored, not each individual windowed event.
+ - Isolation Forest scoring (SS-050): loads the model trained by
+   ml/train.py (SS-049) and scores a host's recent behavior around a
+   new alert 0-1, flagging anomalies above ANOMALY_THRESHOLD.
+ - Z-score network volume spike detection (SS-051): a lightweight
+   statistical complement needing no trained model — flags a sudden
+   burst in a host's outbound-connection rate against
+   NETWORK_ANOMALY_ZSCORE_THRESHOLD.
+
+Both reuse the correlation engine's per-host sliding window (SS-027)
+rather than standing up separate storage — the same window the
+attack-chain detectors (SS-028) already read from. Window events are
+stored by app.workers.correlation_worker in a fixed, minimal shape:
+{alert_id, log_type, action, severity, destination_ip} — no per-event
+timestamp — so "temporal features" below describe the alert being
+scored, not each individual windowed event, and the Z-score detector
+compares *counts across two time-bounded window queries* rather than
+per-event timestamps.
 
 FEATURE_NAMES is deliberately kept in lockstep with ml/train.py's
 identically-named tuple: that script aggregates SS-048's static
@@ -19,7 +27,9 @@ actually be applied here. tests/test_anomaly.py asserts the two stay
 in sync.
 """
 
+import math
 import pickle
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -141,3 +151,84 @@ async def score_alert(
     events = await get_events(tenant_id, host_id, window_minutes, now=timestamp.timestamp())
     features = extract_features(events, timestamp)
     return score_features(features)
+
+
+# ── SS-051: Z-score network volume spike detection ──────────────
+#
+# No trained model or per-event timestamps needed: two get_events()
+# calls with different (window_minutes, now) pull a "recent" window and
+# a preceding, non-overlapping "baseline" window from the same sliding
+# window SS-050 reads from. The baseline's rate is scaled to the
+# recent window's duration to get an expected count, and a Poisson
+# approximation (variance == mean, so stddev == sqrt(expected)) gives a
+# z-score without needing a stored history of past bucket counts.
+
+RECENT_WINDOW_MINUTES = 5
+BASELINE_WINDOW_MINUTES = 60
+
+
+@dataclass(frozen=True)
+class VolumeSpike:
+    z_score: float
+    observed_count: int
+    expected_count: float
+
+
+def _poisson_zscore(observed: int, expected: float) -> float:
+    if expected <= 0:
+        return float("inf") if observed > 0 else 0.0
+    return (observed - expected) / math.sqrt(expected)
+
+
+def detect_network_volume_spike(
+    baseline_events: Sequence[dict[str, Any]],
+    recent_events: Sequence[dict[str, Any]],
+    *,
+    recent_window_minutes: int = RECENT_WINDOW_MINUTES,
+    baseline_window_minutes: int = BASELINE_WINDOW_MINUTES,
+) -> Optional[VolumeSpike]:
+    """
+    Flag a sudden spike in outbound network-event volume: compares
+    recent_events' network-event count against the rate implied by
+    baseline_events (a longer, earlier, non-overlapping window), and
+    flags if the deviation exceeds NETWORK_ANOMALY_ZSCORE_THRESHOLD
+    standard deviations under a Poisson approximation. None if the
+    recent count isn't a statistically surprising deviation — i.e.
+    steady-state traffic (AC).
+    """
+    baseline_count = sum(1 for e in baseline_events if e.get("log_type") == "network")
+    recent_count = sum(1 for e in recent_events if e.get("log_type") == "network")
+
+    expected_count = baseline_count * (recent_window_minutes / baseline_window_minutes)
+    z_score = _poisson_zscore(recent_count, expected_count)
+
+    if abs(z_score) < settings.NETWORK_ANOMALY_ZSCORE_THRESHOLD:
+        return None
+    return VolumeSpike(z_score=z_score, observed_count=recent_count, expected_count=expected_count)
+
+
+async def check_network_volume_spike(
+    tenant_id: str,
+    host_id: str,
+    *,
+    now: Optional[float] = None,
+    recent_window_minutes: int = RECENT_WINDOW_MINUTES,
+    baseline_window_minutes: int = BASELINE_WINDOW_MINUTES,
+) -> Optional[VolumeSpike]:
+    """
+    Pull host_id's sliding window (SS-027) as two non-overlapping
+    periods — the last `recent_window_minutes` and the
+    `baseline_window_minutes` immediately before that — and check for a
+    volume spike (SS-051) between them.
+    """
+    now = now if now is not None else time.time()
+    recent_events = await get_events(tenant_id, host_id, recent_window_minutes, now=now)
+    baseline_events = await get_events(
+        tenant_id, host_id, baseline_window_minutes, now=now - (recent_window_minutes * 60)
+    )
+    return detect_network_volume_spike(
+        baseline_events,
+        recent_events,
+        recent_window_minutes=recent_window_minutes,
+        baseline_window_minutes=baseline_window_minutes,
+    )
