@@ -27,6 +27,19 @@ def recalculate_all_risk_scores() -> None:
 
 
 async def _recalculate_all_risk_scores_async() -> None:
+    # The SQLAlchemy engine (db/postgresql.py) is a process-wide singleton
+    # shared by every Celery task this worker process runs (enrichment,
+    # correlation, this one). asyncio.run() gives each task invocation its
+    # own event loop, but asyncpg connections are bound to the loop that
+    # created them — so a connection left in the pool by *any* earlier
+    # task (this one's own previous run, or a different task type
+    # entirely) is poisoned for this run's loop. Disposing before first
+    # use, not just after, is what actually makes this reliable: it's not
+    # enough to clean up after ourselves, because a worker can run other
+    # DB-touching tasks in between (observed live: disposing only in a
+    # trailing `finally` still failed on this task's second invocation,
+    # since the pool had already been reused by another task by then).
+    await engine.dispose()
     try:
         endpoints = await get_known_endpoints(timerange_hours=settings.RISK_RECALC_LOOKBACK_HOURS)
         if not endpoints:
@@ -46,13 +59,6 @@ async def _recalculate_all_risk_scores_async() -> None:
 
         logger.info("Recalculated risk scores", endpoint_count=len(endpoints))
     finally:
-        # asyncio.run() tears down its event loop when this task ends, but
-        # the SQLAlchemy engine (db/postgresql.py) is a process-wide
-        # singleton shared across every task this worker process runs.
-        # Its pooled connections are bound to the loop that created them,
-        # so leaving them open would break the *next* scheduled run (a
-        # fresh asyncio.run() call, a fresh loop) with "Future attached to
-        # a different loop" - observed live. Disposing here forces the
-        # pool to reconnect fresh next time, scoped to whatever loop is
-        # current then.
+        # Leave the pool clean for whatever runs next on this worker too,
+        # not just guard our own next run.
         await engine.dispose()

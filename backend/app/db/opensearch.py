@@ -173,6 +173,9 @@ async def search_alerts(
     log_type: Optional[str] = None,
     source: Optional[str] = None,
     host_id: Optional[str] = None,
+    action: Optional[str] = None,
+    user: Optional[str] = None,
+    source_ip: Optional[str] = None,
     timerange_hours: int = 24,
     page: int = 1,
     size: int = 50,
@@ -193,6 +196,12 @@ async def search_alerts(
         must_filters.append({"term": {"source": source}})
     if host_id:
         must_filters.append({"term": {"host_id": host_id}})
+    if action:
+        must_filters.append({"term": {"action": action}})
+    if user:
+        must_filters.append({"term": {"user": user}})
+    if source_ip:
+        must_filters.append({"term": {"source_ip": source_ip}})
 
     range_filter = {
         "range": {

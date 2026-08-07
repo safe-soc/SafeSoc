@@ -10,7 +10,7 @@ import pytest
 from app.core.config import settings
 from app.core.enums import RiskLevel
 from app.models.endpoint import Endpoint
-from app.services.risk_scoring import calculate_risk_score, list_endpoints, recalculate_endpoint_score
+from app.services.risk_scoring import calculate_risk_score, get_endpoint, list_endpoints, recalculate_endpoint_score
 
 # Wednesday, business hours (08:00-18:00 UTC) -> not after-hours.
 _BUSINESS_HOURS = "2026-08-05T12:00:00+00:00"
@@ -348,3 +348,25 @@ def test_cloudlens_sourced_alerts_score_through_the_same_formula_as_any_other_al
 
     # Identical to a same-severity alert from any other source.
     assert result.score == settings.RISK_SCORE_CRITICAL
+
+
+# ── SS-045: get_endpoint (single-endpoint lookup) ───────────────────
+
+@pytest.mark.asyncio
+async def test_get_endpoint_returns_the_matching_endpoint():
+    tenant_id = uuid.uuid4()
+    existing = Endpoint(id=uuid.uuid4(), tenant_id=tenant_id, host_id="DESKTOP-042", risk_score=42, risk_level=RiskLevel.MEDIUM)
+    session = _FakeSession(existing_endpoints=[existing])
+
+    endpoint = await get_endpoint(session, tenant_id, "DESKTOP-042")
+
+    assert endpoint is not None
+    assert endpoint.host_id == "DESKTOP-042"
+    assert endpoint.risk_score == 42
+
+
+@pytest.mark.asyncio
+async def test_get_endpoint_returns_none_when_the_host_has_never_been_scored():
+    session = _FakeSession()
+
+    assert await get_endpoint(session, uuid.uuid4(), "NEVER-SEEN-HOST") is None

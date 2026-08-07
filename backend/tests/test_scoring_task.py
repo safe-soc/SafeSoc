@@ -55,13 +55,16 @@ async def test_no_ops_when_there_are_no_known_endpoints(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_disposes_the_engine_after_a_successful_run(monkeypatch):
+async def test_disposes_the_engine_before_and_after_a_successful_run(monkeypatch):
     """
     Regression test: the shared async engine's pooled connections are
     bound to the event loop that created them, but each Celery
-    invocation of this task runs in its own fresh asyncio.run() loop.
-    Without disposing here, a second run in the same worker process
-    fails with "Future attached to a different loop" (observed live).
+    invocation of this task (and every other DB-touching task sharing
+    this worker process) runs in its own fresh asyncio.run() loop.
+    Disposing only at the end isn't enough — a *different* task type
+    could reuse the pool in between and re-poison it — so this must
+    dispose both before first use and after finishing (observed live:
+    disposing only in a trailing finally still failed on a later run).
     """
     monkeypatch.setattr(scoring, "get_known_endpoints", AsyncMock(return_value=[]))
     mock_engine = AsyncMock()
@@ -69,7 +72,7 @@ async def test_disposes_the_engine_after_a_successful_run(monkeypatch):
 
     await scoring._recalculate_all_risk_scores_async()
 
-    mock_engine.dispose.assert_called_once()
+    assert mock_engine.dispose.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -81,7 +84,7 @@ async def test_disposes_the_engine_even_if_recalculation_raises(monkeypatch):
     with pytest.raises(RuntimeError):
         await scoring._recalculate_all_risk_scores_async()
 
-    mock_engine.dispose.assert_called_once()
+    assert mock_engine.dispose.call_count == 2
 
 
 def test_recalculate_all_risk_scores_runs_the_async_flow_via_asyncio_run(monkeypatch):

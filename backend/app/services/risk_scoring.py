@@ -147,3 +147,12 @@ async def list_endpoints(db: AsyncSession, tenant_id: uuid.UUID) -> list[Endpoin
         select(Endpoint).where(Endpoint.tenant_id == tenant_id).order_by(Endpoint.risk_score.desc())
     )
     return list(result.scalars().all())
+
+
+async def get_endpoint(db: AsyncSession, tenant_id: uuid.UUID, host_id: str) -> Optional[Endpoint]:
+    """
+    Fetch a single known endpoint's current risk score/level (SS-045's
+    endpoint_snapshot tool). None if this host has never been scored.
+    """
+    result = await db.execute(select(Endpoint).where(Endpoint.tenant_id == tenant_id, Endpoint.host_id == host_id))
+    return result.scalar_one_or_none()
