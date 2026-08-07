@@ -4,6 +4,8 @@ import ProtectedRoute from './components/ProtectedRoute';
 import Alerts from './pages/Alerts';
 import Dashboard from './pages/Dashboard';
 import Endpoints from './pages/Endpoints';
+import IncidentDetail from './pages/IncidentDetail';
+import Incidents from './pages/Incidents';
 import Login from './pages/Login';
 
 function App() {
@@ -16,6 +18,8 @@ function App() {
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/alerts" element={<Alerts />} />
             <Route path="/endpoints" element={<Endpoints />} />
+            <Route path="/incidents" element={<Incidents />} />
+            <Route path="/incidents/:incidentId" element={<IncidentDetail />} />
           </Route>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
         </Routes>

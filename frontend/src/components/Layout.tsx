@@ -13,6 +13,7 @@ const NAV_LINKS = [
   { to: '/dashboard', label: 'Dashboard' },
   { to: '/alerts', label: 'Alerts' },
   { to: '/endpoints', label: 'Endpoints' },
+  { to: '/incidents', label: 'Incidents' },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {

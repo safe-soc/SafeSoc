@@ -37,3 +37,41 @@ export interface AlertSearchResponse {
   pages: number;
   alerts: Alert[];
 }
+
+export type IncidentStatus = 'open' | 'investigating' | 'resolved' | 'false_positive';
+
+// Mirrors backend/app/services/incidents.py's _ALLOWED_TRANSITIONS
+// exactly — the UI must only ever offer transitions the backend's own
+// state machine allows (AC), never invent UI-only states.
+export const ALLOWED_TRANSITIONS: Record<IncidentStatus, IncidentStatus[]> = {
+  open: ['investigating'],
+  investigating: ['resolved', 'false_positive'],
+  resolved: [],
+  false_positive: [],
+};
+
+export interface Incident {
+  id: string;
+  tenant_id: string;
+  status: IncidentStatus;
+  alert_ids: string[];
+  assigned_analyst_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IncidentListResponse {
+  total: number;
+  page: number;
+  size: number;
+  pages: number;
+  incidents: Incident[];
+}
+
+export interface IncidentNote {
+  id: string;
+  incident_id: string;
+  author_user_id: string;
+  body: string;
+  created_at: string;
+}
