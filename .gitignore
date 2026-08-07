@@ -36,6 +36,7 @@ cloud/AWS-IAM-backend/staticfiles/
 backend/reports/
 ml/model/
 *.pkl
+celerybeat-schedule
 
 # ── Logs ────────────────────────────────────────────
 *.log

@@ -11,7 +11,13 @@ from opensearchpy import exceptions
 
 from app.core.config import settings
 from app.db.mappings.ilm_policy import ILM_POLICY, ILM_POLICY_ID
-from app.db.opensearch import _build_index_name, check_connection, ensure_ilm_policy, get_cloud_summary
+from app.db.opensearch import (
+    _build_index_name,
+    check_connection,
+    ensure_ilm_policy,
+    get_cloud_summary,
+    get_known_endpoints,
+)
 
 
 # ── _build_index_name ────────────────────────────────────────
@@ -221,3 +227,44 @@ async def test_get_cloud_summary_scopes_the_query_to_tenant_and_cloudlens_source
     must_filters = fake_client.last_search_kwargs["body"]["query"]["bool"]["must"]
     assert {"term": {"tenant_id": "acme-corp"}} in must_filters
     assert {"term": {"source": "cloudlens"}} in must_filters
+
+
+# ── SS-033: get_known_endpoints ──────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_get_known_endpoints_flattens_nested_tenant_host_buckets(monkeypatch):
+    fake_response = {
+        "aggregations": {
+            "by_tenant": {
+                "buckets": [
+                    {
+                        "key": "tenant-a",
+                        "by_host": {"buckets": [{"key": "DESKTOP-042"}, {"key": "WEB-SERVER-01"}]},
+                    },
+                    {
+                        "key": "tenant-b",
+                        "by_host": {"buckets": [{"key": "DESKTOP-042"}]},
+                    },
+                ]
+            }
+        }
+    }
+    fake_client = _FakeSearchClient(fake_response)
+    monkeypatch.setattr("app.db.opensearch.get_client", lambda: fake_client)
+
+    endpoints = await get_known_endpoints()
+
+    assert endpoints == [
+        {"tenant_id": "tenant-a", "host_id": "DESKTOP-042"},
+        {"tenant_id": "tenant-a", "host_id": "WEB-SERVER-01"},
+        {"tenant_id": "tenant-b", "host_id": "DESKTOP-042"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_known_endpoints_returns_empty_list_when_no_alerts(monkeypatch):
+    fake_response = {"aggregations": {"by_tenant": {"buckets": []}}}
+    fake_client = _FakeSearchClient(fake_response)
+    monkeypatch.setattr("app.db.opensearch.get_client", lambda: fake_client)
+
+    assert await get_known_endpoints() == []

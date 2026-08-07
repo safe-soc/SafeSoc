@@ -6,8 +6,9 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from app.core.config import settings
-from app.core.enums import IncidentStatus, TIProvider, UserRole
+from app.core.enums import IncidentStatus, RiskLevel, TIProvider, UserRole
 from app.models import Base
+from app.models.endpoint import Endpoint
 from app.models.incident import Incident, IncidentStateTransition
 from app.models.tenant import Tenant
 from app.models.ti_cache import TICache, compute_expiry
@@ -20,6 +21,7 @@ def test_tenant_and_user_tables_registered_on_metadata():
     assert "ti_cache" in Base.metadata.tables
     assert "incidents" in Base.metadata.tables
     assert "incident_state_transitions" in Base.metadata.tables
+    assert "endpoints" in Base.metadata.tables
 
 
 def test_user_role_column_uses_user_role_enum():
@@ -156,3 +158,35 @@ def test_incident_state_transition_records_timestamp_and_acting_user():
 def test_incident_transitions_relationship_is_ordered_by_created_at():
     relationship_prop = Incident.__mapper__.relationships["transitions"]
     assert relationship_prop.order_by is not None
+
+
+# ── SS-033: Endpoint model ────────────────────────────────────────
+
+def test_endpoint_risk_level_column_uses_risk_level_enum():
+    risk_level_column = Endpoint.__table__.c.risk_level
+    assert risk_level_column.type.enum_class is RiskLevel
+
+
+def test_endpoint_risk_score_defaults_to_zero_and_low():
+    # Column-level defaults apply at flush, not bare instantiation (same
+    # gotcha as User.role and Incident.status) - inspect column metadata.
+    assert Endpoint.__table__.c.risk_score.default.arg == 0
+    assert Endpoint.__table__.c.risk_level.default.arg == RiskLevel.LOW
+
+
+def test_endpoint_tenant_id_is_foreign_key_to_tenants_id():
+    fk_targets = {fk.target_fullname for fk in Endpoint.__table__.c.tenant_id.foreign_keys}
+    assert fk_targets == {"tenants.id"}
+
+
+def test_endpoints_table_has_composite_unique_constraint_on_tenant_id_and_host_id():
+    constraint = next(c for c in Endpoint.__table__.constraints if c.name == "uq_endpoints_tenant_id_host_id")
+    assert {col.name for col in constraint.columns} == {"tenant_id", "host_id"}
+
+
+def test_endpoint_stores_host_id_and_risk_score():
+    endpoint = Endpoint(tenant_id=uuid.uuid4(), host_id="DESKTOP-042", risk_score=62, risk_level=RiskLevel.HIGH)
+
+    assert endpoint.host_id == "DESKTOP-042"
+    assert endpoint.risk_score == 62
+    assert endpoint.risk_level == RiskLevel.HIGH

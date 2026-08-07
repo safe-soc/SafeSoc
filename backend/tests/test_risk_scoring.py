@@ -2,13 +2,15 @@
 SafeSOC — Risk Scoring Service Tests
 """
 
+import uuid
 from datetime import datetime, timezone
 
 import pytest
 
 from app.core.config import settings
 from app.core.enums import RiskLevel
-from app.services.risk_scoring import calculate_risk_score
+from app.models.endpoint import Endpoint
+from app.services.risk_scoring import calculate_risk_score, recalculate_endpoint_score
 
 # Wednesday, business hours (08:00-18:00 UTC) -> not after-hours.
 _BUSINESS_HOURS = "2026-08-05T12:00:00+00:00"
@@ -209,3 +211,85 @@ def test_severity_weight_is_read_from_config_not_hardcoded(monkeypatch):
     result = calculate_risk_score([_alert(severity="low")], now=_now_at(_BUSINESS_HOURS))
 
     assert result.score == 99
+
+
+# ── SS-033: recalculate_endpoint_score (persistence) ────────────────
+
+
+class _FakeResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def scalar_one_or_none(self):
+        return self._rows[0] if self._rows else None
+
+
+class _FakeSession:
+    def __init__(self, existing_endpoints=None):
+        self.existing_endpoints: list[Endpoint] = list(existing_endpoints or [])
+        self.added: list = []
+        self.commit_count = 0
+
+    async def execute(self, stmt):
+        return _FakeResult(self.existing_endpoints)
+
+    def add(self, obj):
+        self.added.append(obj)
+
+    async def commit(self):
+        self.commit_count += 1
+        for obj in self.added:
+            if obj not in self.existing_endpoints:
+                self.existing_endpoints.append(obj)
+        self.added = []
+
+    async def refresh(self, obj):
+        pass
+
+
+def _alert_now(severity="critical") -> dict:
+    """An alert timestamped at the real current moment, so calculate_risk_score's
+    default now=datetime.now(timezone.utc) applies zero decay regardless of
+    when the test suite happens to run (unlike _alert()'s fixed _BUSINESS_HOURS)."""
+    return _alert(severity=severity, timestamp=datetime.now(timezone.utc).isoformat())
+
+
+@pytest.mark.asyncio
+async def test_recalculate_endpoint_score_creates_a_new_endpoint_when_none_exists():
+    session = _FakeSession()
+    tenant_id = uuid.uuid4()
+
+    endpoint = await recalculate_endpoint_score(session, tenant_id, "DESKTOP-042", [_alert_now()])
+
+    assert endpoint.tenant_id == tenant_id
+    assert endpoint.host_id == "DESKTOP-042"
+    # >= rather than an exact number: a real "now" may or may not land in the
+    # after-hours bonus window depending on when the suite happens to run.
+    assert endpoint.risk_score >= settings.RISK_SCORE_CRITICAL
+    assert session.commit_count == 1
+
+
+@pytest.mark.asyncio
+async def test_recalculate_endpoint_score_updates_an_existing_endpoint_in_place():
+    tenant_id = uuid.uuid4()
+    existing = Endpoint(id=uuid.uuid4(), tenant_id=tenant_id, host_id="DESKTOP-042", risk_score=5, risk_level=RiskLevel.LOW)
+    session = _FakeSession(existing_endpoints=[existing])
+
+    endpoint = await recalculate_endpoint_score(session, tenant_id, "DESKTOP-042", [_alert_now()])
+
+    assert endpoint.id == existing.id
+    assert endpoint.risk_score != 5  # updated from the stale value
+    assert endpoint.risk_score >= settings.RISK_SCORE_CRITICAL
+    assert len(session.existing_endpoints) == 1  # updated in place, not duplicated
+
+
+@pytest.mark.asyncio
+async def test_recalculate_endpoint_score_reflects_zero_alerts_as_zero_risk():
+    tenant_id = uuid.uuid4()
+    existing = Endpoint(id=uuid.uuid4(), tenant_id=tenant_id, host_id="DESKTOP-042", risk_score=80, risk_level=RiskLevel.CRITICAL)
+    session = _FakeSession(existing_endpoints=[existing])
+
+    endpoint = await recalculate_endpoint_score(session, tenant_id, "DESKTOP-042", [])
+
+    assert endpoint.risk_score == 0
+    assert endpoint.risk_level == RiskLevel.LOW

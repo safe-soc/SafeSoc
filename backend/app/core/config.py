@@ -133,6 +133,11 @@ class Settings(BaseSettings):
     RISK_SCORE_MITRE_BONUS: int = 20
     RISK_TIME_DECAY_PER_HOUR: float = 0.04
 
+    # How often the scheduled recalculation task (SS-033) re-scores every
+    # known endpoint, and how far back it looks for alerts when doing so.
+    RISK_RECALC_INTERVAL_MINUTES: int = 15
+    RISK_RECALC_LOOKBACK_HOURS: int = 24
+
     # ──────────────────────────────────────────────
     # Anomaly Detection
     # ──────────────────────────────────────────────

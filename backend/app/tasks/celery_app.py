@@ -16,7 +16,7 @@ celery_app = Celery(
     # imported (and their @celery_app.task-decorated functions registered)
     # — otherwise a task is queueable from the producer side (which imports
     # it directly) but silently unknown to the worker.
-    include=["app.tasks.enrichment", "app.workers.correlation_worker"],
+    include=["app.tasks.enrichment", "app.tasks.scoring", "app.workers.correlation_worker"],
 )
 
 # A hung (not just refused) broker connection would silently defeat ADR-005's
@@ -29,6 +29,17 @@ celery_app.conf.broker_connection_retry_on_startup = False
 celery_app.conf.broker_connection_max_retries = 0
 celery_app.conf.broker_transport_options = {"socket_connect_timeout": 2, "socket_timeout": 2}
 celery_app.conf.result_backend_transport_options = {"socket_connect_timeout": 2, "socket_timeout": 2}
+
+# Periodic risk recalculation (SS-033) — requires a `celery beat` process
+# running alongside the worker (docker-compose.yml's `beat` service) to
+# actually dispatch this on schedule; the worker process alone only
+# executes tasks, it doesn't schedule them.
+celery_app.conf.beat_schedule = {
+    "recalculate-risk-scores": {
+        "task": "app.tasks.scoring.recalculate_all_risk_scores",
+        "schedule": settings.RISK_RECALC_INTERVAL_MINUTES * 60,
+    },
+}
 
 
 @celery_app.task(name="app.tasks.celery_app.ping")

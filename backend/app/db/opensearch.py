@@ -231,6 +231,40 @@ async def search_alerts(
     }
 
 
+async def get_known_endpoints(timerange_hours: int = 24) -> list[dict]:
+    """
+    Discover every distinct (tenant_id, host_id) pair with at least one
+    alert in the lookback window, across all tenants — "known endpoints"
+    for the scheduled risk recalculation task (SS-033) to re-score.
+    Uses a nested terms aggregation since this is a distinct-pairs
+    discovery query, not a per-tenant document search like search_alerts.
+    """
+    client = get_client()
+
+    query = {
+        "size": 0,
+        "query": {"range": {"timestamp": {"gte": f"now-{timerange_hours}h", "lte": "now"}}},
+        "aggs": {
+            "by_tenant": {
+                "terms": {"field": "tenant_id", "size": 10000},
+                "aggs": {
+                    "by_host": {"terms": {"field": "host_id", "size": 10000}},
+                },
+            },
+        },
+    }
+
+    response = client.search(index="safesoc-alerts-*", body=query)
+
+    endpoints = []
+    for tenant_bucket in response["aggregations"]["by_tenant"]["buckets"]:
+        tenant_id = tenant_bucket["key"]
+        for host_bucket in tenant_bucket["by_host"]["buckets"]:
+            endpoints.append({"tenant_id": tenant_id, "host_id": host_bucket["key"]})
+
+    return endpoints
+
+
 async def get_cloud_summary(tenant_id: str, timerange_hours: int = 24) -> dict:
     """
     Aggregate stats for cloud-sourced (CloudLens) alerts: total count,

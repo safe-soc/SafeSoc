@@ -10,6 +10,7 @@ class Base(DeclarativeBase):
     pass
 
 
+from app.models.endpoint import Endpoint  # noqa: E402,F401
 from app.models.incident import Incident, IncidentNote, IncidentStateTransition  # noqa: E402,F401
 from app.models.tenant import Tenant  # noqa: E402,F401
 from app.models.ti_cache import TICache  # noqa: E402,F401

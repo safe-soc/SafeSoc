@@ -2,7 +2,8 @@
 SafeSOC — Risk Scoring Service
 Computes a 0-100 risk score for a host from its recent alerts, using
 the weight constants already defined in core/config.py, mapped to one
-of four risk levels per SRS §3.3.
+of four risk levels per SRS §3.3. Also persists a host's current score
+(SS-033) to the endpoints table.
 
 Formula: each alert contributes severity-weighted base points, plus
 bonuses for a TI-confirmed malicious indicator, an anomaly detection
@@ -13,12 +14,17 @@ is decayed by how long it's been since the host's *most recent* alert
 score, not each alert individually — and capped at 100.
 """
 
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.config import settings
 from app.core.enums import RiskLevel, Severity
+from app.models.endpoint import Endpoint
 
 
 @dataclass(frozen=True)
@@ -103,3 +109,27 @@ def calculate_risk_score(alerts: list[dict], *, now: Optional[datetime] = None) 
 
     score = min(100, round(raw * decay_factor))
     return RiskScore(score=score, level=_level_for_score(score))
+
+
+async def recalculate_endpoint_score(
+    db: AsyncSession, tenant_id: uuid.UUID, host_id: str, alerts: list[dict]
+) -> Endpoint:
+    """
+    Compute a host's current risk score and persist it (upsert into the
+    endpoints table, unique per tenant_id+host_id) — the write side of
+    the scheduled recalculation task (SS-033).
+    """
+    risk = calculate_risk_score(alerts)
+
+    result = await db.execute(select(Endpoint).where(Endpoint.tenant_id == tenant_id, Endpoint.host_id == host_id))
+    endpoint = result.scalar_one_or_none()
+
+    if endpoint is None:
+        endpoint = Endpoint(tenant_id=tenant_id, host_id=host_id)
+        db.add(endpoint)
+
+    endpoint.risk_score = risk.score
+    endpoint.risk_level = risk.level
+    await db.commit()
+    await db.refresh(endpoint)
+    return endpoint
