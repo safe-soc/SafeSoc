@@ -164,6 +164,30 @@ def _extract_host_id(query: str) -> Optional[str]:
     return match.group(0) if match else None
 
 
+# Conversational noise (greetings, acknowledgements, sign-offs) is
+# *also* unclassifiable by _INTENT_KEYWORDS — indistinguishable, by
+# keyword score alone, from a genuine topic-less follow-up like "what
+# about yesterday?" (SS-046's own worked example). Without this list,
+# resolve_query() below treated both cases identically and silently
+# re-answered a bare "Hello" with whatever the previous turn's topic
+# was (reported live, reproduced in tests/test_investigation.py).
+# Matched as a whole-string comparison (after trimming and dropping
+# trailing punctuation), not a substring — so it only catches a
+# message that *is* one of these, not one that merely contains "hi".
+_CONVERSATIONAL_NOISE = frozenset({
+    "hi", "hello", "hey", "hiya", "yo",
+    "thanks", "thank you", "thx", "ty",
+    "ok", "okay", "k", "sure", "cool", "great", "nice",
+    "yes", "no", "yep", "yeah", "nope",
+    "bye", "goodbye", "see you", "later",
+})
+
+
+def _is_conversational_noise(query: str) -> bool:
+    normalized = query.strip().lower().rstrip("!.?,")
+    return normalized in _CONVERSATIONAL_NOISE
+
+
 async def resolve_query(tenant_id: str, session_id: str, query: str) -> tuple[Intent, dict]:
     """
     Classify `query` and resolve it against this session's prior
@@ -179,21 +203,28 @@ async def resolve_query(tenant_id: str, session_id: str, query: str) -> tuple[In
     yesterday?" to have something to inherit). A query that *doesn't*
     classify on its own, with context available from a still-live
     session, inherits the previous turn's intent and parameters
-    wholesale instead. Resolving other new entities in a follow-up
-    (e.g. turning "yesterday" into an actual date range) is
-    intentionally out of scope — SS-044 classifies intent, not
-    entities, and this issue is about carrying context forward, not
-    general natural-language date/entity extraction.
+    wholesale instead — *unless* it's recognizable conversational
+    noise (a bare greeting/thanks/etc.), which is answered as
+    Intent.UNKNOWN without disturbing the saved context, so a later
+    real follow-up can still resolve against the actual prior topic.
+    Resolving other new entities in a follow-up (e.g. turning
+    "yesterday" into an actual date range) is intentionally out of
+    scope — SS-044 classifies intent, not entities, and this issue is
+    about carrying context forward, not general natural-language
+    date/entity extraction.
 
-    The resolved (intent, params) becomes the new saved context, so a
-    chain of follow-ups keeps building on the same subject.
+    The resolved (intent, params) becomes the new saved context (noise
+    turns excepted, per above), so a chain of follow-ups keeps building
+    on the same subject.
     """
     intent = classify_intent(query)
     previous = await get_context(tenant_id, session_id)
 
-    if intent == Intent.UNKNOWN and previous is not None:
+    if intent == Intent.UNKNOWN and previous is not None and not _is_conversational_noise(query):
         intent = previous.intent
         params = dict(previous.params)
+    elif intent == Intent.UNKNOWN:
+        return intent, {}
     else:
         params = {}
         host_id = _extract_host_id(query)

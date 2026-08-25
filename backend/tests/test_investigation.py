@@ -253,3 +253,66 @@ async def test_a_fresh_turn_naming_no_host_has_empty_params(fake_redis):
 
     assert intent == Intent.RISKY_ENDPOINTS
     assert params == {}
+
+
+# ── Regression: conversational noise must not inherit stale context ──
+#
+# Reported live: asking "Which user has the most amount of failed
+# logins?" then sending "Hello" made the assistant answer "Hello" with
+# the *previous* turn's auth-failures result. Root cause traced to
+# resolve_query()'s follow-up-inheritance condition
+# (`if intent == Intent.UNKNOWN and previous is not None`) being true
+# for *any* unclassifiable text with a live session — not just genuine
+# topic-less follow-ups like "what about yesterday?" (SS-046's own
+# worked example), which is indistinguishable from a greeting purely
+# by keyword score. Confirmed via a live browser repro (Network tab:
+# exactly one POST /api/v1/investigate per message, each with the
+# correct query text — so this is a backend resolution bug, not a
+# frontend duplicate-request or duplicate-render bug).
+
+@pytest.mark.asyncio
+async def test_a_greeting_after_a_real_query_does_not_inherit_the_previous_intent(fake_redis):
+    """The exact live reproduction: a real query, then a bare greeting."""
+    intent1, _ = await resolve_query("tenant-a", "session-1", "Which user has the most amount of failed logins?")
+    assert intent1 == Intent.AUTH_FAILURES  # sanity check: matches what was actually observed live
+
+    intent2, params2 = await resolve_query("tenant-a", "session-1", "Hello")
+
+    assert intent2 == Intent.UNKNOWN
+    assert params2 == {}
+
+
+@pytest.mark.asyncio
+async def test_common_conversational_noise_never_inherits_context(fake_redis):
+    await resolve_query("tenant-a", "session-1", "Show failed logins for host DESKTOP-042")
+
+    for noise in ["hi", "hey", "thanks", "thank you", "ok", "okay", "bye", "Hello!"]:
+        intent, params = await resolve_query("tenant-a", "session-1", noise)
+        assert intent == Intent.UNKNOWN, f"{noise!r} incorrectly inherited context"
+        assert params == {}
+
+
+@pytest.mark.asyncio
+async def test_a_greeting_does_not_clobber_saved_context_for_a_later_real_follow_up(fake_redis):
+    """
+    A greeting sent mid-conversation shouldn't erase the ability for a
+    *later*, genuine follow-up to still resolve against the real topic.
+    """
+    await resolve_query("tenant-a", "session-1", "Show failed logins for host DESKTOP-042")
+    await resolve_query("tenant-a", "session-1", "Hello")
+
+    intent, params = await resolve_query("tenant-a", "session-1", "What about yesterday?")
+
+    assert intent == Intent.AUTH_FAILURES
+    assert params == {"host_id": "DESKTOP-042"}
+
+
+@pytest.mark.asyncio
+async def test_a_genuine_topic_less_follow_up_still_inherits_context_as_before(fake_redis):
+    """Non-regression: SS-046's own worked example must keep working."""
+    await resolve_query("tenant-a", "session-1", "Show failed logins for host DESKTOP-042")
+
+    intent, params = await resolve_query("tenant-a", "session-1", "What about yesterday?")
+
+    assert intent == Intent.AUTH_FAILURES
+    assert params == {"host_id": "DESKTOP-042"}
