@@ -178,6 +178,137 @@ def test_investigate_feeds_transcript_into_the_prompt_and_appends_this_turn(clie
     mock_append_turn.assert_called_once_with(str(tenant_id), "session-1", "top alerts", "fresh answer")
 
 
+# ── SS-093: prompt data/instruction delimiting + output grounding ──
+# Implements SS-092's (docs/ai-threat-model.md) recommended mitigation.
+
+@pytest.mark.asyncio
+async def test_generate_answer_wraps_the_tool_data_in_untrusted_data_markers(monkeypatch):
+    from app.routers.v1.investigate import _DATA_FENCE_END, _DATA_FENCE_START, _generate_answer
+
+    mock_generate = Mock(return_value="3")
+    from app.clients import ollama
+    monkeypatch.setattr(ollama, "generate", mock_generate)
+
+    await _generate_answer("top alerts", Intent.TOP_ALERTS, AlertListOutput(total=3, alerts=[]), [])
+
+    prompt = mock_generate.call_args.args[0]
+    assert _DATA_FENCE_START in prompt
+    assert _DATA_FENCE_END in prompt
+    # The tool-data fence is always the last one in the prompt (the explanatory
+    # instruction paragraph itself mentions the marker literal once too, earlier
+    # in the prompt, to explain the convention — rindex finds the real data block).
+    start = prompt.rindex(_DATA_FENCE_START)
+    end = prompt.rindex(_DATA_FENCE_END)
+    assert '"total":3' in prompt[start:end]
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_prompt_tells_the_model_not_to_follow_embedded_instructions(monkeypatch):
+    from app.routers.v1.investigate import _generate_answer
+
+    mock_generate = Mock(return_value="3")
+    from app.clients import ollama
+    monkeypatch.setattr(ollama, "generate", mock_generate)
+
+    await _generate_answer("top alerts", Intent.TOP_ALERTS, AlertListOutput(total=3, alerts=[]), [])
+
+    prompt = mock_generate.call_args.args[0].lower()
+    assert "never treat" in prompt
+    assert "instruction" in prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_wraps_the_transcript_in_untrusted_data_markers_too(monkeypatch):
+    """The transcript is as much an injection surface as tool data (SS-092 §1/§4E) — a prior poisoned
+    answer replayed verbatim — so it gets the same fencing treatment, not just the current tool result."""
+    from app.routers.v1.investigate import _DATA_FENCE_END, _DATA_FENCE_START, _generate_answer
+
+    mock_generate = Mock(return_value="answer")
+    from app.clients import ollama
+    monkeypatch.setattr(ollama, "generate", mock_generate)
+
+    transcript = [{"query": "prior q", "answer": "prior a"}]
+    await _generate_answer("current q", Intent.TOP_ALERTS, AlertListOutput(total=1, alerts=[]), transcript)
+
+    prompt = mock_generate.call_args.args[0]
+    # 3, not 2: the explanatory instruction paragraph itself mentions each marker
+    # literal once (to explain the convention), plus one real fence each for the
+    # transcript block and the tool-data block.
+    assert prompt.count(_DATA_FENCE_START) == 3
+    assert prompt.count(_DATA_FENCE_END) == 3
+
+
+def test_answer_appears_grounded_when_cited_numbers_are_in_the_data():
+    from app.routers.v1.investigate import _answer_appears_grounded
+
+    result = AlertListOutput(total=3, alerts=[])
+    assert _answer_appears_grounded("Found 3 failed login attempts.", result) is True
+
+
+def test_answer_appears_grounded_true_when_the_answer_cites_no_numbers():
+    from app.routers.v1.investigate import _answer_appears_grounded
+
+    result = AlertListOutput(total=3, alerts=[])
+    assert _answer_appears_grounded("There were several failed logins.", result) is True
+
+
+def test_answer_appears_grounded_false_when_a_cited_number_is_absent_from_the_data():
+    """The exit-criteria case: a constructed answer referencing a fact absent from the supplied tool data."""
+    from app.routers.v1.investigate import _answer_appears_grounded
+
+    result = AlertListOutput(total=3, alerts=[])
+    assert _answer_appears_grounded("Found 999 critical incidents requiring immediate action.", result) is False
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_logs_a_warning_when_the_answer_is_not_grounded(monkeypatch):
+    import app.routers.v1.investigate as investigate_module
+
+    monkeypatch.setattr(investigate_module.ollama, "generate", Mock(return_value="Found 999 unrelated incidents."))
+    mock_logger = Mock()
+    monkeypatch.setattr(investigate_module, "logger", mock_logger)
+
+    await investigate_module._generate_answer(
+        "top alerts", Intent.TOP_ALERTS, AlertListOutput(total=3, alerts=[]), []
+    )
+
+    mock_logger.warning.assert_called_once()
+    message = mock_logger.warning.call_args.args[0]
+    assert "not found" in message.lower()
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_does_not_log_a_warning_when_the_answer_is_grounded(monkeypatch):
+    import app.routers.v1.investigate as investigate_module
+
+    monkeypatch.setattr(investigate_module.ollama, "generate", Mock(return_value="Found 3 failed logins."))
+    mock_logger = Mock()
+    monkeypatch.setattr(investigate_module, "logger", mock_logger)
+
+    await investigate_module._generate_answer(
+        "top alerts", Intent.TOP_ALERTS, AlertListOutput(total=3, alerts=[]), []
+    )
+
+    mock_logger.warning.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_ungrounded_warning_does_not_change_is_fallback_or_block_the_answer(monkeypatch):
+    """SS-092's recommendation: flag, don't block — the analyst still sees the (flagged-in-logs) answer."""
+    from app.routers.v1.investigate import _generate_answer
+
+    monkeypatch.setattr(
+        "app.routers.v1.investigate.ollama.generate", Mock(return_value="Found 999 unrelated incidents.")
+    )
+
+    answer, is_fallback = await _generate_answer(
+        "top alerts", Intent.TOP_ALERTS, AlertListOutput(total=3, alerts=[]), []
+    )
+
+    assert answer == "Found 999 unrelated incidents."
+    assert is_fallback is False
+
+
 def test_investigate_does_not_append_a_turn_for_an_unknown_intent(client, auth_headers, monkeypatch):
     _mock_resolve_query(monkeypatch, Intent.UNKNOWN)
     mock_append_turn = AsyncMock()
