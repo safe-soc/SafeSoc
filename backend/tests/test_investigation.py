@@ -320,6 +320,115 @@ async def test_a_genuine_topic_less_follow_up_still_inherits_context_as_before(f
     assert params == {"host_id": "DESKTOP-042"}
 
 
+# ── SS-089: broader follow-up entity extraction ────────────────────
+
+def test_extract_entities_finds_an_ip_address():
+    assert investigation._extract_entities("What activity came from IP 45.33.32.156?") == {"ip": "45.33.32.156"}
+
+
+def test_extract_entities_finds_a_named_user():
+    assert investigation._extract_entities("Show activity for user admin") == {"user": "admin"}
+    # This phrasing also names a relative-time phrase ("today") — both are legitimately extracted.
+    assert investigation._extract_entities("What did user john.doe do today?") == {
+        "user": "john.doe", "timerange_hours": 24
+    }
+
+
+def test_extract_entities_does_not_mistake_a_question_word_for_a_username():
+    """
+    Regression, found while designing the extractor: 'Which user HAS...'
+    naively captures 'has' as if it were a username. The fix rejects a
+    small set of auxiliary/question words that can follow "user"
+    without naming anyone.
+    """
+    assert "user" not in investigation._extract_entities("Which user has the most failed logins?")
+    assert "user" not in investigation._extract_entities("What did this user do on DESKTOP-042?")
+
+
+def test_extract_entities_finds_a_severity_word():
+    assert investigation._extract_entities("Show me critical alerts") == {"severity": "critical"}
+
+
+def test_extract_entities_does_not_match_severity_inside_a_longer_word():
+    """'highest' must not be mistaken for the severity 'high' — word-boundary matching."""
+    assert investigation._extract_entities("What are the highest priority alerts?") == {}
+
+
+def test_extract_entities_finds_a_relative_time_phrase():
+    assert investigation._extract_entities("Show failed logins from the last hour") == {"timerange_hours": 1}
+    assert investigation._extract_entities("What happened today?") == {"timerange_hours": 24}
+    assert investigation._extract_entities("Anything this week?") == {"timerange_hours": 24 * 7}
+
+
+def test_extract_entities_finds_a_numeric_relative_time_phrase():
+    assert investigation._extract_entities("Show alerts from the last 6 hours") == {"timerange_hours": 6}
+    assert investigation._extract_entities("What happened in the past 12 hours?") == {"timerange_hours": 12}
+
+
+def test_extract_entities_does_not_resolve_yesterday():
+    """
+    'yesterday' doesn't map onto timerange_hours' "last N hours from
+    now" semantics without silently including today too — it must stay
+    unresolved rather than become a wrong guess.
+    """
+    assert investigation._extract_entities("What about yesterday?") == {}
+
+
+def test_extract_entities_returns_empty_for_a_query_naming_no_entities():
+    assert investigation._extract_entities("Which endpoints are riskiest right now?") == {}
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_turn_naming_an_ip_captures_it(fake_redis):
+    intent, params = await resolve_query("tenant-a", "session-1", "What activity came from IP 45.33.32.156?")
+
+    assert intent == Intent.IP_ACTIVITY
+    assert params["ip"] == "45.33.32.156"
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_turn_naming_a_severity_captures_it(fake_redis):
+    intent, params = await resolve_query("tenant-a", "session-1", "Show me the most critical alerts")
+
+    assert intent == Intent.TOP_ALERTS
+    assert params == {"severity": "critical"}
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_naming_a_new_severity_overrides_the_inherited_one(fake_redis):
+    await resolve_query("tenant-a", "session-1", "Show me the most critical alerts")
+
+    intent, params = await resolve_query("tenant-a", "session-1", "What about high severity ones?")
+
+    assert intent == Intent.TOP_ALERTS
+    assert params["severity"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_naming_a_user_adds_it_to_the_inherited_params(fake_redis):
+    await resolve_query("tenant-a", "session-1", "Show failed logins for host DESKTOP-042")
+
+    intent, params = await resolve_query("tenant-a", "session-1", "What about for user admin?")
+
+    assert intent == Intent.AUTH_FAILURES
+    assert params == {"host_id": "DESKTOP-042", "user": "admin"}
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_with_an_unresolvable_time_phrase_still_inherits_intent_only(fake_redis):
+    """
+    SS-089-specific regression: 'yesterday' must still degrade to
+    intent-only inheritance (SS-046's existing behavior), not a wrong-
+    guess timerange_hours.
+    """
+    await resolve_query("tenant-a", "session-1", "Show failed logins for host DESKTOP-042")
+
+    intent, params = await resolve_query("tenant-a", "session-1", "What about yesterday?")
+
+    assert intent == Intent.AUTH_FAILURES
+    assert params == {"host_id": "DESKTOP-042"}
+
+
 # ── SS-087: bounded conversation transcript ────────────────────────
 
 @pytest.mark.asyncio

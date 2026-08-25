@@ -200,6 +200,106 @@ def _extract_host_id(query: str) -> Optional[str]:
     return match.group(0) if match else None
 
 
+# ── SS-089: broader follow-up entity extraction ────────────────────
+# Deliberately narrow and pattern-based, matching _extract_host_id's
+# own philosophy (SS-046) — a small set of unambiguous, deterministic
+# patterns, not a general NLP/NER extractor. A phrase this can't
+# confidently resolve (e.g. "yesterday" — see _RELATIVE_TIME_PHRASES
+# below) is left unresolved rather than mapped to a wrong guess.
+# Every tool's Pydantic input model silently ignores params keys it
+# doesn't declare (confirmed empirically), so these run unconditionally
+# regardless of the query's classified intent — no per-intent
+# special-casing needed.
+
+# "user X" captures X as a candidate username — but "user" is just as
+# often followed by a question word about an *unspecified* user ("which
+# user HAS...", "what did this user DO...") as by an actual name. A
+# denylist on the captured token (not on what precedes "user", which
+# proved too easy to bypass — e.g. "Which user has...") catches that:
+# only a handful of common auxiliary/question words can follow "user"
+# in a way that isn't naming someone.
+_USER_PATTERN = re.compile(r"\buser\s+([A-Za-z][\w.\-]*)", re.IGNORECASE)
+_USER_STOPWORDS = frozenset({
+    "has", "have", "had", "is", "are", "was", "were",
+    "do", "does", "did", "can", "could", "will", "would", "should",
+    "activity", "status",
+})
+
+
+def _extract_user(query: str) -> Optional[str]:
+    match = _USER_PATTERN.search(query)
+    if match is None:
+        return None
+    candidate = match.group(1)
+    return None if candidate.lower() in _USER_STOPWORDS else candidate
+
+
+_SEVERITY_PATTERN = re.compile(r"\b(critical|high|medium|low)\b", re.IGNORECASE)
+
+
+def _extract_severity(query: str) -> Optional[str]:
+    match = _SEVERITY_PATTERN.search(query)
+    return match.group(1).lower() if match else None
+
+
+# Only phrases that map unambiguously onto "look back N hours from
+# now" — the tools' actual timerange_hours semantics. Deliberately
+# excludes anything needing a bounded historical window instead (e.g.
+# "yesterday" means a specific past day, not "the last 48 hours",
+# which would silently include today too) — mapping those anyway would
+# be a wrong guess presented as a resolved answer, not a fallback.
+_RELATIVE_TIME_PHRASES: tuple[tuple[str, int], ...] = (
+    ("last hour", 1),
+    ("past hour", 1),
+    ("today", 24),
+    ("last week", 24 * 7),
+    ("past week", 24 * 7),
+    ("this week", 24 * 7),
+)
+_RELATIVE_TIME_HOURS_PATTERN = re.compile(r"\b(?:last|past)\s+(\d+)\s+hours?\b", re.IGNORECASE)
+
+
+def _extract_timerange_hours(query: str) -> Optional[int]:
+    numeric_match = _RELATIVE_TIME_HOURS_PATTERN.search(query)
+    if numeric_match:
+        return int(numeric_match.group(1))
+
+    normalized = query.lower()
+    for phrase, hours in _RELATIVE_TIME_PHRASES:
+        if phrase in normalized:
+            return hours
+    return None
+
+
+def _extract_entities(query: str) -> dict:
+    """
+    Best-effort extraction of ip/user/severity/timerange_hours from a
+    query's own text. Returns only the keys it actually found — the
+    caller merges this into whatever params already exist (empty on a
+    fresh turn, inherited on a follow-up), so an entity this can't
+    resolve is simply absent rather than guessed.
+    """
+    entities: dict = {}
+
+    ip_match = _IP_PATTERN.search(query)
+    if ip_match:
+        entities["ip"] = ip_match.group(0)
+
+    user = _extract_user(query)
+    if user:
+        entities["user"] = user
+
+    severity = _extract_severity(query)
+    if severity:
+        entities["severity"] = severity
+
+    timerange_hours = _extract_timerange_hours(query)
+    if timerange_hours is not None:
+        entities["timerange_hours"] = timerange_hours
+
+    return entities
+
+
 # Conversational noise (greetings, acknowledgements, sign-offs) is
 # *also* unclassifiable by _INTENT_KEYWORDS — indistinguishable, by
 # keyword score alone, from a genuine topic-less follow-up like "what
@@ -243,11 +343,16 @@ async def resolve_query(tenant_id: str, session_id: str, query: str) -> tuple[In
     noise (a bare greeting/thanks/etc.), which is answered as
     Intent.UNKNOWN without disturbing the saved context, so a later
     real follow-up can still resolve against the actual prior topic.
-    Resolving other new entities in a follow-up (e.g. turning
-    "yesterday" into an actual date range) is intentionally out of
-    scope — SS-044 classifies intent, not entities, and this issue is
-    about carrying context forward, not general natural-language
-    date/entity extraction.
+    Beyond host_id, a query's own text is also scanned for a handful of
+    other entities (SS-089) — an IP address, a "user X" mention, a
+    severity word, or a small set of unambiguous relative-time phrases
+    ("last hour", "today", "last N hours", ...) — on both a fresh turn
+    and a follow-up, merging into (and, on collision, overriding) the
+    inherited params. This is still deliberately narrow pattern
+    matching, not general NLP/date parsing: a phrase it can't
+    confidently resolve (e.g. "yesterday", which doesn't map onto the
+    tools' "last N hours from now" semantics without silently including
+    today too) is left unresolved rather than mapped to a wrong guess.
 
     The resolved (intent, params) becomes the new saved context (noise
     turns excepted, per above), so a chain of follow-ups keeps building
@@ -261,6 +366,7 @@ async def resolve_query(tenant_id: str, session_id: str, query: str) -> tuple[In
     if intent == Intent.UNKNOWN and previous is not None and not _is_conversational_noise(query):
         intent = previous.intent
         params = dict(previous.params)
+        params.update(_extract_entities(query))
     elif intent == Intent.UNKNOWN:
         return intent, {}
     else:
@@ -268,6 +374,7 @@ async def resolve_query(tenant_id: str, session_id: str, query: str) -> tuple[In
         host_id = _extract_host_id(query)
         if host_id:
             params["host_id"] = host_id
+        params.update(_extract_entities(query))
 
     transcript = previous.transcript if previous is not None else []
     await save_context(tenant_id, session_id, intent, params, transcript)
