@@ -75,6 +75,12 @@ class InvalidStateTransitionError(SafeSOCError):
         )
 
 
+class AssigneeNotFoundError(SafeSOCError):
+    """Raised when an incident assignment names a user who doesn't exist, or exists but belongs to a different tenant (SS-095) — same indistinguishable-404 pattern as IncidentNotFoundError."""
+    def __init__(self, user_id):
+        super().__init__(f"Assignee '{user_id}' not found.", status_code=404)
+
+
 class RateLimitExceededError(SafeSOCError):
     """Raised when a caller exceeds an endpoint's configured rate limit."""
     def __init__(self, message: str = "Too many attempts. Please try again later."):

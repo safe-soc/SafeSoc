@@ -16,8 +16,9 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.enums import CorrelationPattern, IncidentStatus
-from app.core.exceptions import IncidentNotFoundError, InvalidStateTransitionError
+from app.core.exceptions import AssigneeNotFoundError, IncidentNotFoundError, InvalidStateTransitionError
 from app.models.incident import Incident, IncidentNote, IncidentStateTransition
+from app.models.user import User
 from app.services.correlation import DetectedChain
 
 # Incidents in either of these statuses are still "live" and eligible to
@@ -199,6 +200,33 @@ async def transition_incident(
             changed_by_user_id=changed_by_user_id,
         )
     )
+    await db.commit()
+    await db.refresh(incident)
+    return incident
+
+
+async def assign_incident(
+    db: AsyncSession, tenant_id: uuid.UUID, incident_id: uuid.UUID, assignee_user_id: uuid.UUID
+) -> Incident:
+    """
+    Assign an incident to an analyst within the same tenant (SS-095) —
+    closes the gap where Incident.assigned_analyst_id has existed on
+    the model since SS-035 but no endpoint could ever set it.
+
+    Raises:
+        IncidentNotFoundError: via get_incident.
+        AssigneeNotFoundError: if assignee_user_id doesn't exist, or
+        exists but belongs to a different tenant — indistinguishable,
+        same reasoning as IncidentNotFoundError: a caller can't use
+        this to probe whether a user id exists in another tenant.
+    """
+    incident = await get_incident(db, tenant_id, incident_id)
+
+    result = await db.execute(select(User).where(User.id == assignee_user_id, User.tenant_id == tenant_id))
+    if result.scalar_one_or_none() is None:
+        raise AssigneeNotFoundError(assignee_user_id)
+
+    incident.assigned_analyst_id = assignee_user_id
     await db.commit()
     await db.refresh(incident)
     return incident

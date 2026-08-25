@@ -33,6 +33,16 @@ class IncidentTransitionRequest(BaseModel):
     }
 
 
+class IncidentAssignRequest(BaseModel):
+    assignee_user_id: uuid.UUID
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {"assignee_user_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"},
+        }
+    }
+
+
 class IncidentResponse(BaseModel):
     id: uuid.UUID
     tenant_id: uuid.UUID

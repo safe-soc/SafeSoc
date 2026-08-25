@@ -24,6 +24,7 @@ from app.db.postgresql import get_db
 from app.models.incident import Incident, IncidentNote
 from app.schemas.incidents import (
     AlertLinkRequest,
+    IncidentAssignRequest,
     IncidentCreateRequest,
     IncidentListResponse,
     IncidentNoteCreateRequest,
@@ -33,6 +34,7 @@ from app.schemas.incidents import (
 )
 from app.services.incidents import (
     add_note,
+    assign_incident,
     create_incident,
     get_incident,
     link_alert,
@@ -124,6 +126,18 @@ async def transition(
     incident = await transition_incident(
         db, current_user.tenant_id, incident_id, payload.to_status, current_user.user_id
     )
+    return _to_response(incident)
+
+
+@router.post("/{incident_id}/assign", response_model=IncidentResponse)
+async def assign(
+    incident_id: uuid.UUID,
+    payload: IncidentAssignRequest,
+    current_user: CurrentUser = Depends(require_role(UserRole.ANALYST)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Assign an incident to an analyst within the authenticated tenant."""
+    incident = await assign_incident(db, current_user.tenant_id, incident_id, payload.assignee_user_id)
     return _to_response(incident)
 
 

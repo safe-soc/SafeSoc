@@ -7,12 +7,14 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.core.enums import CorrelationPattern, IncidentStatus
-from app.core.exceptions import IncidentNotFoundError, InvalidStateTransitionError
+from app.core.enums import CorrelationPattern, IncidentStatus, UserRole
+from app.core.exceptions import AssigneeNotFoundError, IncidentNotFoundError, InvalidStateTransitionError
 from app.models.incident import Incident, IncidentNote, IncidentStateTransition
+from app.models.user import User
 from app.services.correlation import DetectedChain
 from app.services.incidents import (
     add_note,
+    assign_incident,
     create_incident,
     create_or_merge_incident,
     get_incident,
@@ -57,9 +59,10 @@ class _FakeSession:
     same as a real DB round-trip would.
     """
 
-    def __init__(self, existing_incidents=None, existing_notes=None):
+    def __init__(self, existing_incidents=None, existing_notes=None, existing_users=None):
         self.existing_incidents: list[Incident] = list(existing_incidents or [])
         self.existing_notes: list[IncidentNote] = list(existing_notes or [])
+        self.existing_users: list[User] = list(existing_users or [])
         self.added: list = []
         self.all_added: list = []  # never cleared, for test inspection
         self.commit_count = 0
@@ -68,14 +71,15 @@ class _FakeSession:
     async def execute(self, stmt, params=None):
         # Also receives the pg_advisory_xact_lock() call; this fake has no
         # real concurrency to serialize, so it's a no-op that still returns
-        # a result shaped like the incidents/notes SELECT for the real
-        # query. select(IncidentNote) is routed to existing_notes so
-        # list_notes sees notes, not incidents, by inspecting what entity
-        # the statement targets (a real query has no such ambiguity).
+        # a result shaped like the incidents/notes/users SELECT for the
+        # real query, routed by inspecting what entity the statement
+        # targets (a real query has no such ambiguity).
         self.execute_params.append(params)
         target = getattr(stmt, "column_descriptions", [{}])[0].get("type") if hasattr(stmt, "column_descriptions") else None
         if target is IncidentNote:
             return _FakeResult(self.existing_notes)
+        if target is User:
+            return _FakeResult(self.existing_users)
         return _FakeResult(self.existing_incidents)
 
     def add(self, obj):
@@ -429,6 +433,62 @@ async def test_transition_raises_not_found_for_a_missing_incident():
 
     with pytest.raises(IncidentNotFoundError):
         await transition_incident(session, tenant_id, uuid.uuid4(), IncidentStatus.INVESTIGATING)
+
+
+# ── SS-095: incident assignment ─────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_assign_incident_sets_the_assigned_analyst_id():
+    tenant_id = uuid.uuid4()
+    analyst = User(id=uuid.uuid4(), tenant_id=tenant_id, email="analyst@acme.example", password_hash="x", role=UserRole.ANALYST)
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1"])
+    session = _FakeSession(existing_incidents=[existing], existing_users=[analyst])
+
+    incident = await assign_incident(session, tenant_id, existing.id, analyst.id)
+
+    assert incident.assigned_analyst_id == analyst.id
+    assert session.commit_count == 1
+
+
+@pytest.mark.asyncio
+async def test_assign_incident_raises_not_found_for_a_missing_incident():
+    session = _FakeSession()
+    tenant_id = uuid.uuid4()
+
+    with pytest.raises(IncidentNotFoundError):
+        await assign_incident(session, tenant_id, uuid.uuid4(), uuid.uuid4())
+
+
+@pytest.mark.asyncio
+async def test_assign_incident_raises_assignee_not_found_for_a_nonexistent_user():
+    tenant_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1"])
+    session = _FakeSession(existing_incidents=[existing], existing_users=[])
+
+    with pytest.raises(AssigneeNotFoundError):
+        await assign_incident(session, tenant_id, existing.id, uuid.uuid4())
+
+
+@pytest.mark.asyncio
+async def test_assign_incident_raises_assignee_not_found_for_a_user_in_a_different_tenant():
+    """
+    Tenant isolation: a user who exists, but under a different tenant,
+    must be indistinguishable from a nonexistent one — same reasoning
+    as IncidentNotFoundError, so this can't be used to probe whether a
+    user id exists in another tenant.
+    """
+    tenant_a = uuid.uuid4()
+    tenant_b = uuid.uuid4()
+    other_tenant_user = User(id=uuid.uuid4(), tenant_id=tenant_b, email="x@other.example", password_hash="x", role=UserRole.ANALYST)
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_a, status=IncidentStatus.OPEN, alert_ids=["a1"])
+    # The query filters by tenant_id == tenant_a, so this fake (which returns
+    # existing_users unfiltered) stands in for "no matching row" only because
+    # the real WHERE clause (User.tenant_id == tenant_id) would exclude it —
+    # verified directly against live Postgres for this issue (see the report).
+    session = _FakeSession(existing_incidents=[existing], existing_users=[])
+
+    with pytest.raises(AssigneeNotFoundError):
+        await assign_incident(session, tenant_a, existing.id, other_tenant_user.id)
 
 
 # ── SS-037: post-creation alert linking + investigation notes ──

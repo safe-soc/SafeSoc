@@ -11,6 +11,7 @@ from app.core.enums import IncidentStatus, UserRole
 from app.db.postgresql import get_db
 from app.main import app
 from app.models.incident import Incident, IncidentNote
+from app.models.user import User
 
 
 class _FakeResult:
@@ -33,17 +34,21 @@ class _FakeResult:
 class _FakeSession:
     """Fake AsyncSession standing in for a real DB round-trip (mirrors tests/test_incidents.py)."""
 
-    def __init__(self, existing_incidents=None, existing_notes=None):
+    def __init__(self, existing_incidents=None, existing_notes=None, existing_users=None):
         self.existing_incidents: list[Incident] = list(existing_incidents or [])
         self.existing_notes: list[IncidentNote] = list(existing_notes or [])
+        self.existing_users: list[User] = list(existing_users or [])
         self.added: list = []
 
     async def execute(self, stmt, params=None):
-        # select(IncidentNote) is routed to existing_notes by inspecting
-        # what entity the statement targets (mirrors tests/test_incidents.py).
+        # select(IncidentNote)/select(User) are routed to their own lists
+        # by inspecting what entity the statement targets (mirrors
+        # tests/test_incidents.py).
         target = getattr(stmt, "column_descriptions", [{}])[0].get("type") if hasattr(stmt, "column_descriptions") else None
         if target is IncidentNote:
             return _FakeResult(self.existing_notes)
+        if target is User:
+            return _FakeResult(self.existing_users)
         return _FakeResult(self.existing_incidents)
 
     def add(self, obj):
@@ -208,6 +213,71 @@ def test_transition_returns_200_and_the_updated_incident(client, db_session, mak
     assert response.status_code == 200
     assert response.json()["status"] == "investigating"
     assert incident.status == IncidentStatus.INVESTIGATING
+
+
+# ── SS-095: incident assignment ─────────────────────────────────
+
+def test_assign_requires_authentication(client, db_session):
+    incident = _seeded_incident()
+    db_session.existing_incidents = [incident]
+
+    response = client.post(
+        f"/api/v1/incidents/{incident.id}/assign", json={"assignee_user_id": str(uuid.uuid4())}
+    )
+
+    assert response.status_code == 401
+
+
+def test_assign_requires_analyst_role(client, db_session, make_auth_headers):
+    incident = _seeded_incident()
+    db_session.existing_incidents = [incident]
+    headers = make_auth_headers(role=UserRole.VIEWER)
+
+    response = client.post(
+        f"/api/v1/incidents/{incident.id}/assign", json={"assignee_user_id": str(uuid.uuid4())}, headers=headers
+    )
+
+    assert response.status_code == 403
+
+
+def test_assign_returns_200_and_the_assigned_incident(client, db_session, make_auth_headers):
+    tenant_id = uuid.uuid4()
+    incident = _seeded_incident(tenant_id=tenant_id)
+    analyst = User(id=uuid.uuid4(), tenant_id=tenant_id, email="a@acme.example", password_hash="x", role=UserRole.ANALYST)
+    db_session.existing_incidents = [incident]
+    db_session.existing_users = [analyst]
+    headers = make_auth_headers(tenant_id=tenant_id, role=UserRole.ANALYST)
+
+    response = client.post(
+        f"/api/v1/incidents/{incident.id}/assign", json={"assignee_user_id": str(analyst.id)}, headers=headers
+    )
+
+    assert response.status_code == 200
+    assert response.json()["assigned_analyst_id"] == str(analyst.id)
+
+
+def test_assign_returns_404_for_a_missing_incident(client, db_session, make_auth_headers):
+    headers = make_auth_headers(role=UserRole.ANALYST)
+
+    response = client.post(
+        f"/api/v1/incidents/{uuid.uuid4()}/assign", json={"assignee_user_id": str(uuid.uuid4())}, headers=headers
+    )
+
+    assert response.status_code == 404
+
+
+def test_assign_returns_404_for_an_assignee_that_does_not_exist(client, db_session, make_auth_headers):
+    tenant_id = uuid.uuid4()
+    incident = _seeded_incident(tenant_id=tenant_id)
+    db_session.existing_incidents = [incident]
+    db_session.existing_users = []  # no such user
+    headers = make_auth_headers(tenant_id=tenant_id, role=UserRole.ANALYST)
+
+    response = client.post(
+        f"/api/v1/incidents/{incident.id}/assign", json={"assignee_user_id": str(uuid.uuid4())}, headers=headers
+    )
+
+    assert response.status_code == 404
 
 
 # ── SS-037: post-creation alert linking + investigation notes ──
