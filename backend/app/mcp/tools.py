@@ -47,6 +47,21 @@ def _incident_to_dict(incident: Incident) -> dict:
     }
 
 
+def _alert_list_output(result: dict) -> "AlertListOutput":
+    """
+    Shared by every tool backed by search_alerts (SS-086). `result["total"]`
+    is a genuine full-match count (search_alerts sets track_total_hits),
+    while `result["alerts"]` is capped by the `size` each tool queries
+    with — so truncation is always knowable by comparing the two,
+    without any extra query.
+    """
+    return AlertListOutput(
+        total=result["total"],
+        alerts=result["alerts"],
+        truncated=result["total"] > len(result["alerts"]),
+    )
+
+
 # ── Input/output schemas (one pair per intent) ────────────────────
 
 class AuthFailuresInput(BaseModel):
@@ -88,6 +103,10 @@ class AttackChainStatusInput(BaseModel):
 class AlertListOutput(BaseModel):
     total: int
     alerts: list[dict]
+    # True when `total` exceeds len(alerts) — i.e. this tool's own size
+    # cap left out real matches (SS-086). Defaults False so any other
+    # construction site (e.g. existing tests) keeps prior behavior.
+    truncated: bool = False
 
 
 class EndpointSnapshotOutput(BaseModel):
@@ -97,15 +116,18 @@ class EndpointSnapshotOutput(BaseModel):
     last_scored_at: Optional[datetime] = None
     recent_alert_count: int
     recent_alerts: list[dict]
+    truncated: bool = False
 
 
 class RiskyEndpointsOutput(BaseModel):
     endpoints: list[dict]
+    truncated: bool = False
 
 
 class AttackChainStatusOutput(BaseModel):
     total: int
     incidents: list[dict]
+    truncated: bool = False
 
 
 # ── Tool handlers ──────────────────────────────────────────────────
@@ -122,14 +144,14 @@ async def _auth_failures(db: AsyncSession, tenant_id: uuid.UUID, params: AuthFai
         timerange_hours=params.timerange_hours,
         size=100,
     )
-    return AlertListOutput(total=result["total"], alerts=result["alerts"])
+    return _alert_list_output(result)
 
 
 async def _ip_activity(db: AsyncSession, tenant_id: uuid.UUID, params: IPActivityInput) -> AlertListOutput:
     result = await search_alerts(
         tenant_id=str(tenant_id), source_ip=params.ip, timerange_hours=params.timerange_hours, size=100
     )
-    return AlertListOutput(total=result["total"], alerts=result["alerts"])
+    return _alert_list_output(result)
 
 
 async def _endpoint_snapshot(
@@ -145,6 +167,7 @@ async def _endpoint_snapshot(
         last_scored_at=endpoint.updated_at if endpoint else None,
         recent_alert_count=alerts_result["total"],
         recent_alerts=alerts_result["alerts"],
+        truncated=alerts_result["total"] > len(alerts_result["alerts"]),
     )
 
 
@@ -152,33 +175,41 @@ async def _top_alerts(db: AsyncSession, tenant_id: uuid.UUID, params: TopAlertsI
     result = await search_alerts(
         tenant_id=str(tenant_id), severity=params.severity, timerange_hours=params.timerange_hours, size=20
     )
-    return AlertListOutput(total=result["total"], alerts=result["alerts"])
+    return _alert_list_output(result)
 
 
 async def _user_activity(db: AsyncSession, tenant_id: uuid.UUID, params: UserActivityInput) -> AlertListOutput:
     result = await search_alerts(
         tenant_id=str(tenant_id), user=params.user, timerange_hours=params.timerange_hours, size=100
     )
-    return AlertListOutput(total=result["total"], alerts=result["alerts"])
+    return _alert_list_output(result)
 
 
 async def _cloud_events(db: AsyncSession, tenant_id: uuid.UUID, params: CloudEventsInput) -> AlertListOutput:
     result = await search_alerts(
         tenant_id=str(tenant_id), source="cloudlens", timerange_hours=params.timerange_hours, size=50
     )
-    return AlertListOutput(total=result["total"], alerts=result["alerts"])
+    return _alert_list_output(result)
 
 
 async def _risky_endpoints(db: AsyncSession, tenant_id: uuid.UUID, params: RiskyEndpointsInput) -> RiskyEndpointsOutput:
     endpoints = await list_endpoints(db, tenant_id)
-    return RiskyEndpointsOutput(endpoints=[_endpoint_to_dict(e) for e in endpoints[: params.limit]])
+    limited = endpoints[: params.limit]
+    return RiskyEndpointsOutput(
+        endpoints=[_endpoint_to_dict(e) for e in limited],
+        truncated=len(endpoints) > len(limited),
+    )
 
 
 async def _attack_chain_status(
     db: AsyncSession, tenant_id: uuid.UUID, params: AttackChainStatusInput
 ) -> AttackChainStatusOutput:
     incidents, total = await list_incidents(db, tenant_id, status=params.status)
-    return AttackChainStatusOutput(total=total, incidents=[_incident_to_dict(i) for i in incidents])
+    return AttackChainStatusOutput(
+        total=total,
+        incidents=[_incident_to_dict(i) for i in incidents],
+        truncated=total > len(incidents),
+    )
 
 
 @dataclass(frozen=True)

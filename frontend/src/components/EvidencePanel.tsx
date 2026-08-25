@@ -6,6 +6,11 @@
  * of objects, so one generic renderer covers both list-shaped outputs
  * (e.g. { total, alerts: [...] }) and snapshot outputs (e.g.
  * { host_id, risk_score, recent_alerts: [...] }) without per-tool code.
+ *
+ * A tool output may also carry a `truncated` boolean (SS-086) — true
+ * whenever the tool's own size cap left out real matches. That's
+ * surfaced as a compact "Partial results" badge on the toggle row
+ * itself (visible even collapsed), not as just another data row.
  */
 
 import { useState } from 'react';
@@ -63,7 +68,9 @@ function EvidenceList({ items }: { items: unknown[] }) {
 
 export default function EvidencePanel({ data }: EvidencePanelProps) {
   const [isOpen, setIsOpen] = useState(false);
-  const entries = Object.entries(data);
+  const { truncated, ...rest } = data;
+  const entries = Object.entries(rest);
+  const isTruncated = truncated === true;
 
   if (entries.length === 0) {
     return null;
@@ -76,8 +83,13 @@ export default function EvidencePanel({ data }: EvidencePanelProps) {
         onClick={() => setIsOpen((prev) => !prev)}
         className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-xs text-slate-400 hover:text-slate-200"
       >
-        <ChevronRightIcon className={`h-3.5 w-3.5 transition-transform ${isOpen ? 'rotate-90' : ''}`} />
-        Evidence
+        <ChevronRightIcon className={`h-3.5 w-3.5 shrink-0 transition-transform ${isOpen ? 'rotate-90' : ''}`} />
+        <span>Evidence</span>
+        {isTruncated && (
+          <span className="ml-auto shrink-0 rounded-full border border-amber-700/40 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-400">
+            Partial results
+          </span>
+        )}
       </button>
       {isOpen && (
         <div className="space-y-2 border-t border-slate-800 px-2.5 py-2">

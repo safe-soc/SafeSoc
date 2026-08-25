@@ -47,9 +47,27 @@ async def test_auth_failures_queries_search_alerts_with_failed_login_action(monk
 
     assert isinstance(result, AlertListOutput)
     assert result.total == 2
+    assert result.truncated is False  # total == len(alerts) — nothing left out
     mock_search.assert_called_once_with(
         tenant_id=str(tenant_id), action="failed_login", host_id="DESKTOP-042", timerange_hours=24, size=100
     )
+
+
+# ── truncation metadata (SS-086) ──────────────────────────────────
+# Exercised once via a single AlertListOutput-backed tool, since all
+# five (auth_failures, ip_activity, top_alerts, user_activity,
+# cloud_events) share the exact same _alert_list_output() helper.
+
+@pytest.mark.asyncio
+async def test_alert_list_tool_reports_truncated_when_total_exceeds_returned_alerts(monkeypatch):
+    mock_search = AsyncMock(return_value={"total": 150, "alerts": [{"alert_id": "a1"}, {"alert_id": "a2"}]})
+    monkeypatch.setattr("app.mcp.tools.search_alerts", mock_search)
+
+    result = await TOOLS[Intent.AUTH_FAILURES].call(None, uuid.uuid4(), {})
+
+    assert result.total == 150
+    assert len(result.alerts) == 2
+    assert result.truncated is True
 
 
 # ── ip_activity ───────────────────────────────────────────────────
@@ -95,6 +113,28 @@ async def test_endpoint_snapshot_combines_risk_score_and_recent_alerts(monkeypat
     assert result.risk_score == 65
     assert result.risk_level == RiskLevel.HIGH
     assert result.recent_alert_count == 3
+    assert result.truncated is False  # recent_alert_count == len(recent_alerts)
+
+
+@pytest.mark.asyncio
+async def test_endpoint_snapshot_reports_truncated_when_recent_alert_count_exceeds_returned_alerts(monkeypatch):
+    monkeypatch.setattr(
+        "app.mcp.tools.get_endpoint",
+        AsyncMock(return_value=Endpoint(
+            id=uuid.uuid4(), tenant_id=uuid.uuid4(), host_id="DESKTOP-042",
+            risk_score=65, risk_level=RiskLevel.HIGH, updated_at=datetime.now(timezone.utc),
+        )),
+    )
+    monkeypatch.setattr(
+        "app.mcp.tools.search_alerts",
+        AsyncMock(return_value={"total": 25, "alerts": [{"alert_id": "a1"}, {"alert_id": "a2"}]}),
+    )
+
+    result = await TOOLS[Intent.ENDPOINT_SNAPSHOT].call(None, uuid.uuid4(), {"host_id": "DESKTOP-042"})
+
+    assert result.recent_alert_count == 25
+    assert len(result.recent_alerts) == 2
+    assert result.truncated is True
 
 
 @pytest.mark.asyncio
@@ -164,6 +204,20 @@ async def test_risky_endpoints_reuses_list_endpoints_and_respects_limit(monkeypa
     assert isinstance(result, RiskyEndpointsOutput)
     assert len(result.endpoints) == 2
     assert result.endpoints[0]["host_id"] == "HOST-0"
+    assert result.truncated is True  # 5 known endpoints, limit=2 — 3 were left out
+
+
+@pytest.mark.asyncio
+async def test_risky_endpoints_reports_not_truncated_when_the_limit_covers_every_endpoint(monkeypatch):
+    now = datetime.now(timezone.utc)
+    endpoints = [
+        Endpoint(id=uuid.uuid4(), tenant_id=uuid.uuid4(), host_id="HOST-0", risk_score=90, risk_level=RiskLevel.HIGH, updated_at=now),
+    ]
+    monkeypatch.setattr("app.mcp.tools.list_endpoints", AsyncMock(return_value=endpoints))
+
+    result = await TOOLS[Intent.RISKY_ENDPOINTS].call(None, uuid.uuid4(), {"limit": 10})
+
+    assert result.truncated is False
 
 
 # ── attack_chain_status ───────────────────────────────────────────
@@ -184,4 +238,22 @@ async def test_attack_chain_status_reuses_list_incidents(monkeypatch):
     assert isinstance(result, AttackChainStatusOutput)
     assert result.total == 1
     assert result.incidents[0]["alert_ids"] == ["a1", "a2"]
+    assert result.truncated is False  # total == len(incidents)
     mock_list.assert_called_once_with(None, tenant_id, status=IncidentStatus.OPEN)
+
+
+@pytest.mark.asyncio
+async def test_attack_chain_status_reports_truncated_when_total_exceeds_returned_incidents(monkeypatch):
+    now = datetime.now(timezone.utc)
+    incident = Incident(
+        id=uuid.uuid4(), tenant_id=uuid.uuid4(), status=IncidentStatus.OPEN, alert_ids=["a1"],
+        created_at=now, updated_at=now,
+    )
+    # list_incidents defaults to size=50 — simulate more real matches than the page returned.
+    monkeypatch.setattr("app.mcp.tools.list_incidents", AsyncMock(return_value=([incident], 75)))
+
+    result = await TOOLS[Intent.ATTACK_CHAIN_STATUS].call(None, uuid.uuid4(), {})
+
+    assert result.total == 75
+    assert len(result.incidents) == 1
+    assert result.truncated is True
