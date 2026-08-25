@@ -125,20 +125,33 @@ def _session_key(tenant_id: str, session_id: str) -> str:
     return f"{SESSION_KEY_PREFIX}:{tenant_id}:{session_id}"
 
 
+# Maximum (query, answer) pairs kept per session (SS-087). A later
+# turn's prompt (SS-088) only needs recent history — an unbounded
+# transcript would grow the Redis payload and prompt size without
+# bound over a long conversation.
+MAX_TRANSCRIPT_TURNS = 5
+
+
 @dataclass(frozen=True)
 class ConversationContext:
     intent: Intent
     params: dict
+    transcript: list[dict]
 
 
-async def save_context(tenant_id: str, session_id: str, intent: Intent, params: dict) -> None:
+async def save_context(
+    tenant_id: str, session_id: str, intent: Intent, params: dict, transcript: Optional[list[dict]] = None
+) -> None:
     """
     Persist a turn's resolved intent + tool parameters as this
     session's context, for a follow-up turn to build on. Refreshes the
     idle-expiry TTL on every write, same as CORRELATION_WINDOW_TTL.
+    `transcript` defaults to empty rather than carrying anything
+    forward automatically — callers that want to preserve an existing
+    transcript (resolve_query, append_turn below) must pass it explicitly.
     """
     client = get_client()
-    payload = json.dumps({"intent": intent.value, "params": params})
+    payload = json.dumps({"intent": intent.value, "params": params, "transcript": transcript or []})
     await client.set(_session_key(tenant_id, session_id), payload, ex=settings.INVESTIGATION_SESSION_TTL_SECONDS)
 
 
@@ -149,7 +162,30 @@ async def get_context(tenant_id: str, session_id: str) -> Optional[ConversationC
     if raw is None:
         return None
     data = json.loads(raw)
-    return ConversationContext(intent=Intent(data["intent"]), params=data["params"])
+    return ConversationContext(
+        intent=Intent(data["intent"]), params=data["params"], transcript=data.get("transcript", [])
+    )
+
+
+async def append_turn(tenant_id: str, session_id: str, query: str, answer: str) -> None:
+    """
+    Append this turn's (query, answer) pair to the session's transcript
+    (SS-087), so a later turn's prompt (SS-088) can include real
+    conversation history — not just the inherited intent/params that
+    resolve_query() already tracks. Capped at MAX_TRANSCRIPT_TURNS,
+    oldest dropped first.
+
+    Called separately from resolve_query(): the answer doesn't exist
+    yet at classification time, it's only known after the tool call
+    and LLM generation complete. A no-op if the session has since
+    idled out — nothing to append to.
+    """
+    context = await get_context(tenant_id, session_id)
+    if context is None:
+        return
+
+    transcript = [*context.transcript, {"query": query, "answer": answer}][-MAX_TRANSCRIPT_TURNS:]
+    await save_context(tenant_id, session_id, context.intent, context.params, transcript)
 
 
 # Endpoint hostnames in this codebase are consistently formatted as
@@ -215,7 +251,9 @@ async def resolve_query(tenant_id: str, session_id: str, query: str) -> tuple[In
 
     The resolved (intent, params) becomes the new saved context (noise
     turns excepted, per above), so a chain of follow-ups keeps building
-    on the same subject.
+    on the same subject. Any transcript already recorded for this
+    session (SS-087, via append_turn) is carried forward unchanged —
+    this function never touches it, only intent/params.
     """
     intent = classify_intent(query)
     previous = await get_context(tenant_id, session_id)
@@ -231,5 +269,6 @@ async def resolve_query(tenant_id: str, session_id: str, query: str) -> tuple[In
         if host_id:
             params["host_id"] = host_id
 
-    await save_context(tenant_id, session_id, intent, params)
+    transcript = previous.transcript if previous is not None else []
+    await save_context(tenant_id, session_id, intent, params, transcript)
     return intent, params

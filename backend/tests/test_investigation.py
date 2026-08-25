@@ -9,6 +9,8 @@ from app.core.enums import Intent
 from app.services import investigation
 from app.services.investigation import (
     INTENT_CLASSIFICATION_ACCURACY_THRESHOLD,
+    MAX_TRANSCRIPT_TURNS,
+    append_turn,
     classify_intent,
     get_context,
     resolve_query,
@@ -316,3 +318,74 @@ async def test_a_genuine_topic_less_follow_up_still_inherits_context_as_before(f
 
     assert intent == Intent.AUTH_FAILURES
     assert params == {"host_id": "DESKTOP-042"}
+
+
+# ── SS-087: bounded conversation transcript ────────────────────────
+
+@pytest.mark.asyncio
+async def test_save_and_get_context_round_trips_a_transcript(fake_redis):
+    transcript = [{"query": "failed logins?", "answer": "Found 3."}]
+    await save_context("tenant-a", "session-1", Intent.AUTH_FAILURES, {}, transcript)
+
+    context = await get_context("tenant-a", "session-1")
+
+    assert context.transcript == transcript
+
+
+@pytest.mark.asyncio
+async def test_save_context_without_a_transcript_defaults_to_empty(fake_redis):
+    """Existing call sites that don't pass transcript must keep working (backward compatibility)."""
+    await save_context("tenant-a", "session-1", Intent.TOP_ALERTS, {})
+
+    context = await get_context("tenant-a", "session-1")
+    assert context.transcript == []
+
+
+@pytest.mark.asyncio
+async def test_append_turn_adds_a_query_answer_pair_to_the_transcript(fake_redis):
+    await resolve_query("tenant-a", "session-1", "Show failed logins for host DESKTOP-042")
+
+    await append_turn("tenant-a", "session-1", "Show failed logins for host DESKTOP-042", "Found 3 failed logins.")
+
+    context = await get_context("tenant-a", "session-1")
+    assert context.transcript == [
+        {"query": "Show failed logins for host DESKTOP-042", "answer": "Found 3 failed logins."}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_append_turn_caps_the_transcript_dropping_the_oldest_first(fake_redis):
+    await resolve_query("tenant-a", "session-1", "Show failed logins for host DESKTOP-042")
+
+    for i in range(MAX_TRANSCRIPT_TURNS + 2):
+        await append_turn("tenant-a", "session-1", f"query {i}", f"answer {i}")
+
+    context = await get_context("tenant-a", "session-1")
+    assert len(context.transcript) == MAX_TRANSCRIPT_TURNS
+    # Oldest (query 0, query 1) dropped; the most recent MAX_TRANSCRIPT_TURNS survive, in order.
+    assert context.transcript[0]["query"] == "query 2"
+    assert context.transcript[-1]["query"] == f"query {MAX_TRANSCRIPT_TURNS + 1}"
+
+
+@pytest.mark.asyncio
+async def test_append_turn_is_a_noop_when_no_session_exists(fake_redis):
+    await append_turn("tenant-a", "never-started", "some query", "some answer")
+
+    assert await get_context("tenant-a", "never-started") is None
+    assert fake_redis.set_calls == []  # nothing was written
+
+
+@pytest.mark.asyncio
+async def test_resolve_query_preserves_a_transcript_built_by_append_turn(fake_redis):
+    """
+    Regression: resolve_query() must not silently wipe out a transcript
+    append_turn() already built when it saves the next turn's
+    intent/params — the two functions write to the same session key.
+    """
+    await resolve_query("tenant-a", "session-1", "Show failed logins for host DESKTOP-042")
+    await append_turn("tenant-a", "session-1", "Show failed logins for host DESKTOP-042", "Found 3.")
+
+    await resolve_query("tenant-a", "session-1", "What about yesterday?")
+
+    context = await get_context("tenant-a", "session-1")
+    assert context.transcript == [{"query": "Show failed logins for host DESKTOP-042", "answer": "Found 3."}]
