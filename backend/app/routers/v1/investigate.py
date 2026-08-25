@@ -74,8 +74,23 @@ async def _generate_answer(query: str, intent: Intent, tool_result: BaseModel) -
             asyncio.to_thread(llm_client.generate, prompt),
             timeout=settings.INVESTIGATION_LLM_TIMEOUT_SECONDS,
         )
+    except asyncio.TimeoutError:
+        # asyncio.wait_for's TimeoutError carries no message (str(e) == ""),
+        # so log this case explicitly instead of falling through to the
+        # generic handler below and reporting an empty, undiagnosable error.
+        logger.warning(
+            "LLM answer generation timed out, falling back to a templated summary",
+            timeout_seconds=settings.INVESTIGATION_LLM_TIMEOUT_SECONDS,
+        )
+        return _fallback_answer(intent, tool_result)
     except Exception as e:
-        logger.warning("LLM answer generation failed, falling back to a templated summary", error=str(e))
+        # type(e).__name__ alongside str(e) so an exception with an empty
+        # or unhelpful message (as above) still identifies what happened.
+        logger.warning(
+            "LLM answer generation failed, falling back to a templated summary",
+            error_type=type(e).__name__,
+            error=str(e),
+        )
         return _fallback_answer(intent, tool_result)
 
 

@@ -144,6 +144,53 @@ async def test_generate_answer_falls_back_when_the_llm_exceeds_the_timeout(monke
     assert "3" in answer
 
 
+@pytest.mark.asyncio
+async def test_generate_answer_logs_a_specific_message_on_timeout_not_an_empty_error(monkeypatch):
+    """
+    Regression test: asyncio.wait_for's TimeoutError carries no message
+    (str(e) == "") — before this fix, the timeout case fell through to
+    the generic `except Exception` handler and logged error="", making a
+    real, understood timeout indistinguishable from a truly opaque
+    failure. It must now log its own specific, non-empty message.
+    """
+    from app.core.config import settings
+    from app.mcp.tools import AlertListOutput
+    import app.routers.v1.investigate as investigate_module
+
+    monkeypatch.setattr(settings, "INVESTIGATION_LLM_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(investigate_module.ollama, "generate", lambda prompt: (time.sleep(1.0), "too slow")[1])
+    mock_logger = Mock()
+    monkeypatch.setattr(investigate_module, "logger", mock_logger)
+
+    await investigate_module._generate_answer("top alerts", Intent.TOP_ALERTS, AlertListOutput(total=3, alerts=[]))
+
+    mock_logger.warning.assert_called_once()
+    message, kwargs = mock_logger.warning.call_args.args[0], mock_logger.warning.call_args.kwargs
+    assert "timed out" in message
+    assert kwargs["timeout_seconds"] == 0.2
+    assert "error" not in kwargs  # not the generic path — no empty error="" string
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_logs_the_exception_type_on_a_non_timeout_failure(monkeypatch):
+    """A non-timeout failure (e.g. Ollama unreachable) must still identify itself by exception type in the log."""
+    from app.mcp.tools import AlertListOutput
+    import app.routers.v1.investigate as investigate_module
+    from app.clients import ollama
+
+    monkeypatch.setattr(ollama, "generate", Mock(side_effect=ollama.OllamaError("connection refused")))
+    mock_logger = Mock()
+    monkeypatch.setattr(investigate_module, "logger", mock_logger)
+
+    await investigate_module._generate_answer("top alerts", Intent.TOP_ALERTS, AlertListOutput(total=3, alerts=[]))
+
+    mock_logger.warning.assert_called_once()
+    message, kwargs = mock_logger.warning.call_args.args[0], mock_logger.warning.call_args.kwargs
+    assert "failed" in message
+    assert kwargs["error_type"] == "OllamaError"
+    assert kwargs["error"] == "connection refused"
+
+
 def test_investigate_response_time_meets_the_15_second_srs_target(client, auth_headers, monkeypatch):
     """AC: meets the SRS's 15-second response time target under normal load (measured)."""
     _mock_resolve_query(monkeypatch, Intent.RISKY_ENDPOINTS)
