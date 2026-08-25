@@ -167,6 +167,29 @@ async def update_alert_ti_fields(
         return False
 
 
+async def update_alert_anomaly_score(alert_id: str, timestamp: datetime, anomaly_score: float) -> bool:
+    """
+    Update an already-indexed alert's anomaly_score field in place
+    (update-by-id), same pattern as update_alert_ti_fields above
+    (SS-102). A separate function rather than extending
+    update_alert_ti_fields — anomaly scoring is a distinct concern
+    (behavioral, not threat-intel) that happens to update the same
+    document. Returns True on success, False on failure (never raises).
+    """
+    client = get_client()
+    index_name = _build_index_name(timestamp)
+    try:
+        client.update(
+            index=index_name,
+            id=alert_id,
+            body={"doc": {"anomaly_score": anomaly_score}},
+        )
+        return True
+    except exceptions.OpenSearchException as e:
+        logger.error("Anomaly score update failed", alert_id=alert_id, error=str(e))
+        return False
+
+
 async def search_alerts(
     tenant_id: str,
     severity: Optional[str] = None,

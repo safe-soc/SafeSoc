@@ -17,6 +17,7 @@ from app.db.opensearch import (
     ensure_ilm_policy,
     get_cloud_summary,
     get_known_endpoints,
+    update_alert_anomaly_score,
 )
 
 
@@ -41,6 +42,35 @@ def test_build_index_name_january_year_boundary():
 def test_build_index_name_defaults_to_current_time_when_omitted():
     result = _build_index_name()
     assert re.match(r"^safesoc-alerts-\d{4}\.\d{2}$", result)
+
+
+# ── update_alert_anomaly_score (SS-102) ────────────────────────
+
+@pytest.mark.asyncio
+async def test_update_alert_anomaly_score_calls_update_with_the_score(monkeypatch):
+    calls = []
+    fake_client = type("FakeClient", (), {"update": lambda self, **kwargs: calls.append(kwargs)})()
+    monkeypatch.setattr("app.db.opensearch.get_client", lambda: fake_client)
+
+    ok = await update_alert_anomaly_score("alert-1", datetime(2026, 5, 12), 0.83)
+
+    assert ok is True
+    assert calls[0]["id"] == "alert-1"
+    assert calls[0]["index"] == "safesoc-alerts-2026.05"
+    assert calls[0]["body"] == {"doc": {"anomaly_score": 0.83}}
+
+
+@pytest.mark.asyncio
+async def test_update_alert_anomaly_score_returns_false_on_opensearch_failure(monkeypatch):
+    def _raise(self, **kwargs):
+        raise exceptions.OpenSearchException("cluster unavailable")
+
+    fake_client = type("FakeClient", (), {"update": _raise})()
+    monkeypatch.setattr("app.db.opensearch.get_client", lambda: fake_client)
+
+    ok = await update_alert_anomaly_score("alert-1", datetime(2026, 5, 12), 0.83)
+
+    assert ok is False
 
 
 # ── check_connection ──────────────────────────────────────────
