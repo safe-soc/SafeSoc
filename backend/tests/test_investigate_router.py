@@ -13,6 +13,7 @@ from app.core.enums import Intent
 from app.db.postgresql import get_db
 from app.main import app
 from app.mcp.tools import AlertListOutput
+from app.services.investigation import ConversationContext
 
 
 def _mock_resolve_query(monkeypatch, intent, params=None):
@@ -35,6 +36,20 @@ def db_session():
     app.dependency_overrides[get_db] = override_get_db
     yield
     app.dependency_overrides.pop(get_db, None)
+
+
+@pytest.fixture(autouse=True)
+def _mock_investigation_context(monkeypatch):
+    """
+    SS-088: the router now calls get_context()/append_turn() directly
+    (not just resolve_query(), which every test here already mocks) on
+    every successful request — without this, those calls would hit a
+    real, unavailable Redis connection. Defaults to "no transcript,
+    nothing recorded" so existing tests see unchanged behavior; tests
+    that care about transcript content override these explicitly.
+    """
+    monkeypatch.setattr("app.routers.v1.investigate.get_context", AsyncMock(return_value=None))
+    monkeypatch.setattr("app.routers.v1.investigate.append_turn", AsyncMock())
 
 
 def test_investigate_requires_authentication(client):
@@ -96,6 +111,93 @@ def test_investigate_returns_is_fallback_false_for_a_genuine_llm_answer(client, 
     body = response.json()
     assert body["answer"] == "You have 5 top alerts right now."
     assert body["is_fallback"] is False
+
+
+# ── SS-088: conversation transcript fed into the LLM prompt ───────
+
+@pytest.mark.asyncio
+async def test_generate_answer_includes_transcript_history_in_the_prompt_when_present(monkeypatch):
+    from app.routers.v1.investigate import _generate_answer
+
+    mock_generate = Mock(return_value="answer text")
+    from app.clients import ollama
+    monkeypatch.setattr(ollama, "generate", mock_generate)
+
+    transcript = [{"query": "prior q", "answer": "prior a"}]
+    await _generate_answer("current q", Intent.TOP_ALERTS, AlertListOutput(total=1, alerts=[]), transcript)
+
+    prompt = mock_generate.call_args.args[0]
+    assert "prior q" in prompt
+    assert "prior a" in prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_omits_the_transcript_section_when_there_is_no_history(monkeypatch):
+    from app.routers.v1.investigate import _generate_answer
+
+    mock_generate = Mock(return_value="answer text")
+    from app.clients import ollama
+    monkeypatch.setattr(ollama, "generate", mock_generate)
+
+    await _generate_answer("current q", Intent.TOP_ALERTS, AlertListOutput(total=1, alerts=[]), [])
+
+    prompt = mock_generate.call_args.args[0]
+    assert "Prior conversation" not in prompt
+
+
+def test_investigate_feeds_transcript_into_the_prompt_and_appends_this_turn(client, make_auth_headers, monkeypatch):
+    tenant_id = uuid.uuid4()
+    headers = make_auth_headers(tenant_id=tenant_id)
+    _mock_resolve_query(monkeypatch, Intent.TOP_ALERTS)
+    mock_tool_call = AsyncMock(return_value=AlertListOutput(total=5, alerts=[]))
+    monkeypatch.setattr("app.routers.v1.investigate.TOOLS", {Intent.TOP_ALERTS: Mock(call=mock_tool_call)})
+
+    prior_transcript = [{"query": "prior q", "answer": "prior a"}]
+    monkeypatch.setattr(
+        "app.routers.v1.investigate.get_context",
+        AsyncMock(return_value=ConversationContext(intent=Intent.TOP_ALERTS, params={}, transcript=prior_transcript)),
+    )
+    mock_append_turn = AsyncMock()
+    monkeypatch.setattr("app.routers.v1.investigate.append_turn", mock_append_turn)
+
+    mock_generate = Mock(return_value="fresh answer")
+    from app.clients import ollama
+    monkeypatch.setattr(ollama, "generate", mock_generate)
+
+    response = client.post(
+        "/api/v1/investigate", json={"query": "top alerts", "session_id": "session-1"}, headers=headers
+    )
+
+    assert response.status_code == 200
+    assert response.json()["answer"] == "fresh answer"
+
+    prompt_sent = mock_generate.call_args.args[0]
+    assert "prior q" in prompt_sent
+    assert "prior a" in prompt_sent
+
+    mock_append_turn.assert_called_once_with(str(tenant_id), "session-1", "top alerts", "fresh answer")
+
+
+def test_investigate_does_not_append_a_turn_for_an_unknown_intent(client, auth_headers, monkeypatch):
+    _mock_resolve_query(monkeypatch, Intent.UNKNOWN)
+    mock_append_turn = AsyncMock()
+    monkeypatch.setattr("app.routers.v1.investigate.append_turn", mock_append_turn)
+
+    client.post("/api/v1/investigate", json={"query": "what's the weather?"}, headers=auth_headers)
+
+    mock_append_turn.assert_not_called()
+
+
+def test_investigate_does_not_append_a_turn_when_the_tool_call_fails(client, auth_headers, monkeypatch):
+    _mock_resolve_query(monkeypatch, Intent.TOP_ALERTS)
+    mock_tool_call = AsyncMock(side_effect=OpenSearchException("cluster unavailable"))
+    monkeypatch.setattr("app.routers.v1.investigate.TOOLS", {Intent.TOP_ALERTS: Mock(call=mock_tool_call)})
+    mock_append_turn = AsyncMock()
+    monkeypatch.setattr("app.routers.v1.investigate.append_turn", mock_append_turn)
+
+    client.post("/api/v1/investigate", json={"query": "top alerts"}, headers=auth_headers)
+
+    mock_append_turn.assert_not_called()
 
 
 def test_investigate_generates_a_session_id_when_none_provided(client, auth_headers, monkeypatch):

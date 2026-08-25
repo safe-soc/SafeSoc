@@ -14,6 +14,7 @@ conversational answer.
 
 import asyncio
 import uuid
+from typing import Optional
 
 from fastapi import APIRouter, Depends
 from opensearchpy.exceptions import OpenSearchException
@@ -28,7 +29,7 @@ from app.core.enums import Intent
 from app.db.postgresql import get_db
 from app.mcp import TOOLS
 from app.schemas.investigation import InvestigateRequest, InvestigateResponse
-from app.services.investigation import resolve_query
+from app.services.investigation import append_turn, get_context, resolve_query
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -67,7 +68,35 @@ def _tool_error_answer(intent: Intent) -> str:
     )
 
 
-async def _generate_answer(query: str, intent: Intent, tool_result: BaseModel) -> tuple[str, bool]:
+def _build_prompt(query: str, tool_result: BaseModel, transcript: list[dict]) -> str:
+    """
+    Build the LLM prompt, optionally prefixed with recent conversation
+    history (SS-088) so a follow-up answer can actually reference what
+    was said earlier — not just inherit the same intent/params, which
+    is all resolve_query() alone gives the LLM today. Explicitly framed
+    as context, not evidence, so the model doesn't treat a prior turn's
+    prose as new data to cite.
+    """
+    transcript_section = ""
+    if transcript:
+        history = "\n".join(f"Analyst: {turn['query']}\nAssistant: {turn['answer']}" for turn in transcript)
+        transcript_section = (
+            "Prior conversation, for context only — do not treat this as new evidence:\n"
+            f"{history}\n\n"
+        )
+
+    return (
+        "You are a security operations assistant. Answer the analyst's question "
+        "conversationally and concisely, using only the data provided below.\n\n"
+        f"{transcript_section}"
+        f"Question: {query}\n"
+        f"Data (JSON): {tool_result.model_dump_json()}"
+    )
+
+
+async def _generate_answer(
+    query: str, intent: Intent, tool_result: BaseModel, transcript: Optional[list[dict]] = None
+) -> tuple[str, bool]:
     """
     Ask the configured LLM provider to summarize tool_result in answer
     to `query`. Bounded by INVESTIGATION_LLM_TIMEOUT_SECONDS so a slow
@@ -80,12 +109,7 @@ async def _generate_answer(query: str, intent: Intent, tool_result: BaseModel) -
     tell a genuine LLM response apart from a degraded one (SS-084).
     """
     llm_client = groq if settings.LLM_PROVIDER == "groq" else ollama
-    prompt = (
-        "You are a security operations assistant. Answer the analyst's question "
-        "conversationally and concisely, using only the data provided below.\n\n"
-        f"Question: {query}\n"
-        f"Data (JSON): {tool_result.model_dump_json()}"
-    )
+    prompt = _build_prompt(query, tool_result, transcript or [])
 
     try:
         # generate() is a blocking `requests` call — run it off the event
@@ -164,7 +188,15 @@ async def investigate(
             is_fallback=True,
         )
 
-    answer, is_fallback = await _generate_answer(payload.query, intent, tool_result)
+    context = await get_context(str(current_user.tenant_id), session_id)
+    transcript = context.transcript if context is not None else []
+
+    answer, is_fallback = await _generate_answer(payload.query, intent, tool_result, transcript)
+
+    # Recorded only on this success path (SS-088) — the UNKNOWN and
+    # tool-error-fallback answers above intentionally aren't part of
+    # the transcript the LLM prompt draws on.
+    await append_turn(str(current_user.tenant_id), session_id, payload.query, answer)
 
     return InvestigateResponse(
         session_id=session_id,
