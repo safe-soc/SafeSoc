@@ -120,7 +120,15 @@ class Settings(BaseSettings):
     LLM_PROVIDER: str = "ollama"  # ollama | groq
     OLLAMA_HOST: str = "localhost"
     OLLAMA_PORT: int = 11434
-    OLLAMA_MODEL: str = "mistral:7b"
+    # SS-091: switched from mistral:7b per the SS-090 benchmark
+    # (docs/ai-llm-benchmark.md) — under this project's own measured
+    # conditions, mistral:7b's p50 (46-60s) essentially never met the
+    # 10s/15s SRS budget, while llama3.2:3b met it comfortably (p50
+    # 5.7-7.4s, 100% success on 2/3 tested prompt shapes) with
+    # consistently coherent, accurate answers. qwen2.5:0.5b was faster
+    # but was directly observed hallucinating on real SafeSOC data and
+    # was ruled out on quality grounds, not just latency.
+    OLLAMA_MODEL: str = "llama3.2:3b"
     GROQ_API_KEY: str = ""
     GROQ_MODEL: str = "mixtral-8x7b-32768"
 

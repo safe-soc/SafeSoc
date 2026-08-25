@@ -8,6 +8,7 @@ import pytest
 import requests
 
 from app.clients import ollama
+from app.core.config import settings
 
 
 def _fake_response(text: str) -> Mock:
@@ -23,6 +24,17 @@ def test_generate_returns_the_completion_text(monkeypatch):
     result = ollama.generate("Show me failed logins for host DESKTOP-042")
 
     assert result == "Here are the failed logins."
+
+
+def test_ollama_model_defaults_to_llama3_2_3b():
+    """
+    SS-091: pins the default against silent regression. Switched from
+    mistral:7b per the SS-090 benchmark (docs/ai-llm-benchmark.md) —
+    mistral:7b's measured p50 (46-60s) essentially never met the
+    10s/15s SRS budget, while llama3.2:3b met it comfortably with
+    consistently accurate answers.
+    """
+    assert settings.OLLAMA_MODEL == "llama3.2:3b"
 
 
 def test_generate_sends_the_configured_model_and_prompt(monkeypatch):
