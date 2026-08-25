@@ -12,7 +12,7 @@ from opensearchpy.exceptions import OpenSearchException
 from app.core.enums import Intent
 from app.db.postgresql import get_db
 from app.main import app
-from app.mcp.tools import AlertListOutput
+from app.mcp.tools import AlertListOutput, EndpointSnapshotOutput, RiskyEndpointsOutput
 from app.services.investigation import ConversationContext
 
 
@@ -307,6 +307,122 @@ async def test_generate_answer_ungrounded_warning_does_not_change_is_fallback_or
 
     assert answer == "Found 999 unrelated incidents."
     assert is_fallback is False
+
+
+# ── Latency diagnosis: prompt-data summarization + output-token cap ──
+# docs/ai-llm-latency-diagnosis.md: a real query returns up to 100 full
+# alert dicts (measured ~93KB/2050 tokens) - _prompt_data summarizes
+# what reaches the LLM prompt specifically. InvestigateResponse.data
+# (SS-083's evidence panel) is built from the untouched tool_result and
+# is unaffected by any of this.
+
+def _make_alert(i, host="DESKTOP-042", user="john.doe", severity="high"):
+    return {
+        "alert_id": f"a{i}", "host_id": host, "user": user, "action": "failed_login",
+        "description": "Failed SSH authentication attempt", "severity": severity,
+        "source_ip": "45.33.32.100", "mitre_technique": "T1110", "timestamp": "2026-08-25T02:47:11Z",
+    }
+
+
+def test_summarize_alert_list_for_prompt_computes_correct_top_counts():
+    from app.routers.v1.investigate import _summarize_alert_list_for_prompt
+
+    alerts = (
+        [_make_alert(i, host="HOST-A", user="alice") for i in range(3)]
+        + [_make_alert(i, host="HOST-B", user="bob") for i in range(3, 5)]
+    )
+
+    summary = _summarize_alert_list_for_prompt(alerts)
+
+    assert summary["count_shown"] == 5
+    assert summary["top_hosts"] == {"HOST-A": 3, "HOST-B": 2}
+    assert summary["top_users"] == {"alice": 3, "bob": 2}
+    assert len(summary["sample"]) == 5  # under the 8-item sample limit, nothing dropped
+
+
+def test_summarize_alert_list_for_prompt_caps_the_sample_size():
+    from app.routers.v1.investigate import _PROMPT_SAMPLE_ALERT_LIMIT, _summarize_alert_list_for_prompt
+
+    alerts = [_make_alert(i) for i in range(50)]
+
+    summary = _summarize_alert_list_for_prompt(alerts)
+
+    assert summary["count_shown"] == 50
+    assert len(summary["sample"]) == _PROMPT_SAMPLE_ALERT_LIMIT
+
+
+def test_prompt_data_summarizes_a_large_alerts_list():
+    from app.routers.v1.investigate import _prompt_data
+
+    result = AlertListOutput(total=100, alerts=[_make_alert(i) for i in range(100)], truncated=True)
+
+    prompt_json = _prompt_data(result)
+
+    assert len(prompt_json) < len(result.model_dump_json()) / 4  # substantially smaller than the raw dump
+    assert '"top_hosts"' in prompt_json
+    assert '"count_shown":100' in prompt_json
+
+
+def test_prompt_data_leaves_an_empty_alerts_list_untouched():
+    from app.routers.v1.investigate import _prompt_data
+
+    result = AlertListOutput(total=0, alerts=[], truncated=False)
+
+    assert _prompt_data(result) == result.model_dump_json()
+
+
+def test_prompt_data_summarizes_recent_alerts_on_endpoint_snapshot():
+    from app.routers.v1.investigate import _prompt_data
+
+    result = EndpointSnapshotOutput(
+        host_id="DESKTOP-042", risk_score=80, risk_level="high",
+        recent_alert_count=20, recent_alerts=[_make_alert(i) for i in range(20)], truncated=True,
+    )
+
+    prompt_json = _prompt_data(result)
+
+    assert '"top_hosts"' in prompt_json
+    assert '"risk_score":80' in prompt_json  # untouched fields still pass through
+
+
+def test_prompt_data_passes_through_tools_without_an_alert_list():
+    from app.routers.v1.investigate import _prompt_data
+
+    result = RiskyEndpointsOutput(endpoints=[{"host_id": "H1", "risk_score": 90}], truncated=False)
+
+    assert _prompt_data(result) == result.model_dump_json()
+
+
+def test_answer_appears_grounded_recognizes_summarized_aggregate_counts():
+    """
+    Regression: the grounding check must validate against what the
+    model actually saw (_prompt_data's summary), not the full raw
+    dump - an aggregate count like "23" is a real, correctly-grounded
+    citation of the summary even though it never appears as a literal
+    field value anywhere in the raw alert list itself.
+    """
+    from app.routers.v1.investigate import _answer_appears_grounded
+
+    alerts = [_make_alert(i, user="bob") for i in range(23)]
+    result = AlertListOutput(total=23, alerts=alerts, truncated=False)
+
+    assert _answer_appears_grounded("bob had 23 failed login attempts.", result) is True
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_prompt_is_dramatically_smaller_for_a_large_alert_list(monkeypatch):
+    """End-to-end: _generate_answer's actual prompt reflects the summarization, not just the helper in isolation."""
+    from app.routers.v1.investigate import _generate_answer
+
+    mock_generate = Mock(return_value="answer")
+    from app.clients import ollama
+    monkeypatch.setattr(ollama, "generate", mock_generate)
+
+    result = AlertListOutput(total=100, alerts=[_make_alert(i) for i in range(100)], truncated=True)
+    await _generate_answer("top alerts", Intent.TOP_ALERTS, result, [])
+
+    prompt = mock_generate.call_args.args[0]
+    assert len(prompt) < len(result.model_dump_json()) / 4
 
 
 def test_investigate_does_not_append_a_turn_for_an_unknown_intent(client, auth_headers, monkeypatch):

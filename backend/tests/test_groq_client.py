@@ -39,6 +39,17 @@ def test_generate_sends_the_configured_model_and_prompt_as_a_chat_message(monkey
     assert kwargs["headers"]["Authorization"] == "Bearer test-key"
 
 
+def test_generate_caps_output_tokens_at_the_configured_limit(monkeypatch):
+    """Same bound as ollama.py's num_predict, for provider parity (latency diagnosis)."""
+    mock_post = Mock(return_value=_fake_response("ok"))
+    monkeypatch.setattr(groq.requests, "post", mock_post)
+    monkeypatch.setattr(groq.settings, "INVESTIGATION_LLM_MAX_OUTPUT_TOKENS", 120)
+
+    groq.generate("anything")
+
+    assert mock_post.call_args.kwargs["json"]["max_tokens"] == 120
+
+
 def test_connection_failure_raises_typed_exception_not_requests_exception(monkeypatch):
     def _raise(*args, **kwargs):
         raise requests.exceptions.ConnectionError("connection refused")

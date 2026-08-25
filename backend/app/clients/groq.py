@@ -33,6 +33,9 @@ def generate(prompt: str) -> str:
             json={
                 "model": settings.GROQ_MODEL,
                 "messages": [{"role": "user", "content": prompt}],
+                # Same bound as ollama.py's num_predict, for interface/behavior
+                # parity between providers (latency diagnosis).
+                "max_tokens": settings.INVESTIGATION_LLM_MAX_OUTPUT_TOKENS,
             },
             timeout=60,
         )

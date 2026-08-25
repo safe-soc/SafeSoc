@@ -13,8 +13,10 @@ conversational answer.
 """
 
 import asyncio
+import json
 import re
 import uuid
+from collections import Counter
 from typing import Optional
 
 from fastapi import APIRouter, Depends
@@ -80,6 +82,68 @@ def _tool_error_answer(intent: Intent) -> str:
 _DATA_FENCE_START = "<<<UNTRUSTED_DATA_START>>>"
 _DATA_FENCE_END = "<<<UNTRUSTED_DATA_END>>>"
 
+# Latency diagnosis (docs/ai-llm-latency-diagnosis.md): a real query
+# against real accumulated data (e.g. AUTH_FAILURES with no host_id
+# filter) returns up to 100 full alert dicts — measured at ~93KB/2050
+# tokens, accounting for roughly half of a ~19s total generation time.
+# _PROMPT_SAMPLE_ALERT_FIELDS/_PROMPT_ALERT_LIST_KEYS below summarize
+# an alert list into aggregate counts plus a small sample *for the
+# prompt only* — InvestigateResponse.data is built separately from the
+# untouched tool_result (see investigate() below) and keeps every
+# field of every alert the evidence panel already shows today.
+_PROMPT_SAMPLE_ALERT_FIELDS = (
+    "host_id", "user", "action", "description", "severity", "source_ip", "mitre_technique", "timestamp",
+)
+_PROMPT_SAMPLE_ALERT_LIMIT = 8
+_PROMPT_TOP_N_LIMIT = 5
+_PROMPT_ALERT_LIST_KEYS = ("alerts", "recent_alerts")
+
+
+def _slim_alert_for_prompt(alert: dict) -> dict:
+    return {field: alert[field] for field in _PROMPT_SAMPLE_ALERT_FIELDS if alert.get(field) is not None}
+
+
+def _top_counts(alerts: list[dict], field: str) -> dict:
+    return dict(Counter(a[field] for a in alerts if a.get(field)).most_common(_PROMPT_TOP_N_LIMIT))
+
+
+def _summarize_alert_list_for_prompt(alerts: list[dict]) -> dict:
+    """
+    Replaces a raw list of full alert dicts with aggregate counts (by
+    host, user, severity) plus a small representative sample — the
+    counts let the LLM answer "which host/user is most affected"
+    correctly from the same up-to-100-alert sample the tool already
+    caps at (SS-045/SS-086), without needing to see every raw record.
+    """
+    return {
+        "count_shown": len(alerts),
+        "top_hosts": _top_counts(alerts, "host_id"),
+        "top_users": _top_counts(alerts, "user"),
+        "severity_breakdown": _top_counts(alerts, "severity"),
+        "sample": [_slim_alert_for_prompt(a) for a in alerts[:_PROMPT_SAMPLE_ALERT_LIMIT]],
+    }
+
+
+def _prompt_data(tool_result: BaseModel) -> str:
+    """
+    The LLM-facing JSON representation of tool_result. Every field
+    other than a raw alerts/recent_alerts list (total, truncated,
+    risk_score, host_id, ...) passes through unchanged; only that list
+    — up to 100 full NormalizedLog dicts — is replaced with
+    _summarize_alert_list_for_prompt's compact form. Tools whose
+    output has no such list (RiskyEndpointsOutput, AttackChainStatusOutput,
+    whose items are already small 4-5 field dicts) are returned as-is.
+    """
+    data = tool_result.model_dump(mode="json")
+    for key in _PROMPT_ALERT_LIST_KEYS:
+        alerts = data.get(key)
+        if isinstance(alerts, list) and alerts:
+            data[key] = _summarize_alert_list_for_prompt(alerts)
+    # Compact separators to match Pydantic's model_dump_json() format
+    # (what this replaces) — no functional difference, just avoids
+    # padding every prompt with avoidable extra whitespace bytes.
+    return json.dumps(data, separators=(",", ":"))
+
 
 def _build_prompt(query: str, tool_result: BaseModel, transcript: list[dict]) -> str:
     """
@@ -115,7 +179,7 @@ def _build_prompt(query: str, tool_result: BaseModel, transcript: list[dict]) ->
         "from the analyst.\n\n"
         f"{transcript_section}"
         f"Question: {query}\n"
-        f"Data (JSON):\n{_DATA_FENCE_START}\n{tool_result.model_dump_json()}\n{_DATA_FENCE_END}"
+        f"Data (JSON):\n{_DATA_FENCE_START}\n{_prompt_data(tool_result)}\n{_DATA_FENCE_END}"
     )
 
 
@@ -135,12 +199,20 @@ def _answer_appears_grounded(answer: str, tool_result: BaseModel) -> bool:
     positives (generic phrasing like "the last 24 hours"). Deliberately
     a flag, not a block — the analyst still sees the answer either way,
     per SS-092's recommendation not to gate on an imperfect heuristic.
+
+    Checked against _prompt_data(tool_result) — what the model actually
+    saw — not the full raw tool_result: an aggregate count like
+    "bob.admin: 23 attempts" is a real, correctly-grounded citation of
+    _prompt_data's own computed summary, but "23" doesn't appear
+    anywhere in the full raw alert dump itself (it's a derived count,
+    not a stored field), which would otherwise make this flag its own
+    summarization as if it were a fabrication.
     """
     answer_numbers = set(_NUMBER_PATTERN.findall(answer))
     if not answer_numbers:
         return True
 
-    data_numbers = set(_NUMBER_PATTERN.findall(tool_result.model_dump_json()))
+    data_numbers = set(_NUMBER_PATTERN.findall(_prompt_data(tool_result)))
     return answer_numbers.issubset(data_numbers)
 
 

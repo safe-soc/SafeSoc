@@ -50,6 +50,21 @@ def test_generate_sends_the_configured_model_and_prompt(monkeypatch):
     assert kwargs["json"]["stream"] is False
 
 
+def test_generate_caps_output_tokens_at_the_configured_limit(monkeypatch):
+    """
+    Latency diagnosis: unbounded generation measured 358-364 output
+    tokens on a real prompt, on top of ~8s of prompt processing -
+    num_predict bounds the worst case.
+    """
+    mock_post = Mock(return_value=_fake_response("ok"))
+    monkeypatch.setattr(ollama.requests, "post", mock_post)
+    monkeypatch.setattr(settings, "INVESTIGATION_LLM_MAX_OUTPUT_TOKENS", 120)
+
+    ollama.generate("anything")
+
+    assert mock_post.call_args.kwargs["json"]["options"]["num_predict"] == 120
+
+
 def test_connection_failure_raises_typed_exception_not_requests_exception(monkeypatch):
     def _raise(*args, **kwargs):
         raise requests.exceptions.ConnectionError("connection refused")

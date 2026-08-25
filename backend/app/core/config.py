@@ -150,6 +150,18 @@ class Settings(BaseSettings):
     # the tool's raw data rather than failing the request.
     INVESTIGATION_LLM_TIMEOUT_SECONDS: int = 10
 
+    # Latency diagnosis (docs/ai-llm-latency-diagnosis.md): a realistic
+    # investigation prompt against real accumulated data (100 alerts,
+    # ~93KB/2050 tokens) left generation completely unbounded — a
+    # measured 358-364 tokens when the model wasn't capped, on top of
+    # ~8s of prompt processing, blew well past the 10s budget. Caps
+    # output length for both providers (ollama.py/groq.py) — the
+    # prompt already asks for a "concise" answer; this just enforces
+    # it. 120 was the largest value that stayed reliably under budget
+    # across repeated real-data measurements (180 measured as high as
+    # 10.12s on this hardware).
+    INVESTIGATION_LLM_MAX_OUTPUT_TOKENS: int = 120
+
     # ──────────────────────────────────────────────
     # Correlation Engine
     # ──────────────────────────────────────────────

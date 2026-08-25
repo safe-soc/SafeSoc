@@ -24,7 +24,14 @@ def generate(prompt: str) -> str:
     try:
         response = requests.post(
             f"{settings.ollama_url}/api/generate",
-            json={"model": settings.OLLAMA_MODEL, "prompt": prompt, "stream": False},
+            json={
+                "model": settings.OLLAMA_MODEL,
+                "prompt": prompt,
+                "stream": False,
+                # Bounds generation time (latency diagnosis, SS-090-adjacent) —
+                # unbounded, a real prompt measured 358-364 output tokens.
+                "options": {"num_predict": settings.INVESTIGATION_LLM_MAX_OUTPUT_TOKENS},
+            },
             timeout=60,
         )
         response.raise_for_status()
