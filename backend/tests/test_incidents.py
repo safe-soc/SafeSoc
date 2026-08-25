@@ -190,6 +190,50 @@ async def test_does_not_merge_incidents_with_no_alert_overlap():
     assert len(session.existing_incidents) == 2
 
 
+# ── SS-094: incident category/confidence, from the detected chain ──
+
+@pytest.mark.asyncio
+async def test_creating_a_new_incident_from_a_chain_stores_its_category_and_confidence():
+    session = _FakeSession()
+    tenant_id = uuid.uuid4()
+    chain = _chain("a1", pattern=CorrelationPattern.LATERAL_MOVEMENT, confidence=0.72)
+
+    incident = await create_or_merge_incident(session, tenant_id, "HOST-1", chain)
+
+    assert incident.category == CorrelationPattern.LATERAL_MOVEMENT
+    assert incident.confidence == 0.72
+
+
+@pytest.mark.asyncio
+async def test_merging_into_an_existing_incident_refreshes_category_and_confidence():
+    """Confidence rises as more events join an evolving chain — merging must not leave it frozen at first detection."""
+    tenant_id = uuid.uuid4()
+    existing = Incident(
+        id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1"],
+        category=CorrelationPattern.CREDENTIAL_BRUTE_FORCE, confidence=0.6,
+    )
+    session = _FakeSession(existing_incidents=[existing])
+
+    chain = _chain("a1", "a2", pattern=CorrelationPattern.SUCCESSFUL_COMPROMISE, confidence=0.95)
+    incident = await create_or_merge_incident(session, tenant_id, "HOST-1", chain)
+
+    assert incident.id == existing.id
+    assert incident.category == CorrelationPattern.SUCCESSFUL_COMPROMISE
+    assert incident.confidence == 0.95
+
+
+@pytest.mark.asyncio
+async def test_manually_created_incident_has_no_category_or_confidence():
+    """create_incident (manual, SS-036) has no detected chain to draw them from."""
+    session = _FakeSession()
+    tenant_id = uuid.uuid4()
+
+    incident = await create_incident(session, tenant_id, ["a1"])
+
+    assert incident.category is None
+    assert incident.confidence is None
+
+
 # Note: create_or_merge_incident's tenant/active-status scoping happens in
 # the SQL WHERE clause itself (select(...).where(Incident.tenant_id == ...,
 # Incident.status.in_(_ACTIVE_STATUSES))) — a fake session that just hands

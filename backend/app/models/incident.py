@@ -14,11 +14,11 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Text, func
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Text, func
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.enums import IncidentStatus
+from app.core.enums import CorrelationPattern, IncidentStatus
 from app.models import Base
 
 # Shared enum type object — reused across every status column below so
@@ -26,6 +26,13 @@ from app.models import Base
 # not a separately-created type per column.
 _INCIDENT_STATUS_TYPE = SAEnum(
     IncidentStatus, name="incident_status", values_callable=lambda enum_cls: [m.value for m in enum_cls]
+)
+
+# SS-094: same pattern, for the incident's category column below —
+# reuses the correlation engine's own CorrelationPattern vocabulary
+# (core/enums.py) rather than inventing a parallel one.
+_INCIDENT_CATEGORY_TYPE = SAEnum(
+    CorrelationPattern, name="incident_category", values_callable=lambda enum_cls: [m.value for m in enum_cls]
 )
 
 
@@ -37,6 +44,18 @@ class Incident(Base):
     status: Mapped[IncidentStatus] = mapped_column(_INCIDENT_STATUS_TYPE, nullable=False, default=IncidentStatus.OPEN)
     alert_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     assigned_analyst_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    # SS-094: populated from the DetectedChain that created/last merged
+    # into this incident (services/incidents.py) — both already computed
+    # by the correlation engine at detection time, previously discarded
+    # after the Telegram notification was sent. Null for manually-created
+    # incidents (services/incidents.py:create_incident), which have no
+    # detected chain to draw them from. Deliberately does NOT add a
+    # `severity` field here too — unlike category/confidence, deriving
+    # one would require a new OpenSearch lookup of the linked alerts at
+    # incident-creation time, a real scope/latency addition beyond a
+    # data-model extension, not just wiring through data already at hand.
+    category: Mapped[Optional[CorrelationPattern]] = mapped_column(_INCIDENT_CATEGORY_TYPE, nullable=True)
+    confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

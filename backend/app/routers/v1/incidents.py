@@ -51,6 +51,8 @@ def _to_response(incident: Incident) -> IncidentResponse:
         status=incident.status,
         alert_ids=incident.alert_ids,
         assigned_analyst_id=incident.assigned_analyst_id,
+        category=incident.category,
+        confidence=incident.confidence,
         created_at=incident.created_at,
         updated_at=incident.updated_at,
     )

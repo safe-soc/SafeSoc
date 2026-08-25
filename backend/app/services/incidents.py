@@ -15,7 +15,7 @@ from typing import Optional
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.enums import IncidentStatus
+from app.core.enums import CorrelationPattern, IncidentStatus
 from app.core.exceptions import IncidentNotFoundError, InvalidStateTransitionError
 from app.models.incident import Incident, IncidentNote, IncidentStateTransition
 from app.services.correlation import DetectedChain
@@ -39,9 +39,27 @@ _ALLOWED_TRANSITIONS: dict[IncidentStatus, frozenset[IncidentStatus]] = {
 }
 
 
-async def _create_new_incident(db: AsyncSession, tenant_id: uuid.UUID, alert_ids: list[str]) -> Incident:
-    """Shared by create_or_merge_incident's "no match" path and manual creation (SS-036)."""
-    incident = Incident(id=uuid.uuid4(), tenant_id=tenant_id, alert_ids=list(alert_ids), status=IncidentStatus.OPEN)
+async def _create_new_incident(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    alert_ids: list[str],
+    category: Optional[CorrelationPattern] = None,
+    confidence: Optional[float] = None,
+) -> Incident:
+    """
+    Shared by create_or_merge_incident's "no match" path and manual
+    creation (SS-036). category/confidence (SS-094) are only ever
+    passed by the former — a manually-created incident has no detected
+    chain to draw them from, so they stay null.
+    """
+    incident = Incident(
+        id=uuid.uuid4(),
+        tenant_id=tenant_id,
+        alert_ids=list(alert_ids),
+        status=IncidentStatus.OPEN,
+        category=category,
+        confidence=confidence,
+    )
     db.add(incident)
     db.add(IncidentStateTransition(incident_id=incident.id, from_status=None, to_status=IncidentStatus.OPEN))
     await db.commit()
@@ -58,8 +76,13 @@ async def create_or_merge_incident(
     If an active incident for this tenant already references at least
     one of the chain's alert_ids, the chain is treated as a
     re-detection of that same evolving attack: the incident's
-    alert_ids are merged (union), and no new incident or transition is
-    recorded. Otherwise, a new incident is created with status OPEN,
+    alert_ids are merged (union), and its category/confidence (SS-094)
+    are refreshed to this latest detection's values — confidence in
+    particular is designed to rise as more events join an evolving
+    chain (services/correlation.py's _scaled_confidence), so keeping
+    it frozen from first detection would make it stale. No new
+    incident or transition is recorded. Otherwise, a new incident is
+    created with status OPEN,
     and its creation is itself recorded as the first audit-trail
     transition (from_status=None -> to_status=OPEN), per SRS §3.3.
 
@@ -87,11 +110,15 @@ async def create_or_merge_incident(
 
     if matching_incident is not None:
         matching_incident.alert_ids = list(dict.fromkeys(matching_incident.alert_ids + list(chain.alert_ids)))
+        matching_incident.category = chain.pattern
+        matching_incident.confidence = chain.confidence
         await db.commit()
         await db.refresh(matching_incident)
         return matching_incident
 
-    return await _create_new_incident(db, tenant_id, list(chain.alert_ids))
+    return await _create_new_incident(
+        db, tenant_id, list(chain.alert_ids), category=chain.pattern, confidence=chain.confidence
+    )
 
 
 async def create_incident(db: AsyncSession, tenant_id: uuid.UUID, alert_ids: Optional[list[str]] = None) -> Incident:

@@ -10,7 +10,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from app.core.enums import IncidentStatus
+from app.core.enums import CorrelationPattern, IncidentStatus
 
 
 class IncidentCreateRequest(BaseModel):
@@ -39,6 +39,11 @@ class IncidentResponse(BaseModel):
     status: IncidentStatus
     alert_ids: list[str]
     assigned_analyst_id: Optional[uuid.UUID]
+    # SS-094: the detected chain's pattern/confidence at creation (or
+    # last merge) — null for a manually-created incident, which has no
+    # detected chain.
+    category: Optional[CorrelationPattern]
+    confidence: Optional[float]
     created_at: datetime
     updated_at: datetime
 
