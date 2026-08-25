@@ -27,3 +27,9 @@ class InvestigateResponse(BaseModel):
     intent: Intent
     answer: str
     data: dict
+    # True whenever `answer` is a deterministic templated/explanatory
+    # summary rather than a genuine LLM-generated response — an LLM
+    # timeout/failure (SS-047) or a failed tool call (SS-085). Defaults
+    # to False so existing callers that don't set it explicitly still
+    # get correct semantics (SS-084).
+    is_fallback: bool = False

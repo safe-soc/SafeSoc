@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import EvidencePanel from '../components/EvidencePanel';
 import Layout from '../components/Layout';
 import PageHeader from '../components/PageHeader';
 import { BotIcon, SendIcon } from '../components/icons';
@@ -20,6 +21,8 @@ interface Message {
   role: 'user' | 'assistant';
   text: string;
   intent?: string;
+  data?: Record<string, unknown>;
+  isFallback?: boolean;
 }
 
 const SUGGESTED_PROMPTS = ['Show failed logins', 'Highest risk endpoint', 'Active incidents', 'Attack chain summary'];
@@ -53,7 +56,13 @@ export default function Investigate() {
       setSessionId(response.data.session_id);
       setMessages((prev) => [
         ...prev,
-        { role: 'assistant', text: response.data.answer, intent: response.data.intent },
+        {
+          role: 'assistant',
+          text: response.data.answer,
+          intent: response.data.intent,
+          data: response.data.data,
+          isFallback: response.data.is_fallback,
+        },
       ]);
     } catch {
       setError('Failed to reach the investigation assistant.');
@@ -121,6 +130,14 @@ export default function Investigate() {
                     </div>
                     {message.intent && message.intent !== 'unknown' && (
                       <span className="px-1 text-xs text-slate-500">{titleCase(message.intent)}</span>
+                    )}
+                    {message.isFallback && (
+                      <span className="rounded-full border border-amber-700/40 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-400">
+                        Automated summary
+                      </span>
+                    )}
+                    {message.data && Object.keys(message.data).length > 0 && (
+                      <EvidencePanel data={message.data} />
                     )}
                   </div>
                 </div>

@@ -7,6 +7,7 @@ import uuid
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from opensearchpy.exceptions import OpenSearchException
 
 from app.core.enums import Intent
 from app.db.postgresql import get_db
@@ -52,6 +53,7 @@ def test_investigate_returns_a_defined_fallback_for_an_unclassifiable_query(clie
     assert body["intent"] == "unknown"
     assert body["data"] == {}
     assert body["answer"]  # a real, non-empty message — not a silent wrong answer
+    assert body["is_fallback"] is False  # not a degraded answer — this is the designed "I don't understand" response
 
 
 def test_investigate_calls_the_matching_tool_and_returns_its_data(client, auth_headers, monkeypatch):
@@ -59,7 +61,7 @@ def test_investigate_calls_the_matching_tool_and_returns_its_data(client, auth_h
     mock_tool_call = AsyncMock(return_value=AlertListOutput(total=2, alerts=[{"alert_id": "a1"}, {"alert_id": "a2"}]))
     monkeypatch.setattr("app.routers.v1.investigate.TOOLS", {Intent.AUTH_FAILURES: Mock(call=mock_tool_call)})
     monkeypatch.setattr(
-        "app.routers.v1.investigate._generate_answer", AsyncMock(return_value="Found 2 failed logins.")
+        "app.routers.v1.investigate._generate_answer", AsyncMock(return_value=("Found 2 failed logins.", False))
     )
 
     response = client.post(
@@ -71,7 +73,29 @@ def test_investigate_calls_the_matching_tool_and_returns_its_data(client, auth_h
     assert body["intent"] == "auth_failures"
     assert body["answer"] == "Found 2 failed logins."
     assert body["data"]["total"] == 2
+    assert body["is_fallback"] is False
     mock_tool_call.assert_called_once()
+
+
+def test_investigate_returns_is_fallback_false_for_a_genuine_llm_answer(client, auth_headers, monkeypatch):
+    """
+    SS-084: a genuine (non-degraded) LLM answer, exercised through the
+    real _generate_answer path (only the LLM client itself is mocked),
+    must come back with is_fallback: false.
+    """
+    _mock_resolve_query(monkeypatch, Intent.TOP_ALERTS)
+    mock_tool_call = AsyncMock(return_value=AlertListOutput(total=5, alerts=[]))
+    monkeypatch.setattr("app.routers.v1.investigate.TOOLS", {Intent.TOP_ALERTS: Mock(call=mock_tool_call)})
+
+    from app.clients import ollama
+    monkeypatch.setattr(ollama, "generate", Mock(return_value="You have 5 top alerts right now."))
+
+    response = client.post("/api/v1/investigate", json={"query": "top alerts"}, headers=auth_headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["answer"] == "You have 5 top alerts right now."
+    assert body["is_fallback"] is False
 
 
 def test_investigate_generates_a_session_id_when_none_provided(client, auth_headers, monkeypatch):
@@ -105,7 +129,62 @@ def test_investigate_falls_back_to_a_templated_summary_when_the_llm_fails(client
     response = client.post("/api/v1/investigate", json={"query": "top alerts"}, headers=auth_headers)
 
     assert response.status_code == 200  # the request itself must not fail
-    assert "5" in response.json()["answer"]
+    body = response.json()
+    assert "5" in body["answer"]
+    assert body["is_fallback"] is True
+
+
+def test_investigate_returns_an_explanatory_response_when_tool_validation_fails(client, auth_headers, monkeypatch):
+    """
+    SS-085: a classified intent whose params fail the tool's own input
+    validation (e.g. IP_ACTIVITY resolved without an `ip`) must not
+    500. TOOLS is left unmocked here so the real MCPTool.call() raises
+    a genuine pydantic.ValidationError for the missing required field,
+    before any handler/downstream query ever runs.
+    """
+    _mock_resolve_query(monkeypatch, Intent.IP_ACTIVITY)  # params default to {} — missing required "ip"
+
+    response = client.post("/api/v1/investigate", json={"query": "what about that ip?"}, headers=auth_headers)
+
+    assert response.status_code == 200  # not an unhandled 500
+    body = response.json()
+    assert body["intent"] == "ip_activity"  # the classified intent is preserved
+    assert body["data"] == {}
+    assert body["is_fallback"] is True
+    assert body["answer"]  # a real, explanatory message
+
+
+def test_investigate_returns_an_explanatory_response_when_the_tool_call_hits_a_downstream_failure(
+    client, auth_headers, monkeypatch
+):
+    """SS-085: an OpenSearch/Postgres failure during the tool call must degrade gracefully, not 500."""
+    _mock_resolve_query(monkeypatch, Intent.TOP_ALERTS)
+    mock_tool_call = AsyncMock(side_effect=OpenSearchException("cluster unavailable"))
+    monkeypatch.setattr("app.routers.v1.investigate.TOOLS", {Intent.TOP_ALERTS: Mock(call=mock_tool_call)})
+
+    response = client.post("/api/v1/investigate", json={"query": "top alerts"}, headers=auth_headers)
+
+    assert response.status_code == 200  # not an unhandled 500
+    body = response.json()
+    assert body["intent"] == "top_alerts"
+    assert body["data"] == {}
+    assert body["is_fallback"] is True
+    assert body["answer"]
+
+
+def test_investigate_does_not_swallow_an_unrelated_programming_error(client, auth_headers, monkeypatch):
+    """
+    SS-085's tool-call except clause must stay narrow: a genuine bug
+    (e.g. a TypeError from broken handler code) is not a validation or
+    downstream-service failure, and must still surface as a failure
+    rather than being silently absorbed into a fallback answer.
+    """
+    _mock_resolve_query(monkeypatch, Intent.TOP_ALERTS)
+    mock_tool_call = AsyncMock(side_effect=TypeError("unexpected keyword argument"))
+    monkeypatch.setattr("app.routers.v1.investigate.TOOLS", {Intent.TOP_ALERTS: Mock(call=mock_tool_call)})
+
+    with pytest.raises(TypeError):
+        client.post("/api/v1/investigate", json={"query": "top alerts"}, headers=auth_headers)
 
 
 @pytest.mark.asyncio
@@ -137,11 +216,12 @@ async def test_generate_answer_falls_back_when_the_llm_exceeds_the_timeout(monke
     monkeypatch.setattr(ollama, "generate", _slow_generate)
 
     started = time.monotonic()
-    answer = await _generate_answer("top alerts", Intent.TOP_ALERTS, AlertListOutput(total=3, alerts=[]))
+    answer, is_fallback = await _generate_answer("top alerts", Intent.TOP_ALERTS, AlertListOutput(total=3, alerts=[]))
     elapsed = time.monotonic() - started
 
     assert elapsed < 0.5  # bounded by the (shortened) timeout, not the slow call's 1.0s
     assert "3" in answer
+    assert is_fallback is True
 
 
 @pytest.mark.asyncio
@@ -197,7 +277,7 @@ def test_investigate_response_time_meets_the_15_second_srs_target(client, auth_h
     mock_tool_call = AsyncMock(return_value=AlertListOutput(total=0, alerts=[]))
     monkeypatch.setattr("app.routers.v1.investigate.TOOLS", {Intent.RISKY_ENDPOINTS: Mock(call=mock_tool_call)})
     monkeypatch.setattr(
-        "app.routers.v1.investigate._generate_answer", AsyncMock(return_value="No risky endpoints found.")
+        "app.routers.v1.investigate._generate_answer", AsyncMock(return_value=("No risky endpoints found.", False))
     )
 
     started = time.monotonic()

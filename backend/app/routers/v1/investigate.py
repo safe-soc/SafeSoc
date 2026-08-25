@@ -16,7 +16,9 @@ import asyncio
 import uuid
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from opensearchpy.exceptions import OpenSearchException
+from pydantic import BaseModel, ValidationError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients import groq, ollama
@@ -51,13 +53,31 @@ def _fallback_answer(intent: Intent, tool_result: BaseModel) -> str:
     return f"Here is the data for your {label} query."
 
 
-async def _generate_answer(query: str, intent: Intent, tool_result: BaseModel) -> str:
+def _tool_error_answer(intent: Intent) -> str:
+    """
+    A safe, explanatory answer used when the matching MCP tool couldn't
+    be executed at all (SS-085) — a bad/missing parameter or a
+    downstream OpenSearch/Postgres failure. Unlike _fallback_answer,
+    there's no tool_result to summarize here, so this can't reuse it.
+    """
+    label = intent.value.replace("_", " ")
+    return (
+        f"I understood you're asking about {label}, but ran into a problem retrieving the "
+        "underlying data. Please try again in a moment."
+    )
+
+
+async def _generate_answer(query: str, intent: Intent, tool_result: BaseModel) -> tuple[str, bool]:
     """
     Ask the configured LLM provider to summarize tool_result in answer
     to `query`. Bounded by INVESTIGATION_LLM_TIMEOUT_SECONDS so a slow
     or unreachable LLM can't blow the SRS's 15-second response target
     (AC) — any failure or timeout degrades to a templated summary of
     the same data rather than failing the request.
+
+    Returns (answer, is_fallback) — is_fallback is True whenever answer
+    came from _fallback_answer() rather than the LLM, so callers can
+    tell a genuine LLM response apart from a degraded one (SS-084).
     """
     llm_client = groq if settings.LLM_PROVIDER == "groq" else ollama
     prompt = (
@@ -70,10 +90,11 @@ async def _generate_answer(query: str, intent: Intent, tool_result: BaseModel) -
     try:
         # generate() is a blocking `requests` call — run it off the event
         # loop so it can actually be bounded by wait_for.
-        return await asyncio.wait_for(
+        answer = await asyncio.wait_for(
             asyncio.to_thread(llm_client.generate, prompt),
             timeout=settings.INVESTIGATION_LLM_TIMEOUT_SECONDS,
         )
+        return answer, False
     except asyncio.TimeoutError:
         # asyncio.wait_for's TimeoutError carries no message (str(e) == ""),
         # so log this case explicitly instead of falling through to the
@@ -82,7 +103,7 @@ async def _generate_answer(query: str, intent: Intent, tool_result: BaseModel) -
             "LLM answer generation timed out, falling back to a templated summary",
             timeout_seconds=settings.INVESTIGATION_LLM_TIMEOUT_SECONDS,
         )
-        return _fallback_answer(intent, tool_result)
+        return _fallback_answer(intent, tool_result), True
     except Exception as e:
         # type(e).__name__ alongside str(e) so an exception with an empty
         # or unhelpful message (as above) still identifies what happened.
@@ -91,7 +112,7 @@ async def _generate_answer(query: str, intent: Intent, tool_result: BaseModel) -
             error_type=type(e).__name__,
             error=str(e),
         )
-        return _fallback_answer(intent, tool_result)
+        return _fallback_answer(intent, tool_result), True
 
 
 @router.post("/investigate", response_model=InvestigateResponse)
@@ -112,14 +133,43 @@ async def investigate(
     intent, params = await resolve_query(str(current_user.tenant_id), session_id, payload.query)
 
     if intent == Intent.UNKNOWN:
-        return InvestigateResponse(session_id=session_id, intent=Intent.UNKNOWN, answer=_UNKNOWN_INTENT_ANSWER, data={})
+        return InvestigateResponse(
+            session_id=session_id,
+            intent=Intent.UNKNOWN,
+            answer=_UNKNOWN_INTENT_ANSWER,
+            data={},
+            is_fallback=False,
+        )
 
-    tool_result = await TOOLS[intent].call(db, current_user.tenant_id, params)
-    answer = await _generate_answer(payload.query, intent, tool_result)
+    try:
+        tool_result = await TOOLS[intent].call(db, current_user.tenant_id, params)
+    except (ValidationError, OpenSearchException, SQLAlchemyError) as e:
+        # A bad/missing tool parameter or a downstream OpenSearch/Postgres
+        # failure must still return a proper InvestigateResponse (AC) —
+        # not an unhandled 500 — while preserving the classified intent
+        # (SS-085). Deliberately narrow: anything else (a real
+        # programming bug) is left to propagate and surface as a
+        # failure, same as before this change.
+        logger.warning(
+            "Investigation tool call failed, returning an explanatory response",
+            intent=intent.value,
+            error_type=type(e).__name__,
+            error=str(e),
+        )
+        return InvestigateResponse(
+            session_id=session_id,
+            intent=intent,
+            answer=_tool_error_answer(intent),
+            data={},
+            is_fallback=True,
+        )
+
+    answer, is_fallback = await _generate_answer(payload.query, intent, tool_result)
 
     return InvestigateResponse(
         session_id=session_id,
         intent=intent,
         answer=answer,
         data=tool_result.model_dump(mode="json"),
+        is_fallback=is_fallback,
     )

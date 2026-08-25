@@ -82,6 +82,7 @@ export interface InvestigateResponse {
   intent: string;
   answer: string;
   data: Record<string, unknown>;
+  is_fallback: boolean;
 }
 
 // GET /api/v1/endpoints (SS-034) — no host_os field on this resource;
