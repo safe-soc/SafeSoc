@@ -58,6 +58,7 @@ nav:
       - Performance Benchmarks: performance-benchmarks.md
       - Release Process: release-process.md
       - Observability: observability.md
+      - Kubernetes Deployment: kubernetes-deployment.md
   - Security:
       - Security Review: security-review.md
   - AI Investigation Assistant:

@@ -1,0 +1,45 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "safesoc.fullname" . }}-app-ingress
+  labels:
+    {{- include "safesoc.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: ["postgresql", "redis", "opensearch"]
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: ["backend", "worker", "beat", "migrations"]
+      # Only pods from this release's own backend/worker/beat/migration
+      # containers may reach postgres/redis/opensearch — nothing outside
+      # the release, and no other release sharing the namespace.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "safesoc.fullname" . }}-backend-ingress
+  labels:
+    {{- include "safesoc.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "safesoc.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: backend
+  policyTypes:
+    - Ingress
+  ingress:
+    # Backend is fronted by whatever Ingress controller/LoadBalancer
+    # the cluster provides — left open rather than trying to guess the
+    # controller's pod labels, which vary by cluster.
+    - {}
+{{- end }}

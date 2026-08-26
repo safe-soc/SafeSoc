@@ -1,0 +1,38 @@
+SafeSOC has been deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+1. The pre-install/pre-upgrade migration Job runs `alembic upgrade head`
+   automatically. Check its status with:
+
+     kubectl get jobs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=migrations
+
+2. Watch the backend/worker/beat pods come up:
+
+     kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+
+3. Reach the API:
+{{- if .Values.backend.ingress.enabled }}
+
+     https://{{ .Values.backend.ingress.host }}
+{{- else }}
+
+     No Ingress is enabled (backend.ingress.enabled=false). Port-forward instead:
+
+     kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "safesoc.fullname" . }}-backend 8000:{{ .Values.backend.service.port }}
+
+     Then visit http://localhost:8000/health and http://localhost:8000/docs
+{{- end }}
+
+4. {{ if .Values.secrets.jwtSecret }}A JWT secret was supplied via values.{{ else }}A JWT secret was auto-generated on first install and is reused across
+   upgrades (see templates/_helpers.tpl's safesoc.jwtSecret). Retrieve it with:
+
+     kubectl get secret -n {{ .Release.Namespace }} {{ include "safesoc.secretName" . }} -o jsonpath='{.data.jwt-secret}' | base64 -d{{ end }}
+
+5. {{ if eq .Values.llm.provider "ollama" }}LLM provider is set to "ollama" — make sure llm.ollamaHost points at a
+   reachable Ollama instance (there is no in-cluster equivalent of
+   docker-compose.yml's host.docker.internal default).{{ else }}LLM provider is set to "{{ .Values.llm.provider }}" — make sure the matching
+   API key is set under secrets.* (or secrets.existingSecret) before
+   relying on AI-assisted features.{{ end }}
+
+See docs/kubernetes-deployment.md in the SafeSOC repository for the full
+deployment guide, including limitations of this chart (single-instance
+Postgres/Redis/OpenSearch, no multi-node OpenSearch support, etc).

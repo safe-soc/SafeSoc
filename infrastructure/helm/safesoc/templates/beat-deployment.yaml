@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "safesoc.fullname" . }}-beat
+  labels:
+    {{- include "safesoc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: beat
+spec:
+  # Hardcoded, NOT read from values — Celery beat must run as exactly
+  # one replica or scheduled tasks (risk recalculation, weekly reports)
+  # get dispatched once per replica, duplicating work. See the comment
+  # on values.yaml's `beat:` block.
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "safesoc.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: beat
+  template:
+    metadata:
+      labels:
+        {{- include "safesoc.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: beat
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: beat
+          image: {{ include "safesoc.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["celery", "-A", "app.tasks.celery_app", "beat", "--loglevel=info"]
+          env:
+            {{- include "safesoc.commonEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.beat.resources | nindent 12 }}

@@ -1,0 +1,17 @@
+apiVersion: v2
+name: safesoc
+description: AI-assisted, multi-tenant Security Operations Platform for SMBs (SS-079)
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+home: https://github.com/safe-soc/SafeSoc
+sources:
+  - https://github.com/safe-soc/SafeSoc
+maintainers:
+  - name: SafeSOC maintainers
+    url: https://github.com/safe-soc/SafeSoc/blob/main/.github/CODEOWNERS
+keywords:
+  - security
+  - soc
+  - siem
+  - incident-response

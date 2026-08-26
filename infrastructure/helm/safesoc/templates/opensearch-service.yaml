@@ -1,0 +1,19 @@
+{{- if .Values.opensearch.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "safesoc.fullname" . }}-opensearch
+  labels:
+    {{- include "safesoc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: opensearch
+spec:
+  clusterIP: None
+  ports:
+    - port: 9200
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "safesoc.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: opensearch
+{{- end }}

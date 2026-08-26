@@ -1,0 +1,176 @@
+# SafeSOC Helm chart — default values (SS-079)
+# Mirrors docker-compose.yml's 6-service topology (opensearch, postgres,
+# redis, backend, worker, beat) — production-oriented rather than a
+# literal port: resource requests/limits, liveness/readiness probes,
+# Kubernetes Secrets for sensitive config instead of plaintext
+# environment values, and a migration Job instead of a manual step.
+# Every setting below has a working default so `helm install` succeeds
+# out of the box for evaluation — override secrets.* before using this
+# for anything real (see the comments on each).
+
+image:
+  # Matches the image .github/workflows/release.yml (SS-076) builds
+  # and pushes to GHCR. Override repository/tag to point at a
+  # self-built image instead.
+  repository: ghcr.io/safe-soc/safesoc/backend
+  tag: "" # defaults to .Chart.AppVersion when empty
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+backend:
+  replicaCount: 2
+  service:
+    type: ClusterIP
+    port: 8000
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  # Liveness/readiness both use GET /health (checks OpenSearch/Postgres/
+  # Redis connectivity, SS-077's /metrics is a separate, unauthenticated
+  # endpoint also worth scraping — see infrastructure/helm/safesoc's
+  # parent doc, docs/kubernetes-deployment.md, for a ServiceMonitor example).
+  probes:
+    initialDelaySeconds: 15
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  ingress:
+    enabled: false
+    className: ""
+    host: safesoc.example.com
+    annotations: {}
+    tls: false
+    tlsSecretName: ""
+
+worker:
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+beat:
+  # Deliberately NOT a configurable replicaCount: Celery beat running
+  # more than once would duplicate every scheduled task (risk
+  # recalculation, weekly reports) — see templates/beat-deployment.yaml,
+  # hardcoded to replicas: 1.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+migrations:
+  # Runs `alembic upgrade head` as a Helm pre-install/pre-upgrade hook
+  # Job before backend/worker/beat pods roll out. docker-compose.yml's
+  # own setup requires this as a manual step (backend/Dockerfile has no
+  # migration-on-startup entrypoint) — a chart rollout is a less
+  # hands-on operation than `docker compose up`, so this automates it.
+  enabled: true
+
+postgresql:
+  enabled: true # set false and point extraEnv at an external database (e.g. a managed RDS instance) instead
+  image: postgres:16-alpine
+  auth:
+    database: safesoc
+    username: safesoc
+    # DEV-ONLY DEFAULT, same convention as docker-compose.yml's own
+    # POSTGRES_PASSWORD=safesoc — set secrets.existingSecret (or
+    # postgresql.auth.password directly) before any real deployment.
+    password: safesoc
+  persistence:
+    size: 10Gi
+    storageClassName: ""
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+redis:
+  enabled: true # set false and point extraEnv at an external cache (e.g. managed ElastiCache) instead
+  image: redis:7-alpine
+  persistence:
+    size: 2Gi
+    storageClassName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+opensearch:
+  enabled: true # set false and point extraEnv at an external OpenSearch/Elasticsearch cluster instead
+  image: opensearchproject/opensearch:2
+  # Matches docker-compose.yml's discovery.type=single-node — a real
+  # multi-node production OpenSearch cluster is a materially larger,
+  # separate undertaking than this issue's scope (see docs/kubernetes-deployment.md).
+  javaOpts: "-Xms512m -Xmx512m"
+  persistence:
+    size: 20Gi
+    storageClassName: ""
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+llm:
+  # docker-compose.yml's OLLAMA_HOST=host.docker.internal default has
+  # no equivalent inside a real Kubernetes cluster, so this chart
+  # defaults to the cloud provider instead of assuming a locally-
+  # reachable Ollama. Set provider: ollama and ollamaHost to a real
+  # in-cluster Service name (or externally-reachable address) to use a
+  # local model.
+  provider: groq
+  ollamaHost: ""
+  ollamaPort: 11434
+  ollamaModel: "llama3.2:3b"
+
+# All secret-bearing settings. Left blank by default (the chart
+# generates a random jwtSecret at install time if left blank — see
+# templates/secret.yaml — rather than shipping an insecure,
+# source-controlled placeholder the way .env.example's dev-only
+# default does). Prefer existingSecret (a Secret you create/manage
+# outside this chart, e.g. via your cluster's secrets manager
+# integration) over setting these values directly for anything real.
+secrets:
+  existingSecret: ""
+  jwtSecret: ""
+  groqApiKey: ""
+  virustotalApiKey: ""
+  abuseipdbApiKey: ""
+  telegramBotToken: ""
+  telegramChatId: ""
+
+# Escape hatch for any of core/config.py's other settings
+# (backend/app/core/config.py has ~50+, most with working defaults —
+# not all are worth a first-class values.yaml field). Merged directly
+# into every backend/worker/beat pod's environment.
+extraEnv: {}
+# extraEnv:
+#   RATE_LIMIT_LOGIN_MAX_ATTEMPTS: "5"
+
+networkPolicy:
+  # Off by default (cluster-dependent whether a CNI enforces
+  # NetworkPolicy at all) — when enabled, restricts postgres/redis/
+  # opensearch ingress to only the backend/worker/beat pods in this
+  # release, and backend ingress to anything (fronted by your own
+  # Ingress controller).
+  enabled: false
