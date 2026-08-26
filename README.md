@@ -184,6 +184,13 @@ Prerequisites: [Docker](https://docs.docker.com/get-docker/) and Docker Compose.
 ```bash
 git clone https://github.com/safe-soc/SafeSoc.git
 cd SafeSoc
+./scripts/install.sh          # Linux/macOS
+./scripts/install.ps1         # Windows
+```
+
+The installer checks Docker is running, copies `.env.example` to `.env` if needed (never overwrites an existing one), starts the stack, and waits for `/health` to report healthy — safe to re-run any time. Or run the same steps manually:
+
+```bash
 docker compose up --build
 ```
 
@@ -301,7 +308,7 @@ SafeSOC sends Telegram alerts for critical-severity alerts and detected attack c
 
 Tracked in [`PRODUCT_ROADMAP.md`](PRODUCT_ROADMAP.md), which extends the original 68-issue backlog with what a real open-source SOC platform needs next:
 
-- **Near-term (v1.0 follow-ups):** a formal API versioning policy, an audit log for compliance-sensitive actions, an installer/setup script for non-Docker environments.
+- **Near-term (v1.0 follow-ups):** a formal API versioning policy. An audit log for compliance-sensitive actions (`services/audit.py`) and the one-command installer script above are both now implemented.
 - **Open-source polish (v1.1+):** contribution guidelines, security disclosure policy, release automation.
 - **Research-grade bets (v2.0, speculative):** plugin architecture for third-party detectors, multi-cloud posture management beyond AWS, SOAR-style automated response.
 

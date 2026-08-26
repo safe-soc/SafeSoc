@@ -27,7 +27,16 @@ This image alone is not sufficient to run SafeSOC — it needs a reachable OpenS
 
 ## 3. Running the Backend with Docker Compose (Recommended)
 
-From the repository root:
+**One-command quickstart (SS-072):** `scripts/install.ps1` (Windows/PowerShell) or `scripts/install.sh` (Linux/macOS) checks Docker is installed and running, copies `.env.example` to `.env` if one doesn't exist yet (never overwrites an existing one), runs `docker compose up --build -d`, and polls `/health` until the backend reports healthy:
+
+```bash
+./scripts/install.sh          # Linux/macOS
+./scripts/install.ps1         # Windows
+```
+
+Safe to re-run any time — every step is idempotent.
+
+Or run the same steps manually, from the repository root:
 
 ```bash
 docker compose up --build
@@ -96,4 +105,4 @@ OPENSEARCH_PORT=9201 BACKEND_PORT=8001 docker compose up --build
 ## 7. Not Yet Built
 
 - A production-hardened deployment path (this compose file is a dev/demo setup — single OpenSearch node, no TLS termination, no secrets manager).
-- `SS-071` (audit log) and `SS-072` (installer/setup script) — see `PRODUCT_ROADMAP.md`.
+- `SS-071` (audit log, `services/audit.py`) and `SS-072` (this section's installer script) are both now implemented — see `PRODUCT_ROADMAP.md` for the rest of the v1.1+/v2.0 backlog (plugin SDK, docs site, contribution guide, security policy, release automation, observability, Kubernetes/Helm, and beyond).
