@@ -1,0 +1,127 @@
+name: Release
+
+# Release automation (SS-076): semver-tagged Docker images + a GitHub
+# Release whose body is extracted straight from CHANGELOG.md.
+#
+# Triggers ONLY on pushing a tag matching v*.*.* (optionally with a
+# -alpha/-beta/-rc suffix, matching this repo's existing tag history)
+# — an ordinary commit or push to main NEVER triggers a release, only
+# a deliberately-created tag does. workflow_dispatch exists for a
+# manual run and defaults dry_run to true, so triggering it by hand
+# without changing that input validates the pipeline without actually
+# publishing anything.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. v1.1.0 or v1.1.0-alpha (must match an existing CHANGELOG.md '## [version]' heading)"
+        required: true
+      dry_run:
+        description: "If true, run every step except actually pushing the image or publishing the GitHub Release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  validate:
+    name: Validate version + extract changelog
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      dry_run: ${{ steps.version.outputs.dry_run }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version, prerelease flag, and dry-run mode
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            DRY_RUN="${{ github.event.inputs.dry_run }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+            DRY_RUN="false"
+          fi
+
+          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9]+)?$ ]]; then
+            echo "::error::'$VERSION' is not a valid semver tag (expected vX.Y.Z or vX.Y.Z-suffix)."
+            exit 1
+          fi
+
+          if [[ "$VERSION" == *-* ]]; then
+            PRERELEASE="true"
+          else
+            PRERELEASE="false"
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "dry_run=$DRY_RUN" >> "$GITHUB_OUTPUT"
+          echo "Releasing $VERSION (prerelease=$PRERELEASE, dry_run=$DRY_RUN)"
+
+      - name: Extract CHANGELOG.md section for this version
+        run: |
+          python scripts/changelog_extract.py "${{ steps.version.outputs.version }}" > release-notes.md
+          echo "--- release-notes.md ---"
+          cat release-notes.md
+
+      - name: Upload release notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+
+  docker:
+    name: Build and push versioned backend image
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: needs.validate.outputs.dry_run != 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (and push, unless dry_run)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: ${{ needs.validate.outputs.dry_run != 'true' }}
+          tags: |
+            ghcr.io/${{ github.repository }}/backend:${{ needs.validate.outputs.version }}
+            ${{ needs.validate.outputs.prerelease == 'false' && format('ghcr.io/{0}/backend:latest', github.repository) || '' }}
+
+  github-release:
+    name: Publish GitHub Release
+    needs: [validate, docker]
+    if: needs.validate.outputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.validate.outputs.version }}
+          name: ${{ needs.validate.outputs.version }}
+          body_path: release-notes.md
+          prerelease: ${{ needs.validate.outputs.prerelease }}

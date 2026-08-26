@@ -100,7 +100,7 @@ OPENSEARCH_PORT=9201 BACKEND_PORT=8001 docker compose up --build
 
 ## 6. CI/CD
 
-`.github/workflows/ci.yml` runs on every push/PR: the `safesoc-backend` job installs deps, runs an import smoke check, then runs the real backend `pytest` suite (545 tests); the two `cloudlens-*` jobs remain smoke checks (Django `manage.py check`, frontend lint/typecheck/build) — see `docs/testing.md`.
+`.github/workflows/ci.yml` runs on every push/PR: the `safesoc-backend` job installs deps, runs an import smoke check, then runs the real backend `pytest` suite; `release-scripts` (SS-076) runs `scripts/changelog_extract.py`'s own tests; the two `cloudlens-*` jobs remain smoke checks (Django `manage.py check`, frontend lint/typecheck/build) — see `docs/testing.md`. `.github/workflows/docs.yml` (SS-073) and `release.yml` (SS-076) are separate, path/tag-triggered workflows — see `docs/release-process.md`.
 
 ## 7. Not Yet Built
 

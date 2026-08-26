@@ -3,7 +3,9 @@ name: CI
 # Kept intentionally minimal (see docs/testing.md). The backend job runs
 # its real pytest suite; the CloudLens jobs remain smoke checks (no test
 # suite exists there yet), using only dependencies already declared in
-# each subproject — nothing extra installed.
+# each subproject — nothing extra installed. release-scripts (SS-076)
+# covers scripts/changelog_extract.py's own tests — unrelated to the
+# backend app, so it isn't part of that job's working-directory: backend.
 
 on:
   push:
@@ -33,6 +35,22 @@ jobs:
 
       - name: Run tests
         run: pytest
+
+  release-scripts:
+    name: Release scripts — tests (SS-076)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Run tests
+        run: pytest scripts/
 
   cloudlens-backend:
     name: CloudLens Backend — Django check

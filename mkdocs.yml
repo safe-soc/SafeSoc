@@ -56,6 +56,7 @@ nav:
       - Deployment: deployment.md
       - Testing: testing.md
       - Performance Benchmarks: performance-benchmarks.md
+      - Release Process: release-process.md
   - Security:
       - Security Review: security-review.md
   - AI Investigation Assistant:
