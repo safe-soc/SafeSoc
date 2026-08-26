@@ -32,6 +32,7 @@ from app.core.enums import Intent
 from app.db.postgresql import get_db
 from app.mcp import TOOLS
 from app.schemas.investigation import InvestigateRequest, InvestigateResponse
+from app.services.audit import record_event
 from app.services.investigation import append_turn, get_context, resolve_query
 from app.utils.logger import get_logger
 
@@ -270,6 +271,39 @@ async def _generate_answer(
         return _fallback_answer(intent, tool_result), True
 
 
+async def _record_investigation_audit_event(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    session_id: str,
+    actor_user_id: uuid.UUID,
+    details: dict,
+) -> None:
+    """
+    Best-effort audit logging for an investigation request (SS-098).
+    Mirrors services/incidents.py's _record_audit_event pattern exactly
+    (SS-097): a record_event() failure is caught and logged here, never
+    allowed to raise back into the caller — audit logging must not be
+    able to break or alter the investigation response.
+    """
+    try:
+        await record_event(
+            db,
+            tenant_id,
+            action="investigation.query",
+            target_type="investigation_session",
+            target_id=session_id,
+            actor_user_id=actor_user_id,
+            details=details,
+        )
+    except Exception as e:
+        logger.warning(
+            "Audit logging failed for investigation query",
+            session_id=session_id,
+            error_type=type(e).__name__,
+            error=str(e),
+        )
+
+
 @router.post("/investigate", response_model=InvestigateResponse)
 async def investigate(
     payload: InvestigateRequest,
@@ -288,6 +322,13 @@ async def investigate(
     intent, params = await resolve_query(str(current_user.tenant_id), session_id, payload.query)
 
     if intent == Intent.UNKNOWN:
+        await _record_investigation_audit_event(
+            db,
+            current_user.tenant_id,
+            session_id,
+            current_user.user_id,
+            details={"query": payload.query, "intent": "unknown", "outcome": "unclassified"},
+        )
         return InvestigateResponse(
             session_id=session_id,
             intent=Intent.UNKNOWN,
@@ -311,6 +352,13 @@ async def investigate(
             error_type=type(e).__name__,
             error=str(e),
         )
+        await _record_investigation_audit_event(
+            db,
+            current_user.tenant_id,
+            session_id,
+            current_user.user_id,
+            details={"query": payload.query, "intent": intent.value, "outcome": "tool_error"},
+        )
         return InvestigateResponse(
             session_id=session_id,
             intent=intent,
@@ -328,6 +376,14 @@ async def investigate(
     # tool-error-fallback answers above intentionally aren't part of
     # the transcript the LLM prompt draws on.
     await append_turn(str(current_user.tenant_id), session_id, payload.query, answer)
+
+    await _record_investigation_audit_event(
+        db,
+        current_user.tenant_id,
+        session_id,
+        current_user.user_id,
+        details={"query": payload.query, "intent": intent.value, "is_fallback": is_fallback, "outcome": "answered"},
+    )
 
     return InvestigateResponse(
         session_id=session_id,

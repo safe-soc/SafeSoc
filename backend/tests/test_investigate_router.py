@@ -9,7 +9,8 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from opensearchpy.exceptions import OpenSearchException
 
-from app.core.enums import Intent
+from app.core.enums import Intent, UserRole
+from app.core.security import create_access_token
 from app.db.postgresql import get_db
 from app.main import app
 from app.mcp.tools import AlertListOutput, EndpointSnapshotOutput, RiskyEndpointsOutput
@@ -20,6 +21,17 @@ def _mock_resolve_query(monkeypatch, intent, params=None):
     monkeypatch.setattr(
         "app.routers.v1.investigate.resolve_query", AsyncMock(return_value=(intent, params or {}))
     )
+
+
+def _headers_for(tenant_id: uuid.UUID, user_id: uuid.UUID, role: UserRole = UserRole.ANALYST) -> dict:
+    """
+    Like make_auth_headers, but exposes the exact user_id used — needed
+    to assert record_event()'s actor_user_id came from the authenticated
+    user specifically (SS-098), which make_auth_headers's own randomly-
+    generated user_id can't prove.
+    """
+    token = create_access_token(tenant_id, user_id, role)
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture(autouse=True)
@@ -47,9 +59,15 @@ def _mock_investigation_context(monkeypatch):
     real, unavailable Redis connection. Defaults to "no transcript,
     nothing recorded" so existing tests see unchanged behavior; tests
     that care about transcript content override these explicitly.
+
+    SS-098: record_event() is now called at all three return points
+    (UNKNOWN, tool-error, success) — same rationale, but against real
+    Postgres instead of Redis. Defaults to a no-op AsyncMock; tests
+    that care about the audit call override it explicitly.
     """
     monkeypatch.setattr("app.routers.v1.investigate.get_context", AsyncMock(return_value=None))
     monkeypatch.setattr("app.routers.v1.investigate.append_turn", AsyncMock())
+    monkeypatch.setattr("app.routers.v1.investigate.record_event", AsyncMock())
 
 
 def test_investigate_requires_authentication(client):
@@ -635,3 +653,140 @@ def test_investigate_response_time_meets_the_15_second_srs_target(client, auth_h
 
     assert response.status_code == 200
     assert elapsed < 15.0
+
+
+# ── SS-098: investigation-assistant activity audited ───────────────
+# Wires record_event() into all three of investigate()'s return points.
+# actor_user_id/target_id are asserted against exact known values
+# (via _headers_for/an explicit session_id) rather than just "was
+# called" — make_auth_headers's own randomly-generated user_id can't
+# prove the actor came from the authenticated token specifically.
+
+def test_investigate_audits_an_unknown_intent(client, monkeypatch):
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    headers = _headers_for(tenant_id, user_id)
+    _mock_resolve_query(monkeypatch, Intent.UNKNOWN)
+    mock_record = AsyncMock()
+    monkeypatch.setattr("app.routers.v1.investigate.record_event", mock_record)
+
+    client.post(
+        "/api/v1/investigate", json={"query": "what's the weather?", "session_id": "session-unk"}, headers=headers
+    )
+
+    mock_record.assert_called_once_with(
+        "fake-db-session",
+        tenant_id,
+        action="investigation.query",
+        target_type="investigation_session",
+        target_id="session-unk",
+        actor_user_id=user_id,
+        details={"query": "what's the weather?", "intent": "unknown", "outcome": "unclassified"},
+    )
+
+
+def test_investigate_audits_a_tool_call_error(client, monkeypatch):
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    headers = _headers_for(tenant_id, user_id)
+    _mock_resolve_query(monkeypatch, Intent.TOP_ALERTS)
+    mock_tool_call = AsyncMock(side_effect=OpenSearchException("cluster unavailable"))
+    monkeypatch.setattr("app.routers.v1.investigate.TOOLS", {Intent.TOP_ALERTS: Mock(call=mock_tool_call)})
+    mock_record = AsyncMock()
+    monkeypatch.setattr("app.routers.v1.investigate.record_event", mock_record)
+
+    client.post("/api/v1/investigate", json={"query": "top alerts", "session_id": "session-err"}, headers=headers)
+
+    mock_record.assert_called_once_with(
+        "fake-db-session",
+        tenant_id,
+        action="investigation.query",
+        target_type="investigation_session",
+        target_id="session-err",
+        actor_user_id=user_id,
+        details={"query": "top alerts", "intent": "top_alerts", "outcome": "tool_error"},
+    )
+
+
+def test_investigate_audits_a_successful_fallback_answer(client, monkeypatch):
+    """AC: fallback success (is_fallback=True) is recorded correctly."""
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    headers = _headers_for(tenant_id, user_id)
+    _mock_resolve_query(monkeypatch, Intent.TOP_ALERTS)
+    mock_tool_call = AsyncMock(return_value=AlertListOutput(total=5, alerts=[]))
+    monkeypatch.setattr("app.routers.v1.investigate.TOOLS", {Intent.TOP_ALERTS: Mock(call=mock_tool_call)})
+    monkeypatch.setattr(
+        "app.routers.v1.investigate._generate_answer", AsyncMock(return_value=("Found 5 result(s).", True))
+    )
+    mock_record = AsyncMock()
+    monkeypatch.setattr("app.routers.v1.investigate.record_event", mock_record)
+
+    client.post("/api/v1/investigate", json={"query": "top alerts", "session_id": "session-fb"}, headers=headers)
+
+    mock_record.assert_called_once_with(
+        "fake-db-session",
+        tenant_id,
+        action="investigation.query",
+        target_type="investigation_session",
+        target_id="session-fb",
+        actor_user_id=user_id,
+        details={"query": "top alerts", "intent": "top_alerts", "is_fallback": True, "outcome": "answered"},
+    )
+
+
+def test_investigate_audits_a_successful_genuine_answer(client, monkeypatch):
+    """AC: non-fallback success (is_fallback=False) is recorded correctly."""
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    headers = _headers_for(tenant_id, user_id)
+    _mock_resolve_query(monkeypatch, Intent.TOP_ALERTS)
+    mock_tool_call = AsyncMock(return_value=AlertListOutput(total=5, alerts=[]))
+    monkeypatch.setattr("app.routers.v1.investigate.TOOLS", {Intent.TOP_ALERTS: Mock(call=mock_tool_call)})
+    monkeypatch.setattr(
+        "app.routers.v1.investigate._generate_answer", AsyncMock(return_value=("Here's what I found.", False))
+    )
+    mock_record = AsyncMock()
+    monkeypatch.setattr("app.routers.v1.investigate.record_event", mock_record)
+
+    client.post("/api/v1/investigate", json={"query": "top alerts", "session_id": "session-ok"}, headers=headers)
+
+    mock_record.assert_called_once_with(
+        "fake-db-session",
+        tenant_id,
+        action="investigation.query",
+        target_type="investigation_session",
+        target_id="session-ok",
+        actor_user_id=user_id,
+        details={"query": "top alerts", "intent": "top_alerts", "is_fallback": False, "outcome": "answered"},
+    )
+
+
+def test_investigate_audit_failure_does_not_break_a_successful_response(client, auth_headers, monkeypatch):
+    """SS-098 (best-effort, same pattern as SS-097): a record_event() failure must never break the response."""
+    _mock_resolve_query(monkeypatch, Intent.TOP_ALERTS)
+    mock_tool_call = AsyncMock(return_value=AlertListOutput(total=5, alerts=[]))
+    monkeypatch.setattr("app.routers.v1.investigate.TOOLS", {Intent.TOP_ALERTS: Mock(call=mock_tool_call)})
+    monkeypatch.setattr(
+        "app.routers.v1.investigate._generate_answer", AsyncMock(return_value=("Found 5 results.", False))
+    )
+    monkeypatch.setattr(
+        "app.routers.v1.investigate.record_event", AsyncMock(side_effect=RuntimeError("db unavailable"))
+    )
+
+    response = client.post("/api/v1/investigate", json={"query": "top alerts"}, headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.json()["answer"] == "Found 5 results."
+
+
+def test_investigate_audit_failure_does_not_break_the_unknown_intent_response(client, auth_headers, monkeypatch):
+    _mock_resolve_query(monkeypatch, Intent.UNKNOWN)
+    monkeypatch.setattr(
+        "app.routers.v1.investigate.record_event", AsyncMock(side_effect=RuntimeError("db unavailable"))
+    )
+
+    response = client.post("/api/v1/investigate", json={"query": "anything"}, headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.json()["intent"] == "unknown"
