@@ -139,6 +139,24 @@ export interface IncidentGraph {
   edges: GraphEdge[];
 }
 
+// GET /api/v1/threat-analytics (SS-111/112) — a tenant-wide rollup of
+// correlation-pattern trends over a rolling window.
+export interface CategoryTrend {
+  category: string;
+  mitre_tactic: string;
+  mitre_technique_ids: string[];
+  current_count: number;
+  previous_count: number;
+  // null = previous_count was 0, so a percentage change is undefined
+  // (not infinite/zero).
+  change_pct: number | null;
+}
+
+export interface ThreatAnalyticsResponse {
+  window_days: number;
+  trends: CategoryTrend[];
+}
+
 // GET /api/v1/incidents/{id}/evidence (SS-100/101) — distinct entities
 // involved in an incident, annotated with data already computed
 // elsewhere (Endpoint risk, ti_cache verdicts). Every annotation field

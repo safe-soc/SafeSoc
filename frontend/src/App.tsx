@@ -8,6 +8,7 @@ import IncidentDetail from './pages/IncidentDetail';
 import Incidents from './pages/Incidents';
 import Investigate from './pages/Investigate';
 import Login from './pages/Login';
+import ThreatAnalytics from './pages/ThreatAnalytics';
 
 function App() {
   return (
@@ -22,6 +23,7 @@ function App() {
             <Route path="/incidents" element={<Incidents />} />
             <Route path="/incidents/:incidentId" element={<IncidentDetail />} />
             <Route path="/investigate" element={<Investigate />} />
+            <Route path="/threat-analytics" element={<ThreatAnalytics />} />
           </Route>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
         </Routes>

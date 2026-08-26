@@ -13,6 +13,7 @@ import {
   EndpointIcon,
   IncidentIcon,
   InvestigateIcon,
+  TrendingIcon,
 } from './icons';
 
 const APP_VERSION = '1.0.0';
@@ -23,6 +24,7 @@ const NAV_LINKS = [
   { to: '/endpoints', label: 'Endpoints', icon: EndpointIcon },
   { to: '/incidents', label: 'Incidents', icon: IncidentIcon },
   { to: '/investigate', label: 'Investigate', icon: InvestigateIcon },
+  { to: '/threat-analytics', label: 'Threat Analytics', icon: TrendingIcon },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {

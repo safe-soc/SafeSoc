@@ -49,6 +49,13 @@ export const ChainIcon = (props: IconProps) => (
   </svg>
 );
 
+export const TrendingIcon = (props: IconProps) => (
+  <svg {...base(props)}>
+    <path d="M3 17 9 11l4 4 8-8" />
+    <path d="M15 7h6v6" />
+  </svg>
+);
+
 export const DashboardIcon = (props: IconProps) => (
   <svg {...base(props)}>
     <rect x="3.5" y="3.5" width="7.5" height="7.5" rx="1.2" />
