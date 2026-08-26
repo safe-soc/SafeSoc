@@ -140,6 +140,27 @@ async def get_alert_by_id(alert_id: str) -> Optional[dict]:
     return hits[0]["_source"] if hits else None
 
 
+async def get_alerts_by_ids(alert_ids: list[str]) -> list[dict]:
+    """
+    Batch-fetch alert documents by id, searching across all monthly
+    indices in one round trip (SS-099/SS-100) — the multi-alert
+    equivalent of get_alert_by_id above, used wherever a caller already
+    has a list of alert_ids (e.g. Incident.alert_ids) and wants their
+    full documents. An id with no matching document is silently
+    omitted rather than raising: callers (incident timeline/evidence
+    extraction) treat a missing alert as best-effort, same as
+    get_alert_by_id's None return for a single lookup.
+    """
+    if not alert_ids:
+        return []
+    client = get_client()
+    response = client.search(
+        index="safesoc-alerts-*",
+        body={"query": {"terms": {"alert_id": alert_ids}}, "size": len(alert_ids)},
+    )
+    return [hit["_source"] for hit in response["hits"]["hits"]]
+
+
 async def update_alert_ti_fields(
     alert_id: str,
     timestamp: datetime,

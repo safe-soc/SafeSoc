@@ -77,6 +77,24 @@ export interface IncidentNote {
   created_at: string;
 }
 
+// GET /api/v1/incidents/{id}/timeline (SS-099) — a chronological merge
+// of linked alerts, audit-log activity, and notes. `data`'s shape
+// depends on `type`: an "alert" entry carries a raw Alert-shaped
+// object, "audit" carries {action, actor_user_id, details}, "note"
+// carries {id, author_user_id, body}.
+export type TimelineEntryType = 'alert' | 'audit' | 'note';
+
+export interface TimelineEntry {
+  type: TimelineEntryType;
+  timestamp: string;
+  data: Record<string, unknown>;
+}
+
+export interface IncidentTimelineResponse {
+  incident_id: string;
+  entries: TimelineEntry[];
+}
+
 export interface InvestigateResponse {
   session_id: string;
   intent: string;

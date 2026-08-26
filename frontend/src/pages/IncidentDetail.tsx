@@ -18,11 +18,18 @@ import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
 import LevelBadge from '../components/LevelBadge';
 import MitreBadge from '../components/MitreBadge';
+import IncidentTimeline from '../components/IncidentTimeline';
 import Spinner from '../components/Spinner';
 import { api } from '../lib/api';
 import { fetchAlertLookup, type AlertLookup } from '../lib/alertLookup';
 import { formatDateTime, formatRelativeTime } from '../lib/format';
-import { ALLOWED_TRANSITIONS, type Incident, type IncidentNote, type IncidentStatus } from '../lib/types';
+import {
+  ALLOWED_TRANSITIONS,
+  type Incident,
+  type IncidentNote,
+  type IncidentStatus,
+  type TimelineEntry,
+} from '../lib/types';
 
 const LIFECYCLE_STEPS: IncidentStatus[] = ['open', 'investigating', 'resolved'];
 
@@ -34,6 +41,7 @@ export default function IncidentDetail() {
 
   const [incident, setIncident] = useState<Incident | null>(null);
   const [notes, setNotes] = useState<IncidentNote[]>([]);
+  const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [lookup, setLookup] = useState<AlertLookup | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -50,10 +58,12 @@ export default function IncidentDetail() {
     Promise.all([
       api.get<Incident>(`/api/v1/incidents/${incidentId}`),
       api.get<IncidentNote[]>(`/api/v1/incidents/${incidentId}/notes`),
+      api.get<{ incident_id: string; entries: TimelineEntry[] }>(`/api/v1/incidents/${incidentId}/timeline`),
     ])
-      .then(([incidentResponse, notesResponse]) => {
+      .then(([incidentResponse, notesResponse, timelineResponse]) => {
         setIncident(incidentResponse.data);
         setNotes(notesResponse.data);
+        setTimeline(timelineResponse.data.entries);
       })
       .catch(() => setError('Failed to load this incident.'))
       .finally(() => setIsLoading(false));
@@ -62,6 +72,17 @@ export default function IncidentDetail() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Best-effort refresh after an action that changes the timeline
+  // (transition/link/note) — mirrors the alert-lookup fetch below in
+  // not blocking or erroring the page if it fails.
+  const refreshTimeline = useCallback(() => {
+    if (!incidentId) return;
+    api
+      .get<{ incident_id: string; entries: TimelineEntry[] }>(`/api/v1/incidents/${incidentId}/timeline`)
+      .then((response) => setTimeline(response.data.entries))
+      .catch(() => undefined);
+  }, [incidentId]);
 
   useEffect(() => {
     fetchAlertLookup().then(setLookup).catch(() => undefined);
@@ -75,6 +96,7 @@ export default function IncidentDetail() {
         to_status: toStatus,
       });
       setIncident(response.data);
+      refreshTimeline();
     } catch {
       setActionError('Failed to transition this incident.');
     }
@@ -91,6 +113,7 @@ export default function IncidentDetail() {
       });
       setIncident(response.data);
       setNewAlertId('');
+      refreshTimeline();
     } catch {
       setActionError('Failed to link that alert.');
     } finally {
@@ -109,6 +132,7 @@ export default function IncidentDetail() {
       });
       setNotes((prev) => [...prev, response.data]);
       setNewNoteBody('');
+      refreshTimeline();
     } catch {
       setActionError('Failed to add that note.');
     } finally {
@@ -216,6 +240,14 @@ export default function IncidentDetail() {
               </button>
             ))
           )}
+        </div>
+      </section>
+
+      {/* Timeline */}
+      <section className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+        <h2 className="text-sm font-semibold text-slate-200">Investigation Timeline</h2>
+        <div className="mt-3">
+          <IncidentTimeline entries={timeline} />
         </div>
       </section>
 

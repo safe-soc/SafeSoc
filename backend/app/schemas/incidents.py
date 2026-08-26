@@ -92,3 +92,23 @@ class IncidentNoteResponse(BaseModel):
     author_user_id: uuid.UUID
     body: str
     created_at: datetime
+
+
+class TimelineEntry(BaseModel):
+    """
+    One entry in an incident's investigation timeline (SS-099). `type`
+    is one of "alert" / "audit" / "note"; `data` carries the
+    type-specific payload — a raw alert dict for "alert" (same shape
+    as GET /api/v1/alerts, so the frontend can reuse existing
+    alert-rendering components), or a small structured dict for
+    "audit"/"note".
+    """
+
+    type: str
+    timestamp: datetime
+    data: dict
+
+
+class IncidentTimelineResponse(BaseModel):
+    incident_id: uuid.UUID
+    entries: list[TimelineEntry]

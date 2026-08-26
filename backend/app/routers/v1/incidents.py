@@ -30,8 +30,10 @@ from app.schemas.incidents import (
     IncidentNoteCreateRequest,
     IncidentNoteResponse,
     IncidentResponse,
+    IncidentTimelineResponse,
     IncidentTransitionRequest,
 )
+from app.services.incident_timeline import get_incident_timeline
 from app.services.incidents import (
     add_note,
     assign_incident,
@@ -178,3 +180,14 @@ async def list_notes_route(
     """List an incident's notes, oldest first."""
     notes = await list_notes(db, current_user.tenant_id, incident_id)
     return [_note_to_response(note) for note in notes]
+
+
+@router.get("/{incident_id}/timeline", response_model=IncidentTimelineResponse)
+async def get_timeline(
+    incident_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Chronological narrative merging linked alerts, audit-log activity, and notes (SS-099)."""
+    entries = await get_incident_timeline(db, current_user.tenant_id, incident_id)
+    return IncidentTimelineResponse(incident_id=incident_id, entries=entries)

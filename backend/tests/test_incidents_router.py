@@ -374,3 +374,70 @@ def test_notes_endpoints_return_404_for_a_missing_incident(client, db_session, m
     response = client.post(f"/api/v1/incidents/{uuid.uuid4()}/notes", json={"body": "note"}, headers=headers)
 
     assert response.status_code == 404
+
+
+# ── SS-099: unified incident investigation timeline ─────────────────
+# get_alerts_by_ids hits OpenSearch and list_events hits the audit_log
+# table via a real query this router-level _FakeSession doesn't model
+# (see tests/test_incident_timeline.py for the service-level interleaving
+# tests) — both are mocked here so these tests exercise only the HTTP
+# layer: auth, 404 handling, and response shape.
+
+@pytest.fixture(autouse=True)
+def _mock_timeline_sources(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr("app.services.incident_timeline.get_alerts_by_ids", AsyncMock(return_value=[]))
+    monkeypatch.setattr("app.services.incident_timeline.list_events", AsyncMock(return_value=([], 0)))
+
+
+def test_get_timeline_requires_authentication(client, db_session):
+    response = client.get(f"/api/v1/incidents/{uuid.uuid4()}/timeline")
+    assert response.status_code == 401
+
+
+def test_get_timeline_is_readable_by_a_viewer(client, db_session, make_auth_headers):
+    tenant_id = uuid.uuid4()
+    incident = _seeded_incident(tenant_id=tenant_id)
+    db_session.existing_incidents = [incident]
+    headers = make_auth_headers(tenant_id=tenant_id, role=UserRole.VIEWER)
+
+    response = client.get(f"/api/v1/incidents/{incident.id}/timeline", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["incident_id"] == str(incident.id)
+    assert body["entries"] == []
+
+
+def test_get_timeline_returns_404_for_a_missing_incident(client, db_session, make_auth_headers):
+    headers = make_auth_headers(role=UserRole.VIEWER)
+
+    response = client.get(f"/api/v1/incidents/{uuid.uuid4()}/timeline", headers=headers)
+
+    assert response.status_code == 404
+
+
+def test_get_timeline_returns_interleaved_entries(client, db_session, make_auth_headers, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    tenant_id = uuid.uuid4()
+    incident = _seeded_incident(tenant_id=tenant_id, alert_ids=["a1"])
+    db_session.existing_incidents = [incident]
+    db_session.existing_notes = [
+        IncidentNote(
+            id=uuid.uuid4(), incident_id=incident.id, author_user_id=uuid.uuid4(), body="First note.",
+            created_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+        )
+    ]
+    monkeypatch.setattr(
+        "app.services.incident_timeline.get_alerts_by_ids",
+        AsyncMock(return_value=[{"alert_id": "a1", "timestamp": "2026-08-01T10:00:00Z", "host_id": "H1"}]),
+    )
+    headers = make_auth_headers(tenant_id=tenant_id, role=UserRole.VIEWER)
+
+    response = client.get(f"/api/v1/incidents/{incident.id}/timeline", headers=headers)
+
+    assert response.status_code == 200
+    entries = response.json()["entries"]
+    assert [e["type"] for e in entries] == ["alert", "note"]
