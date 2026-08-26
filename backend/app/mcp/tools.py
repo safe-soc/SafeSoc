@@ -24,7 +24,9 @@ from app.core.enums import Intent, IncidentStatus, RiskLevel
 from app.db.opensearch import search_alerts
 from app.models.endpoint import Endpoint
 from app.models.incident import Incident
-from app.services.incidents import list_incidents
+from app.services.incident_evidence import get_incident_evidence
+from app.services.incident_timeline import get_incident_timeline
+from app.services.incidents import get_incident, list_incidents
 from app.services.risk_scoring import get_endpoint, list_endpoints
 
 
@@ -209,6 +211,68 @@ async def _attack_chain_status(
         total=total,
         incidents=[_incident_to_dict(i) for i in incidents],
         truncated=total > len(incidents),
+    )
+
+
+# ── Incident narrative data aggregation (SS-109) ─────────────────────
+# Not part of the Intent-dispatch TOOLS registry below: this tool is
+# invoked directly by incident_id (services/incident_narrative.py, for
+# SS-110's "summarize this incident" action), not resolved from a
+# natural-language query like the 8 tools above (SS-044). It follows
+# the same typed input/output shape as every other tool here, wrapping
+# EXISTING service functions (get_incident_timeline/get_incident_evidence)
+# exactly like the rest of this module — no new query logic.
+
+class IncidentNarrativeDataInput(BaseModel):
+    incident_id: uuid.UUID
+
+
+class TimelineEventSummary(BaseModel):
+    type: str
+    timestamp: datetime
+    data: dict
+
+
+class IncidentNarrativeDataOutput(BaseModel):
+    incident_id: uuid.UUID
+    events: list[TimelineEventSummary]
+    hosts: list[dict]
+    ips: list[dict]
+    users: list[dict]
+    cloud_resources: list[dict]
+    mitre_techniques: list[str]
+    confidence: Optional[float] = None
+
+
+async def incident_narrative_data(
+    db: AsyncSession, tenant_id: uuid.UUID, params: IncidentNarrativeDataInput
+) -> IncidentNarrativeDataOutput:
+    """
+    Raises:
+        IncidentNotFoundError: via get_incident (also enforces tenant
+        scoping before any data is gathered).
+    """
+    incident = await get_incident(db, tenant_id, params.incident_id)
+    timeline = await get_incident_timeline(db, tenant_id, params.incident_id)
+    evidence = await get_incident_evidence(db, tenant_id, params.incident_id)
+
+    mitre_techniques = sorted(
+        {
+            entry.data.get("mitre_technique")
+            for entry in timeline
+            if entry.type == "alert" and entry.data.get("mitre_technique")
+        }
+    )
+
+    return IncidentNarrativeDataOutput(
+        incident_id=incident.id,
+        events=[TimelineEventSummary(type=entry.type, timestamp=entry.timestamp, data=entry.data) for entry in timeline],
+        hosts=[host.model_dump(mode="json") for host in evidence.hosts],
+        ips=[ip.model_dump(mode="json") for ip in evidence.ips],
+        users=[user.model_dump(mode="json") for user in evidence.users],
+        cloud_resources=[resource.model_dump(mode="json") for resource in evidence.cloud_resources],
+        mitre_techniques=mitre_techniques,
+        confidence=incident.confidence,
     )
 
 

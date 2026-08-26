@@ -14,10 +14,15 @@ from app.mcp.tools import (
     AlertListOutput,
     AttackChainStatusOutput,
     EndpointSnapshotOutput,
+    IncidentNarrativeDataInput,
     RiskyEndpointsOutput,
+    incident_narrative_data,
 )
+from app.core.exceptions import IncidentNotFoundError
 from app.models.endpoint import Endpoint
 from app.models.incident import Incident
+from app.schemas.incidents import TimelineEntry
+from app.services.incident_evidence import HostEntity, IncidentEvidence
 
 
 # ── SS-045 AC: each of the 8 intents has a corresponding tool ────────
@@ -257,3 +262,88 @@ async def test_attack_chain_status_reports_truncated_when_total_exceeds_returned
     assert result.total == 75
     assert len(result.incidents) == 1
     assert result.truncated is True
+
+
+# ── incident_narrative_data (SS-109) ─────────────────────────────────
+# Not registered in TOOLS/Intent — invoked directly, so these call the
+# function itself rather than going through TOOLS[...].call().
+
+def _incident(**overrides):
+    now = datetime.now(timezone.utc)
+    fields = {
+        "id": uuid.uuid4(), "tenant_id": uuid.uuid4(), "status": IncidentStatus.OPEN, "alert_ids": [],
+        "confidence": None, "created_at": now, "updated_at": now,
+    }
+    fields.update(overrides)
+    return Incident(**fields)
+
+
+def _mock_narrative_sources(monkeypatch, incident, timeline=None, evidence=None):
+    monkeypatch.setattr("app.mcp.tools.get_incident", AsyncMock(return_value=incident))
+    monkeypatch.setattr("app.mcp.tools.get_incident_timeline", AsyncMock(return_value=timeline or []))
+    monkeypatch.setattr(
+        "app.mcp.tools.get_incident_evidence",
+        AsyncMock(return_value=evidence or IncidentEvidence(incident_id=incident.id, hosts=[], ips=[], users=[], cloud_resources=[])),
+    )
+
+
+@pytest.mark.asyncio
+async def test_incident_narrative_data_raises_not_found_for_a_missing_incident(monkeypatch):
+    monkeypatch.setattr(
+        "app.mcp.tools.get_incident", AsyncMock(side_effect=IncidentNotFoundError(uuid.uuid4()))
+    )
+
+    with pytest.raises(IncidentNotFoundError):
+        await incident_narrative_data(None, uuid.uuid4(), IncidentNarrativeDataInput(incident_id=uuid.uuid4()))
+
+
+@pytest.mark.asyncio
+async def test_incident_narrative_data_aggregates_timeline_and_evidence(monkeypatch):
+    incident = _incident(confidence=0.85)
+    timeline = [
+        TimelineEntry(type="alert", timestamp=datetime.now(timezone.utc), data={"host_id": "H1"}),
+        TimelineEntry(type="note", timestamp=datetime.now(timezone.utc), data={"body": "Confirmed."}),
+    ]
+    evidence = IncidentEvidence(
+        incident_id=incident.id,
+        hosts=[HostEntity(host_id="H1", alert_count=1)],
+        ips=[], users=[], cloud_resources=[],
+    )
+    _mock_narrative_sources(monkeypatch, incident, timeline=timeline, evidence=evidence)
+
+    result = await incident_narrative_data(None, incident.tenant_id, IncidentNarrativeDataInput(incident_id=incident.id))
+
+    assert result.incident_id == incident.id
+    assert len(result.events) == 2
+    assert result.events[0].type == "alert"
+    assert result.hosts == [{"host_id": "H1", "host_os": None, "risk_score": None, "risk_level": None, "alert_count": 1, "has_anomalous_activity": False}]
+    assert result.confidence == 0.85
+
+
+@pytest.mark.asyncio
+async def test_incident_narrative_data_dedupes_and_sorts_mitre_techniques(monkeypatch):
+    incident = _incident()
+    timeline = [
+        TimelineEntry(type="alert", timestamp=datetime.now(timezone.utc), data={"mitre_technique": "T1110"}),
+        TimelineEntry(type="alert", timestamp=datetime.now(timezone.utc), data={"mitre_technique": "T1078"}),
+        TimelineEntry(type="alert", timestamp=datetime.now(timezone.utc), data={"mitre_technique": "T1110"}),
+        TimelineEntry(type="note", timestamp=datetime.now(timezone.utc), data={"mitre_technique": "should-be-ignored"}),
+    ]
+    _mock_narrative_sources(monkeypatch, incident, timeline=timeline)
+
+    result = await incident_narrative_data(None, incident.tenant_id, IncidentNarrativeDataInput(incident_id=incident.id))
+
+    assert result.mitre_techniques == ["T1078", "T1110"]
+
+
+@pytest.mark.asyncio
+async def test_incident_narrative_data_handles_an_incident_with_no_activity(monkeypatch):
+    incident = _incident()
+    _mock_narrative_sources(monkeypatch, incident)
+
+    result = await incident_narrative_data(None, incident.tenant_id, IncidentNarrativeDataInput(incident_id=incident.id))
+
+    assert result.events == []
+    assert result.hosts == []
+    assert result.mitre_techniques == []
+    assert result.confidence is None
