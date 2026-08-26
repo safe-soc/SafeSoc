@@ -1,9 +1,13 @@
 """
-SafeSOC — Health Check Endpoint
-Returns status of all connected services.
+SafeSOC — Health Check & Metrics Endpoints
+GET /health returns status of all connected services. GET /metrics
+(SS-077) exposes Prometheus metrics in the standard exposition format
+— point an external Prometheus server at it; none is bundled here.
 """
 
 from fastapi import APIRouter
+from fastapi.responses import Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.db.opensearch import check_connection as check_opensearch
 from app.db.postgresql import check_connection as check_postgres
@@ -32,3 +36,9 @@ async def health_check():
         "version": "1.0.0",
         "checks": checks,
     }
+
+
+@router.get("/metrics")
+async def metrics():
+    """Prometheus exposition-format metrics (SS-077) — HTTP request counts/latency, ingestion accepted/rejected counts."""
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)

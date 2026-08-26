@@ -22,17 +22,21 @@ Root info. Defined inline in `backend/app/main.py`.
 
 ### `GET /health`
 
-`backend/app/routers/health.py`. Pings OpenSearch only.
+`backend/app/routers/health.py`. Pings OpenSearch, PostgreSQL, and Redis — this doc previously claimed only OpenSearch was checked; that was stale, the code has checked all three for some time.
 
 **Response 200**
 ```json
 {
   "status": "healthy",
   "version": "1.0.0",
-  "checks": { "opensearch": "connected" }
+  "checks": { "opensearch": "connected", "postgresql": "connected", "redis": "connected" }
 }
 ```
-`status` becomes `"degraded"` if OpenSearch is unreachable. Postgres/Redis checks are not implemented — the code comment marks them as a future addition.
+`status` becomes `"degraded"` if any of the three is unreachable.
+
+### `GET /metrics`
+
+`backend/app/routers/health.py` (SS-077). Prometheus exposition-format metrics — HTTP request counts/latency (by method, route template, status code) and ingestion accepted/rejected counts. No authentication, same reasoning as `/health` (a scraper has no JWT to present). See [`docs/observability.md`](observability.md).
 
 ### `POST /api/v1/ingest`
 

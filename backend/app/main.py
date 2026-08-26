@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.exceptions import SafeSOCError, safesoc_exception_handler
+from app.middleware.observability import ObservabilityMiddleware
 from app.routers import health, ws
 from app.routers.v1 import auth, cloud, endpoints, incidents, ingest, investigate, reports, threat_analytics
 
@@ -25,6 +26,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Observability (SS-077): request ID + Prometheus HTTP metrics.
+# Added after CORSMiddleware so it's the outermost wrapper (Starlette
+# builds the middleware stack LIFO by add_middleware() call order) —
+# every request gets a request_id and is measured, regardless of what
+# CORS/routing does with it.
+app.add_middleware(ObservabilityMiddleware)
 
 # Error handling: catches SafeSOCError and every subclass (IngestionError,
 # OpenSearchError, ...), producing a consistent {"error", "status_code"} body.

@@ -10,7 +10,7 @@ SafeSOC — an AI-assisted, multi-tenant Security Operations Platform for SMBs, 
 
 - This is the **canonical, finalized** repository structure. Do not propose repo restructuring, directory moves, or renames unless explicitly asked. This has already been audited once; don't re-audit unprompted.
 - `docs/` is the authoritative status record. Every file there follows an **Implemented / Partial / Planned** convention — check it before assuming a feature exists.
-- **As of SS-068 (documentation sync), the full 68-issue roadmap through Milestone 14 is implemented** — `docs/roadmap-issues.md` marks SS-001 through SS-067 as done. `backend/app/middleware/` is the only genuinely-empty directory left in `backend/app/`; a handful of standalone future-work items (audit logging, an installer script, formal API versioning) tracked in `PRODUCT_ROADMAP.md` past SS-068 are the only things not yet built. An empty file elsewhere is a real gap worth flagging, not the default expectation it used to be.
+- **As of SS-068 (documentation sync), the full 68-issue roadmap through Milestone 14 is implemented** — `docs/roadmap-issues.md` marks SS-001 through SS-067 as done. An empty file/directory is a real gap worth flagging, not the default expectation it used to be. Note: the rest of this bullet (which directories/issues were still outstanding) is stale as of the SS-069–078 batch — audit logging, the installer script, API versioning, the plugin SDK, the docs site, release automation, and platform observability (this includes `backend/app/middleware/`, no longer empty) are all now implemented too. See `PRODUCT_ROADMAP.md` for the current, authoritative status rather than this paragraph's specific list.
 
 ## Repository layout
 
@@ -33,7 +33,7 @@ assets/           Diagrams (architecture.drawio, er-diagram.drawio)
 
 Every `backend/app/` subpackage carries real logic now — routers (`health`, `ingest`, `alerts`, `auth`, `incidents`, `cloud`, `endpoints`, `investigate`, `reports`, `ws`), `services/` (ingestion, enrichment, correlation, risk_scoring, incidents, investigation, anomaly, reporting, notifications, realtime, rate_limit), `workers/` (correlation_worker, notification_worker), `tasks/` (enrichment, scoring, reporting, celery_app), `clients/` (virustotal, abuseipdb, ollama, groq, telegram), `mcp/tools.py`, `adapters/` (wazuh, cloudtrail, guardduty, cloudlens), `models/` (tenant, user, incident, ti_cache, endpoint), and both `db/postgresql.py` and `db/redis.py`.
 
-**`backend/app/middleware/` is the one exception** — still an empty stub. Nothing currently needs it; don't fill it in unprompted.
+**`backend/app/middleware/`** now carries `observability.py` (SS-077 — request-ID correlation + Prometheus metrics middleware, registered in `main.py`) — no longer an empty stub as of that issue.
 
 `core/config.py` defines settings for every feature above; each one is now actually consumed by the code that needs it (this used to not be true — check `docs/decisions.md` ADR-006 for the history, not the current state).
 

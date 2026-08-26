@@ -293,6 +293,7 @@ SafeSOC sends Telegram alerts for critical-severity alerts and detected attack c
 | [`docs/testing.md`](docs/testing.md) | Current test coverage, CI-enforced |
 | [`docs/performance-benchmarks.md`](docs/performance-benchmarks.md) | Reproducible throughput/latency measurements against a live stack |
 | [`docs/release-process.md`](docs/release-process.md) | How to cut a release; what `.github/workflows/release.yml` automates |
+| [`docs/observability.md`](docs/observability.md) | `/metrics` (Prometheus), request-ID log correlation |
 | [`docs/security-review.md`](docs/security-review.md) | OWASP-oriented security review (SS-067) |
 | [`docs/decisions.md`](docs/decisions.md) | Architecture decision log |
 | [`docs/project-roadmap.md`](docs/project-roadmap.md) | Milestone-by-milestone status |
@@ -313,7 +314,7 @@ SafeSOC sends Telegram alerts for critical-severity alerts and detected attack c
 Tracked in [`PRODUCT_ROADMAP.md`](PRODUCT_ROADMAP.md), which extends the original 68-issue backlog with what a real open-source SOC platform needs next:
 
 - **Near-term (v1.0 follow-ups):** all three of an audit log (`services/audit.py`), the installer script above, and a [formal API versioning policy](docs/api-versioning-policy.md) are now implemented.
-- **Open-source polish (v1.1+):** [contribution guidelines](CONTRIBUTING.md), a [security disclosure policy](SECURITY.md), a [formal adapter/plugin SDK](docs/plugin-architecture.md), a buildable [documentation site](mkdocs.yml) (`mkdocs build`, `.github/workflows/docs.yml` — not yet live on GitHub Pages, which needs a one-time "Source: GitHub Actions" setting enabled in the repo itself), and [release automation](docs/release-process.md) (semver-tagged Docker images + auto-generated GitHub Releases, `.github/workflows/release.yml`) are all now implemented.
+- **Open-source polish (v1.1+):** [contribution guidelines](CONTRIBUTING.md), a [security disclosure policy](SECURITY.md), a [formal adapter/plugin SDK](docs/plugin-architecture.md), a buildable [documentation site](mkdocs.yml) (`mkdocs build`, `.github/workflows/docs.yml` — not yet live on GitHub Pages, which needs a one-time "Source: GitHub Actions" setting enabled in the repo itself), [release automation](docs/release-process.md) (semver-tagged Docker images + auto-generated GitHub Releases, `.github/workflows/release.yml`), and [platform observability](docs/observability.md) (Prometheus `/metrics`, request-ID log correlation) are all now implemented.
 - **Research-grade bets (v2.0, speculative):** a community plugin/detection-rule marketplace built on that SDK, multi-cloud posture management beyond AWS, SOAR-style automated response — all explicitly gated on validated demand this project doesn't have yet.
 
 None of this is committed or scheduled — see `PRODUCT_ROADMAP.md`'s own versioning philosophy for how these get prioritized.

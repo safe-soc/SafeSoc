@@ -23,6 +23,7 @@ from app.schemas.log import NormalizedLog
 from app.services.realtime import publish_event
 from app.tasks.enrichment import enrich_alert
 from app.utils.logger import get_logger
+from app.utils.metrics import ingestion_logs_total
 from app.workers.correlation_worker import evaluate_correlation
 from app.workers.notification_worker import notify_if_critical
 
@@ -113,6 +114,7 @@ async def process_ingest_batch(
             validated = NormalizedLog(**log)
             validated_logs.append(validated.model_dump(mode="json"))
             accepted.append(validated.alert_id)
+            ingestion_logs_total.labels(outcome="accepted").inc()
 
         except ValidationError as e:
             rejected.append({
@@ -121,6 +123,7 @@ async def process_ingest_batch(
                 "raw": {k: str(v)[:100] for k, v in log.items()},
             })
             logger.warning("Log validation failed", index=i, error=str(e))
+            ingestion_logs_total.labels(outcome="rejected").inc()
 
     # Bulk write to OpenSearch
     if validated_logs:

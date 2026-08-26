@@ -57,6 +57,7 @@ nav:
       - Testing: testing.md
       - Performance Benchmarks: performance-benchmarks.md
       - Release Process: release-process.md
+      - Observability: observability.md
   - Security:
       - Security Review: security-review.md
   - AI Investigation Assistant:
