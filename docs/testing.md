@@ -78,6 +78,8 @@ The NL assistant's <15s target is separately measured in `docs/api-design.md`'s 
 
 These numbers describe a single-node Docker Compose dev setup, not a production deployment — re-run this benchmark against the actual target environment before relying on it for capacity planning.
 
+**SS-078:** see [`docs/performance-benchmarks.md`](performance-benchmarks.md) for the published, reproduction-step-documented version of this same harness, including a more recent measurement pass and the exact environment (host, Docker resources, data volume) each run was measured on.
+
 ## 6. Summary
 
 | Test type | Status |

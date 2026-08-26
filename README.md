@@ -289,7 +289,8 @@ SafeSOC sends Telegram alerts for critical-severity alerts and detected attack c
 | [`docs/database-schema.md`](docs/database-schema.md) | OpenSearch mapping, Postgres/Redis schemas |
 | [`docs/tech-stack.md`](docs/tech-stack.md) | Actual dependencies in use |
 | [`docs/deployment.md`](docs/deployment.md) | How to actually run this today |
-| [`docs/testing.md`](docs/testing.md) | Current test coverage (545 tests, CI-enforced) |
+| [`docs/testing.md`](docs/testing.md) | Current test coverage, CI-enforced |
+| [`docs/performance-benchmarks.md`](docs/performance-benchmarks.md) | Reproducible throughput/latency measurements against a live stack |
 | [`docs/security-review.md`](docs/security-review.md) | OWASP-oriented security review (SS-067) |
 | [`docs/decisions.md`](docs/decisions.md) | Architecture decision log |
 | [`docs/project-roadmap.md`](docs/project-roadmap.md) | Milestone-by-milestone status |
