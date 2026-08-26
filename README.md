@@ -310,7 +310,7 @@ SafeSOC sends Telegram alerts for critical-severity alerts and detected attack c
 Tracked in [`PRODUCT_ROADMAP.md`](PRODUCT_ROADMAP.md), which extends the original 68-issue backlog with what a real open-source SOC platform needs next:
 
 - **Near-term (v1.0 follow-ups):** all three of an audit log (`services/audit.py`), the installer script above, and a [formal API versioning policy](docs/api-versioning-policy.md) are now implemented.
-- **Open-source polish (v1.1+):** contribution guidelines, security disclosure policy, release automation.
+- **Open-source polish (v1.1+):** [contribution guidelines](CONTRIBUTING.md) are now implemented; security disclosure policy and release automation remain planned.
 - **Research-grade bets (v2.0, speculative):** plugin architecture for third-party detectors, multi-cloud posture management beyond AWS, SOAR-style automated response.
 
 None of this is committed or scheduled — see `PRODUCT_ROADMAP.md`'s own versioning philosophy for how these get prioritized.
@@ -328,7 +328,7 @@ None of this is committed or scheduled — see `PRODUCT_ROADMAP.md`'s own versio
 
 ## Contributing
 
-This started as an academic major project, not (yet) an open-source project accepting external contributions — there's no CI gate for outside PRs, no CONTRIBUTING.md, and no maintainer triage process. If you're on the project team: branch from `main`, keep `docs/` in sync with any behavior change (see [`docs/coding-standards.md`](docs/coding-standards.md)), and make sure `pytest` (backend) and `npm run build && npm run lint` (frontend) pass before opening a PR. Formal contribution guidelines are tracked as future work in [Phase 2 Vision](#phase-2-vision).
+This started as an academic major project. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for dev setup, coding standards, and the PR process, and [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) for community expectations. In short: branch from `main`, keep `docs/` in sync with any behavior change, and make sure `pytest` (backend) and `npm run build && npm run lint` (frontend) pass before opening a PR — CI (`.github/workflows/ci.yml`) enforces the backend suite on every push/PR.
 
 ## License
 
