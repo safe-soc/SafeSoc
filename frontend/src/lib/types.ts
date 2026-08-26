@@ -153,6 +153,27 @@ export interface IncidentEvidence {
   cloud_resources: CloudResourceEntity[];
 }
 
+// POST /api/v1/incidents/{id}/narrative (SS-109/110) — an AI-generated
+// attack-chain summary, grounded in the same aggregated data returned
+// in `data`. `is_fallback` mirrors InvestigateResponse's own field:
+// true means the LLM was unavailable/too slow and this is a
+// deterministic templated summary instead.
+export interface IncidentNarrativeResponse {
+  incident_id: string;
+  narrative: string;
+  is_fallback: boolean;
+  data: {
+    incident_id: string;
+    events: TimelineEntry[];
+    hosts: HostEntity[];
+    ips: IPEntity[];
+    users: UserEntity[];
+    cloud_resources: CloudResourceEntity[];
+    mitre_techniques: string[];
+    confidence: number | null;
+  };
+}
+
 export interface InvestigateResponse {
   session_id: string;
   intent: string;

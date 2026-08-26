@@ -36,6 +36,7 @@ from app.schemas.incidents import (
 )
 from app.services.incident_evidence import IncidentEvidence, get_incident_evidence
 from app.services.incident_graph import IncidentGraph, get_incident_graph
+from app.services.incident_narrative import IncidentNarrativeResponse, get_incident_narrative
 from app.services.incident_timeline import get_incident_timeline
 from app.services.incidents import (
     add_note,
@@ -249,3 +250,21 @@ async def get_graph(
     per request, no graph database (SS-104).
     """
     return await get_incident_graph(db, current_user.tenant_id, incident_id)
+
+
+@router.post("/{incident_id}/narrative", response_model=IncidentNarrativeResponse)
+async def get_narrative(
+    incident_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    AI-generated attack-chain narrative (SS-109/110), grounded only in
+    SS-109's aggregated data. Falls back to a deterministic templated
+    summary on LLM timeout/failure — never a new failure mode.
+    Audit-logged (best-effort, SS-097/098 pattern).
+    """
+    data, narrative, is_fallback = await get_incident_narrative(
+        db, current_user.tenant_id, incident_id, actor_user_id=current_user.user_id
+    )
+    return IncidentNarrativeResponse(incident_id=incident_id, narrative=narrative, is_fallback=is_fallback, data=data)

@@ -28,6 +28,7 @@ import {
   ALLOWED_TRANSITIONS,
   type Incident,
   type IncidentEvidence,
+  type IncidentNarrativeResponse,
   type IncidentNote,
   type IncidentStatus,
   type TimelineEntry,
@@ -49,6 +50,10 @@ export default function IncidentDetail() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  const [narrative, setNarrative] = useState<IncidentNarrativeResponse | null>(null);
+  const [isGeneratingNarrative, setIsGeneratingNarrative] = useState(false);
+  const [narrativeError, setNarrativeError] = useState<string | null>(null);
 
   const [newAlertId, setNewAlertId] = useState('');
   const [newNoteBody, setNewNoteBody] = useState('');
@@ -140,6 +145,20 @@ export default function IncidentDetail() {
       refreshTimeline();
     } catch {
       setActionError('Failed to remove that tag.');
+    }
+  };
+
+  const handleGenerateNarrative = async () => {
+    if (!incidentId) return;
+    setNarrativeError(null);
+    setIsGeneratingNarrative(true);
+    try {
+      const response = await api.post<IncidentNarrativeResponse>(`/api/v1/incidents/${incidentId}/narrative`);
+      setNarrative(response.data);
+    } catch {
+      setNarrativeError('Failed to generate a narrative for this incident.');
+    } finally {
+      setIsGeneratingNarrative(false);
     }
   };
 
@@ -236,6 +255,39 @@ export default function IncidentDetail() {
       </div>
 
       {actionError && <p className="mt-3 text-sm text-red-400">{actionError}</p>}
+
+      {/* AI narrative */}
+      <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-slate-200">AI Attack-Chain Summary</h2>
+          <button
+            type="button"
+            onClick={handleGenerateNarrative}
+            disabled={isGeneratingNarrative}
+            className="rounded-lg bg-slate-800 px-3.5 py-1.5 text-xs text-slate-200 transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {isGeneratingNarrative ? 'Generating…' : narrative ? 'Regenerate' : 'Generate summary'}
+          </button>
+        </div>
+        {narrativeError && <p className="mt-3 text-sm text-red-400">{narrativeError}</p>}
+        {isGeneratingNarrative ? (
+          <div className="mt-3 flex items-center gap-2 text-sm text-slate-500">
+            <Spinner />
+            Summarizing this incident…
+          </div>
+        ) : narrative ? (
+          <div className="mt-3">
+            <p className="text-sm text-slate-200">{narrative.narrative}</p>
+            {narrative.is_fallback && (
+              <p className="mt-2 text-xs text-slate-500">
+                The AI summarizer was unavailable — this is a deterministic summary of the same data.
+              </p>
+            )}
+          </div>
+        ) : (
+          <p className="mt-3 text-sm text-slate-500">Generate an AI-written summary of this incident's attack chain.</p>
+        )}
+      </section>
 
       {/* Lifecycle */}
       <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/60 p-5">

@@ -703,3 +703,70 @@ def test_get_graph_builds_nodes_and_edges_from_real_alert_data(client, db_sessio
     assert {n["id"] for n in body["nodes"]} == {"host:H1", "user:alice"}
     assert len(body["edges"]) == 1
     assert body["edges"][0]["alert_id"] == "a1"
+
+
+# ── SS-110: AI incident narrative endpoint ───────────────────────────
+# get_alerts_by_ids/list_events/record_event are mocked here so these
+# tests exercise only the HTTP layer (auth, 404, response shape,
+# fallback surfaced) — see tests/test_incident_narrative.py for the
+# service-level prompt/grounding/fallback/audit tests.
+
+@pytest.fixture(autouse=True)
+def _mock_narrative_sources(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr("app.services.incident_timeline.get_alerts_by_ids", AsyncMock(return_value=[]))
+    monkeypatch.setattr("app.services.incident_timeline.list_events", AsyncMock(return_value=([], 0)))
+    monkeypatch.setattr("app.services.incident_evidence.get_alerts_by_ids", AsyncMock(return_value=[]))
+    monkeypatch.setattr("app.services.incident_narrative.record_event", AsyncMock())
+
+
+def test_get_narrative_requires_authentication(client, db_session):
+    response = client.post(f"/api/v1/incidents/{uuid.uuid4()}/narrative")
+    assert response.status_code == 401
+
+
+def test_get_narrative_is_callable_by_a_viewer(client, db_session, make_auth_headers, monkeypatch):
+    from unittest.mock import Mock
+
+    from app.clients import ollama
+
+    tenant_id = uuid.uuid4()
+    incident = _seeded_incident(tenant_id=tenant_id)
+    db_session.existing_incidents = [incident]
+    monkeypatch.setattr(ollama, "generate", Mock(return_value="Nothing notable occurred."))
+    headers = make_auth_headers(tenant_id=tenant_id, role=UserRole.VIEWER)
+
+    response = client.post(f"/api/v1/incidents/{incident.id}/narrative", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["incident_id"] == str(incident.id)
+    assert body["narrative"] == "Nothing notable occurred."
+    assert body["is_fallback"] is False
+    assert body["data"]["incident_id"] == str(incident.id)
+
+
+def test_get_narrative_returns_404_for_a_missing_incident(client, db_session, make_auth_headers):
+    headers = make_auth_headers(role=UserRole.VIEWER)
+
+    response = client.post(f"/api/v1/incidents/{uuid.uuid4()}/narrative", headers=headers)
+
+    assert response.status_code == 404
+
+
+def test_get_narrative_falls_back_when_the_llm_fails(client, db_session, make_auth_headers, monkeypatch):
+    from unittest.mock import Mock
+
+    from app.clients import ollama
+
+    tenant_id = uuid.uuid4()
+    incident = _seeded_incident(tenant_id=tenant_id)
+    db_session.existing_incidents = [incident]
+    monkeypatch.setattr(ollama, "generate", Mock(side_effect=ollama.OllamaError("connection refused")))
+    headers = make_auth_headers(tenant_id=tenant_id, role=UserRole.VIEWER)
+
+    response = client.post(f"/api/v1/incidents/{incident.id}/narrative", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["is_fallback"] is True
