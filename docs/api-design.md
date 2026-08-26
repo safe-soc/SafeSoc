@@ -5,6 +5,8 @@ This document describes the actual FastAPI surface of `backend/app`. As of SS-06
 Base URL (local dev): `http://localhost:8000`
 Versioned prefix: `/api/v1` (`API_PREFIX` in `core/config.py`, though routers currently hardcode `/api/v1` in their own `prefix=` rather than reading that setting).
 
+**Stability contract (SS-070):** see [`docs/api-versioning-policy.md`](api-versioning-policy.md) for what's covered by the `/api/v1` stability guarantee, what counts as a breaking vs. non-breaking change, and how a future `/api/v2` would be introduced.
+
 ---
 
 ## Implemented Endpoints

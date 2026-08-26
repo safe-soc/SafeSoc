@@ -285,6 +285,7 @@ SafeSOC sends Telegram alerts for critical-severity alerts and detected attack c
 | [`docs/architecture.md`](docs/architecture.md) | Layer-by-layer implementation status |
 | [`docs/requirements.md`](docs/requirements.md) | SRS requirements vs. actual implementation |
 | [`docs/api-design.md`](docs/api-design.md) | Endpoint contracts, all implemented |
+| [`docs/api-versioning-policy.md`](docs/api-versioning-policy.md) | What's breaking vs. non-breaking for `/api/v1`, and how `/api/v2` would be introduced |
 | [`docs/database-schema.md`](docs/database-schema.md) | OpenSearch mapping, Postgres/Redis schemas |
 | [`docs/tech-stack.md`](docs/tech-stack.md) | Actual dependencies in use |
 | [`docs/deployment.md`](docs/deployment.md) | How to actually run this today |
@@ -308,7 +309,7 @@ SafeSOC sends Telegram alerts for critical-severity alerts and detected attack c
 
 Tracked in [`PRODUCT_ROADMAP.md`](PRODUCT_ROADMAP.md), which extends the original 68-issue backlog with what a real open-source SOC platform needs next:
 
-- **Near-term (v1.0 follow-ups):** a formal API versioning policy. An audit log for compliance-sensitive actions (`services/audit.py`) and the one-command installer script above are both now implemented.
+- **Near-term (v1.0 follow-ups):** all three of an audit log (`services/audit.py`), the installer script above, and a [formal API versioning policy](docs/api-versioning-policy.md) are now implemented.
 - **Open-source polish (v1.1+):** contribution guidelines, security disclosure policy, release automation.
 - **Research-grade bets (v2.0, speculative):** plugin architecture for third-party detectors, multi-cloud posture management beyond AWS, SOAR-style automated response.
 
