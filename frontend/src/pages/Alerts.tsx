@@ -21,7 +21,7 @@ import TableSkeleton from '../components/TableSkeleton';
 import { AlertIcon, ChevronLeftIcon, ChevronRightIcon, SearchIcon } from '../components/icons';
 import { api } from '../lib/api';
 import { formatDateTime } from '../lib/format';
-import { LOG_SOURCES, LOG_TYPES, SEVERITIES, type Alert, type AlertSearchResponse } from '../lib/types';
+import { LOG_SOURCES, LOG_TYPES, SEVERITIES, type Alert, type AlertAnnotation, type AlertSearchResponse } from '../lib/types';
 
 const PAGE_SIZE = 50;
 
@@ -48,6 +48,7 @@ export default function Alerts() {
   const [pages, setPages] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [triageAlertId, setTriageAlertId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -89,6 +90,24 @@ export default function Alerts() {
       ),
     );
   }, [alerts, quickSearch]);
+
+  const handleTriage = async (alertId: string, action: 'acknowledge' | 'dismiss') => {
+    setTriageAlertId(alertId);
+    try {
+      const response = await api.post<AlertAnnotation>(`/api/v1/alerts/${alertId}/${action}`);
+      setAlerts((prev) =>
+        prev.map((alert) =>
+          alert.alert_id === alertId
+            ? { ...alert, acknowledged: response.data.acknowledged, dismissed: response.data.dismissed }
+            : alert,
+        ),
+      );
+    } catch {
+      setError(`Failed to ${action} that alert.`);
+    } finally {
+      setTriageAlertId(null);
+    }
+  };
 
   const resetToFirstPage = (setter: (value: string) => void) => (value: string) => {
     setter(value);
@@ -202,14 +221,15 @@ export default function Alerts() {
                 <th className="px-4 py-3 font-medium">Action</th>
                 <th className="px-4 py-3 font-medium">Description</th>
                 <th className="px-4 py-3 font-medium">User</th>
+                <th className="px-4 py-3 font-medium">Triage</th>
               </tr>
             </thead>
             <tbody>
               {isLoading ? (
-                <TableSkeleton rows={10} columns={8} />
+                <TableSkeleton rows={10} columns={9} />
               ) : visibleAlerts.length === 0 ? (
                 <tr>
-                  <td colSpan={8}>
+                  <td colSpan={9}>
                     <EmptyState
                       icon={<AlertIcon className="h-10 w-10 text-slate-700" />}
                       title={quickSearch ? 'No alerts match your search' : 'No alerts match these filters'}
@@ -238,6 +258,32 @@ export default function Alerts() {
                       {alert.description}
                     </td>
                     <td className="px-4 py-2.5 text-slate-400">{alert.user}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5">
+                      {alert.dismissed ? (
+                        <span className="text-xs text-slate-500">Dismissed</span>
+                      ) : alert.acknowledged ? (
+                        <span className="text-xs text-green-400">Acknowledged</span>
+                      ) : (
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            disabled={triageAlertId === alert.alert_id}
+                            onClick={() => handleTriage(alert.alert_id, 'acknowledge')}
+                            className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            Acknowledge
+                          </button>
+                          <button
+                            type="button"
+                            disabled={triageAlertId === alert.alert_id}
+                            onClick={() => handleTriage(alert.alert_id, 'dismiss')}
+                            className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-500 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            Dismiss
+                          </button>
+                        </div>
+                      )}
+                    </td>
                   </tr>
                 ))
               )}

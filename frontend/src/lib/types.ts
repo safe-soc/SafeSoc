@@ -29,6 +29,19 @@ export interface Alert {
   source_ip?: string | null;
   mitre_technique?: string | null;
   mitre_tactic?: string | null;
+  // Merged in by GET /api/v1/alerts from the alert_annotations table
+  // (SS-107) — default false for an alert with no annotation row yet.
+  acknowledged?: boolean;
+  dismissed?: boolean;
+}
+
+// POST /api/v1/alerts/{id}/acknowledge, .../dismiss (SS-107)
+export interface AlertAnnotation {
+  alert_id: string;
+  acknowledged: boolean;
+  dismissed: boolean;
+  updated_by_user_id: string;
+  updated_at: string;
 }
 
 export interface AlertSearchResponse {
