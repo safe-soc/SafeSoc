@@ -20,6 +20,7 @@ import LevelBadge from '../components/LevelBadge';
 import MitreBadge from '../components/MitreBadge';
 import IncidentTimeline from '../components/IncidentTimeline';
 import EvidenceExplorer from '../components/EvidenceExplorer';
+import AttackChainGraph from '../components/AttackChainGraph';
 import Spinner from '../components/Spinner';
 import { api } from '../lib/api';
 import { fetchAlertLookup, type AlertLookup } from '../lib/alertLookup';
@@ -28,6 +29,7 @@ import {
   ALLOWED_TRANSITIONS,
   type Incident,
   type IncidentEvidence,
+  type IncidentGraph,
   type IncidentNarrativeResponse,
   type IncidentNote,
   type IncidentStatus,
@@ -46,6 +48,7 @@ export default function IncidentDetail() {
   const [notes, setNotes] = useState<IncidentNote[]>([]);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [evidence, setEvidence] = useState<IncidentEvidence | null>(null);
+  const [graph, setGraph] = useState<IncidentGraph | null>(null);
   const [lookup, setLookup] = useState<AlertLookup | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -69,12 +72,14 @@ export default function IncidentDetail() {
       api.get<IncidentNote[]>(`/api/v1/incidents/${incidentId}/notes`),
       api.get<{ incident_id: string; entries: TimelineEntry[] }>(`/api/v1/incidents/${incidentId}/timeline`),
       api.get<IncidentEvidence>(`/api/v1/incidents/${incidentId}/evidence`),
+      api.get<IncidentGraph>(`/api/v1/incidents/${incidentId}/graph`),
     ])
-      .then(([incidentResponse, notesResponse, timelineResponse, evidenceResponse]) => {
+      .then(([incidentResponse, notesResponse, timelineResponse, evidenceResponse, graphResponse]) => {
         setIncident(incidentResponse.data);
         setNotes(notesResponse.data);
         setTimeline(timelineResponse.data.entries);
         setEvidence(evidenceResponse.data);
+        setGraph(graphResponse.data);
       })
       .catch(() => setError('Failed to load this incident.'))
       .finally(() => setIsLoading(false));
@@ -405,6 +410,12 @@ export default function IncidentDetail() {
       <section className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
         <h2 className="text-sm font-semibold text-slate-200">Evidence</h2>
         <div className="mt-3">{evidence && <EvidenceExplorer evidence={evidence} />}</div>
+      </section>
+
+      {/* Attack-chain graph */}
+      <section className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+        <h2 className="text-sm font-semibold text-slate-200">Attack Chain</h2>
+        <div className="mt-3">{graph && <AttackChainGraph graph={graph} />}</div>
       </section>
 
       {/* Linked alerts */}

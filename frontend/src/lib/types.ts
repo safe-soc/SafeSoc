@@ -113,6 +113,32 @@ export interface IncidentTimelineResponse {
   entries: TimelineEntry[];
 }
 
+// GET /api/v1/incidents/{id}/graph (SS-104/105) — a lightweight
+// relationship view: nodes are the same entities Evidence Explorer
+// shows, edges are alerts connecting them, ordered by real timestamp.
+export type GraphNodeType = 'host' | 'ip' | 'user' | 'cloud_resource';
+
+export interface GraphNode {
+  id: string;
+  type: GraphNodeType;
+  label: string;
+}
+
+export interface GraphEdge {
+  source: string;
+  target: string;
+  alert_id: string;
+  timestamp: string;
+  mitre_technique?: string | null;
+  mitre_tactic?: string | null;
+}
+
+export interface IncidentGraph {
+  incident_id: string;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
 // GET /api/v1/incidents/{id}/evidence (SS-100/101) — distinct entities
 // involved in an incident, annotated with data already computed
 // elsewhere (Endpoint risk, ti_cache verdicts). Every annotation field
