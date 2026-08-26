@@ -25,7 +25,7 @@ db/         database clients + query/write functions — no business rules
 schemas/    Pydantic models — no I/O, no business rules
 services/   business logic — orchestrates db/ and schemas/, called by routers
 routers/    HTTP layer only — parses request, calls services/db, shapes response
-adapters/   source-specific transformation into NormalizedLog (wazuh, cloudtrail, guardduty, cloudlens)
+adapters/   source-specific transformation into NormalizedLog (wazuh, cloudtrail, guardduty, cloudlens) — see docs/plugin-architecture.md for the formal LogAdapter contract (SS-069) new adapters implement
 clients/    thin wrappers around external HTTP APIs (virustotal, abuseipdb, ollama, groq, telegram)
 tasks/      Celery task definitions (enrichment, scoring, reporting, celery_app)
 workers/    background consumers/loops (correlation_worker, notification_worker)

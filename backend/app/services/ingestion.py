@@ -5,12 +5,17 @@ validates the result against NormalizedLog schema, and writes to OpenSearch.
 """
 
 import asyncio
-from typing import Callable, Optional
+from typing import Optional
 
 from fastapi import BackgroundTasks
 from pydantic import ValidationError
 
-from app.adapters import cloudlens, cloudtrail, guardduty, wazuh
+# Importing app.adapters (rather than just app.adapters.sdk) runs its
+# __init__.py, which registers all four built-in adapters against the
+# shared registry below — see adapters/sdk.py (SS-069) for the formal
+# LogAdapter contract and why this replaced a plain dict literal here.
+import app.adapters  # noqa: F401
+from app.adapters.sdk import registry as adapter_registry
 from app.core.enums import LogSource
 from app.core.exceptions import IngestionError
 from app.db.opensearch import bulk_index_logs
@@ -22,16 +27,6 @@ from app.workers.correlation_worker import evaluate_correlation
 from app.workers.notification_worker import notify_if_critical
 
 logger = get_logger(__name__)
-
-# Maps a batch's `source` to the adapter that turns its raw, source-native
-# payload shape into NormalizedLog-shaped fields. "synthetic" has no
-# adapter by design — synthetic payloads are already NormalizedLog-shaped.
-ADAPTER_REGISTRY: dict[str, Callable[[dict], dict]] = {
-    LogSource.WAZUH.value: wazuh.transform,
-    LogSource.AWS_CLOUDTRAIL.value: cloudtrail.transform,
-    LogSource.AWS_GUARDDUTY.value: guardduty.transform,
-    LogSource.CLOUDLENS.value: cloudlens.transform,
-}
 
 # Queuing a Celery task means publishing to the broker, which is a blocking
 # call — cap it, so a slow/unreachable broker degrades to "task wasn't
@@ -93,7 +88,7 @@ async def process_ingest_batch(
         adapter — an unrecognized source fails the whole batch clearly
         rather than silently falling through to the synthetic path.
     """
-    transform = ADAPTER_REGISTRY.get(source)
+    transform = adapter_registry.get(source)
     if source != LogSource.SYNTHETIC.value and transform is None:
         raise IngestionError(f"Unknown log source '{source}' — no adapter registered for it.")
 

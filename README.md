@@ -286,6 +286,7 @@ SafeSOC sends Telegram alerts for critical-severity alerts and detected attack c
 | [`docs/requirements.md`](docs/requirements.md) | SRS requirements vs. actual implementation |
 | [`docs/api-design.md`](docs/api-design.md) | Endpoint contracts, all implemented |
 | [`docs/api-versioning-policy.md`](docs/api-versioning-policy.md) | What's breaking vs. non-breaking for `/api/v1`, and how `/api/v2` would be introduced |
+| [`docs/plugin-architecture.md`](docs/plugin-architecture.md) | The `LogAdapter` SDK contract — how to write and register a new source adapter |
 | [`docs/database-schema.md`](docs/database-schema.md) | OpenSearch mapping, Postgres/Redis schemas |
 | [`docs/tech-stack.md`](docs/tech-stack.md) | Actual dependencies in use |
 | [`docs/deployment.md`](docs/deployment.md) | How to actually run this today |
@@ -311,8 +312,8 @@ SafeSOC sends Telegram alerts for critical-severity alerts and detected attack c
 Tracked in [`PRODUCT_ROADMAP.md`](PRODUCT_ROADMAP.md), which extends the original 68-issue backlog with what a real open-source SOC platform needs next:
 
 - **Near-term (v1.0 follow-ups):** all three of an audit log (`services/audit.py`), the installer script above, and a [formal API versioning policy](docs/api-versioning-policy.md) are now implemented.
-- **Open-source polish (v1.1+):** [contribution guidelines](CONTRIBUTING.md) and a [security disclosure policy](SECURITY.md) are now implemented; release automation remains planned.
-- **Research-grade bets (v2.0, speculative):** plugin architecture for third-party detectors, multi-cloud posture management beyond AWS, SOAR-style automated response.
+- **Open-source polish (v1.1+):** [contribution guidelines](CONTRIBUTING.md), a [security disclosure policy](SECURITY.md), and a [formal adapter/plugin SDK](docs/plugin-architecture.md) are now implemented; release automation remains planned.
+- **Research-grade bets (v2.0, speculative):** a community plugin/detection-rule marketplace built on that SDK, multi-cloud posture management beyond AWS, SOAR-style automated response — all explicitly gated on validated demand this project doesn't have yet.
 
 None of this is committed or scheduled — see `PRODUCT_ROADMAP.md`'s own versioning philosophy for how these get prioritized.
 
