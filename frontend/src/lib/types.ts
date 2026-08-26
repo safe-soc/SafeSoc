@@ -73,6 +73,8 @@ export interface Incident {
   // SS-094: the detected chain's confidence at creation/last merge —
   // null for a manually-created incident, which has no detected chain.
   confidence: number | null;
+  // SS-106: free-form analyst-authored labels.
+  tags: string[];
   created_at: string;
   updated_at: string;
 }

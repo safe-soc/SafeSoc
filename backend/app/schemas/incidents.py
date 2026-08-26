@@ -54,6 +54,8 @@ class IncidentResponse(BaseModel):
     # detected chain.
     category: Optional[CorrelationPattern]
     confidence: Optional[float]
+    # SS-106: free-form analyst-authored labels, distinct from `category`.
+    tags: list[str]
     created_at: datetime
     updated_at: datetime
 
@@ -72,6 +74,16 @@ class AlertLinkRequest(BaseModel):
     model_config = {
         "json_schema_extra": {
             "example": {"alert_id": "alert-3"},
+        }
+    }
+
+
+class IncidentTagsRequest(BaseModel):
+    tags: list[str] = Field(default_factory=list)
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {"tags": ["phishing", "needs-legal-review"]},
         }
     }
 

@@ -56,6 +56,10 @@ class Incident(Base):
     # data-model extension, not just wiring through data already at hand.
     category: Mapped[Optional[CorrelationPattern]] = mapped_column(_INCIDENT_CATEGORY_TYPE, nullable=True)
     confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # SS-106: free-form analyst-authored labels (e.g. "phishing",
+    # "needs-legal-review") — distinct from `category`, which is the
+    # correlation engine's own fixed vocabulary set at detection time.
+    tags: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

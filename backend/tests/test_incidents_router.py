@@ -100,6 +100,12 @@ def _seeded_incident(**overrides) -> Incident:
         "tenant_id": uuid.uuid4(),
         "status": IncidentStatus.OPEN,
         "alert_ids": [],
+        # SS-106: tags' ORM-level default=list only applies at a real
+        # flush, not at Python construction (same class of gap as
+        # AlertAnnotation.acknowledged/dismissed in SS-107) — set
+        # explicitly here so _to_response's IncidentResponse(tags=...)
+        # doesn't see an unset attribute.
+        "tags": [],
         "created_at": now,
         "updated_at": now,
     }
@@ -520,3 +526,54 @@ def test_get_evidence_extracts_entities_from_real_alert_data(client, db_session,
     body = response.json()
     assert body["hosts"][0]["host_id"] == "H1"
     assert body["users"][0]["user"] == "alice"
+
+
+# ── SS-106: incident classification and tagging ─────────────────────
+
+def test_set_tags_requires_authentication(client, db_session):
+    response = client.post(f"/api/v1/incidents/{uuid.uuid4()}/tags", json={"tags": ["phishing"]})
+    assert response.status_code == 401
+
+
+def test_set_tags_requires_analyst_role(client, db_session, make_auth_headers):
+    incident = _seeded_incident()
+    db_session.existing_incidents = [incident]
+    headers = make_auth_headers(role=UserRole.VIEWER)
+
+    response = client.post(f"/api/v1/incidents/{incident.id}/tags", json={"tags": ["phishing"]}, headers=headers)
+
+    assert response.status_code == 403
+
+
+def test_set_tags_replaces_the_incidents_tags(client, db_session, make_auth_headers):
+    tenant_id = uuid.uuid4()
+    incident = _seeded_incident(tenant_id=tenant_id)
+    db_session.existing_incidents = [incident]
+    headers = make_auth_headers(tenant_id=tenant_id, role=UserRole.ANALYST)
+
+    response = client.post(
+        f"/api/v1/incidents/{incident.id}/tags", json={"tags": ["phishing", "needs-legal-review"]}, headers=headers
+    )
+
+    assert response.status_code == 200
+    assert response.json()["tags"] == ["phishing", "needs-legal-review"]
+
+
+def test_set_tags_defaults_to_an_empty_list(client, db_session, make_auth_headers):
+    tenant_id = uuid.uuid4()
+    incident = _seeded_incident(tenant_id=tenant_id)
+    db_session.existing_incidents = [incident]
+    headers = make_auth_headers(tenant_id=tenant_id, role=UserRole.ANALYST)
+
+    response = client.post(f"/api/v1/incidents/{incident.id}/tags", json={}, headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["tags"] == []
+
+
+def test_set_tags_returns_404_for_a_missing_incident(client, db_session, make_auth_headers):
+    headers = make_auth_headers(role=UserRole.ANALYST)
+
+    response = client.post(f"/api/v1/incidents/{uuid.uuid4()}/tags", json={"tags": ["x"]}, headers=headers)
+
+    assert response.status_code == 404

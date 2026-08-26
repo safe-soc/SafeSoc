@@ -30,6 +30,7 @@ from app.schemas.incidents import (
     IncidentNoteCreateRequest,
     IncidentNoteResponse,
     IncidentResponse,
+    IncidentTagsRequest,
     IncidentTimelineResponse,
     IncidentTransitionRequest,
 )
@@ -43,6 +44,7 @@ from app.services.incidents import (
     link_alert,
     list_incidents,
     list_notes,
+    set_tags,
     transition_incident,
 )
 
@@ -58,6 +60,7 @@ def _to_response(incident: Incident) -> IncidentResponse:
         assigned_analyst_id=incident.assigned_analyst_id,
         category=incident.category,
         confidence=incident.confidence,
+        tags=incident.tags,
         created_at=incident.created_at,
         updated_at=incident.updated_at,
     )
@@ -143,6 +146,18 @@ async def assign(
     incident = await assign_incident(
         db, current_user.tenant_id, incident_id, payload.assignee_user_id, actor_user_id=current_user.user_id
     )
+    return _to_response(incident)
+
+
+@router.post("/{incident_id}/tags", response_model=IncidentResponse)
+async def set_tags_route(
+    incident_id: uuid.UUID,
+    payload: IncidentTagsRequest,
+    current_user: CurrentUser = Depends(require_role(UserRole.ANALYST)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Replace an incident's free-form tags (SS-106). Audit-logged; visible in the SS-099 timeline."""
+    incident = await set_tags(db, current_user.tenant_id, incident_id, payload.tags, actor_user_id=current_user.user_id)
     return _to_response(incident)
 
 

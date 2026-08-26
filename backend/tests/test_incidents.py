@@ -22,6 +22,7 @@ from app.services.incidents import (
     link_alert,
     list_incidents,
     list_notes,
+    set_tags,
     transition_incident,
 )
 
@@ -833,3 +834,77 @@ async def test_audit_failure_does_not_break_a_transition(monkeypatch):
     incident = await transition_incident(session, tenant_id, existing.id, IncidentStatus.INVESTIGATING)  # must not raise
 
     assert incident.status == IncidentStatus.INVESTIGATING
+
+
+# ── SS-106: incident tagging ─────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_set_tags_replaces_the_tag_list(monkeypatch):
+    _mock_record_event(monkeypatch)
+    tenant_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1"], tags=[])
+    session = _FakeSession(existing_incidents=[existing])
+
+    incident = await set_tags(session, tenant_id, existing.id, ["phishing", "needs-legal-review"])
+
+    assert incident.tags == ["phishing", "needs-legal-review"]
+
+
+@pytest.mark.asyncio
+async def test_set_tags_is_idempotent_when_unchanged(monkeypatch):
+    mock_record = _mock_record_event(monkeypatch)
+    tenant_id = uuid.uuid4()
+    existing = Incident(
+        id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1"], tags=["phishing"]
+    )
+    session = _FakeSession(existing_incidents=[existing])
+
+    incident = await set_tags(session, tenant_id, existing.id, ["phishing"])
+
+    assert incident.tags == ["phishing"]
+    assert session.commit_count == 0
+    mock_record.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_tags_records_an_audit_event_with_the_acting_user(monkeypatch):
+    mock_record = _mock_record_event(monkeypatch)
+    tenant_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1"], tags=[])
+    session = _FakeSession(existing_incidents=[existing])
+
+    await set_tags(session, tenant_id, existing.id, ["phishing"], actor_user_id=actor_id)
+
+    mock_record.assert_called_once_with(
+        session,
+        tenant_id,
+        action="incident.tagged",
+        target_type="incident",
+        target_id=str(existing.id),
+        actor_user_id=actor_id,
+        details={"tags": ["phishing"]},
+    )
+
+
+@pytest.mark.asyncio
+async def test_set_tags_raises_not_found_for_a_missing_incident():
+    session = _FakeSession()
+    tenant_id = uuid.uuid4()
+
+    with pytest.raises(IncidentNotFoundError):
+        await set_tags(session, tenant_id, uuid.uuid4(), ["phishing"])
+
+
+@pytest.mark.asyncio
+async def test_set_tags_can_clear_all_tags(monkeypatch):
+    _mock_record_event(monkeypatch)
+    tenant_id = uuid.uuid4()
+    existing = Incident(
+        id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1"], tags=["phishing"]
+    )
+    session = _FakeSession(existing_incidents=[existing])
+
+    incident = await set_tags(session, tenant_id, existing.id, [])
+
+    assert incident.tags == []

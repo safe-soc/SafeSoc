@@ -52,6 +52,7 @@ export default function IncidentDetail() {
 
   const [newAlertId, setNewAlertId] = useState('');
   const [newNoteBody, setNewNoteBody] = useState('');
+  const [newTag, setNewTag] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const load = useCallback(() => {
@@ -104,6 +105,41 @@ export default function IncidentDetail() {
       refreshTimeline();
     } catch {
       setActionError('Failed to transition this incident.');
+    }
+  };
+
+  const handleAddTag = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!incidentId || !incident || !newTag.trim()) return;
+    const tag = newTag.trim();
+    if (incident.tags.includes(tag)) {
+      setNewTag('');
+      return;
+    }
+    setActionError(null);
+    try {
+      const response = await api.post<Incident>(`/api/v1/incidents/${incidentId}/tags`, {
+        tags: [...incident.tags, tag],
+      });
+      setIncident(response.data);
+      setNewTag('');
+      refreshTimeline();
+    } catch {
+      setActionError('Failed to add that tag.');
+    }
+  };
+
+  const handleRemoveTag = async (tag: string) => {
+    if (!incidentId || !incident) return;
+    setActionError(null);
+    try {
+      const response = await api.post<Incident>(`/api/v1/incidents/${incidentId}/tags`, {
+        tags: incident.tags.filter((t) => t !== tag),
+      });
+      setIncident(response.data);
+      refreshTimeline();
+    } catch {
+      setActionError('Failed to remove that tag.');
     }
   };
 
@@ -248,11 +284,55 @@ export default function IncidentDetail() {
                     : 'bg-blue-600 text-white hover:bg-blue-500'
                 }`}
               >
-                Move to {toStatus.replace('_', ' ')}
+                {toStatus === 'false_positive' ? 'Classify as false positive' : `Move to ${toStatus.replace('_', ' ')}`}
               </button>
             ))
           )}
         </div>
+      </section>
+
+      {/* Tags */}
+      <section className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+        <h2 className="text-sm font-semibold text-slate-200">Tags</h2>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {incident.tags.length === 0 ? (
+            <p className="text-sm text-slate-500">No tags yet.</p>
+          ) : (
+            incident.tags.map((tag) => (
+              <span
+                key={tag}
+                className="flex items-center gap-1.5 rounded-full bg-slate-800 px-2.5 py-1 text-xs text-slate-300"
+              >
+                {tag}
+                <button
+                  type="button"
+                  onClick={() => handleRemoveTag(tag)}
+                  className="text-slate-500 hover:text-slate-200"
+                  aria-label={`Remove tag ${tag}`}
+                >
+                  ×
+                </button>
+              </span>
+            ))
+          )}
+        </div>
+        <form onSubmit={handleAddTag} className="mt-3 flex gap-2">
+          <input
+            id="newTag"
+            type="text"
+            placeholder="Add a tag"
+            value={newTag}
+            onChange={(e) => setNewTag(e.target.value)}
+            className={inputClasses}
+          />
+          <button
+            type="submit"
+            disabled={!newTag.trim()}
+            className="rounded-lg bg-slate-800 px-3.5 py-2 text-sm text-slate-200 transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Add tag
+          </button>
+        </form>
       </section>
 
       {/* Timeline */}

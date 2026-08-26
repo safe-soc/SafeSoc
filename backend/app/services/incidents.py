@@ -102,6 +102,7 @@ async def _create_new_incident(
         status=IncidentStatus.OPEN,
         category=category,
         confidence=confidence,
+        tags=[],
     )
     db.add(incident)
     db.add(IncidentStateTransition(incident_id=incident.id, from_status=None, to_status=IncidentStatus.OPEN))
@@ -332,6 +333,36 @@ async def assign_incident(
         actor_user_id=actor_user_id,
         details={"assignee_user_id": str(assignee_user_id)},
     )
+    return incident
+
+
+async def set_tags(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    incident_id: uuid.UUID,
+    tags: list[str],
+    actor_user_id: Optional[uuid.UUID] = None,
+) -> Incident:
+    """
+    Replace an incident's free-form tags (SS-106) — distinct from
+    `category`, which is the correlation engine's own fixed vocabulary
+    set at detection time. A no-op (no commit, no audit event) if the
+    new tag list is identical to the current one, same idempotence
+    reasoning as link_alert below.
+
+    Raises:
+        IncidentNotFoundError: via get_incident.
+    """
+    incident = await get_incident(db, tenant_id, incident_id)
+
+    if incident.tags != tags:
+        incident.tags = tags
+        await db.commit()
+        await db.refresh(incident)
+        await _record_audit_event(
+            db, tenant_id, "incident.tagged", incident.id, actor_user_id=actor_user_id, details={"tags": tags}
+        )
+
     return incident
 
 
