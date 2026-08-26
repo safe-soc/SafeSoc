@@ -108,6 +108,44 @@ export interface IncidentTimelineResponse {
   entries: TimelineEntry[];
 }
 
+// GET /api/v1/incidents/{id}/evidence (SS-100/101) — distinct entities
+// involved in an incident, annotated with data already computed
+// elsewhere (Endpoint risk, ti_cache verdicts). Every annotation field
+// is nullable/optional: null/undefined means "not available", never
+// an error — render a neutral state for those, not a blank/broken one.
+export interface HostEntity {
+  host_id: string;
+  host_os?: string | null;
+  risk_score?: number | null;
+  risk_level?: Severity | null;
+  alert_count: number;
+}
+
+export interface IPEntity {
+  ip: string;
+  roles: string[];
+  is_malicious?: boolean | null;
+  alert_count: number;
+}
+
+export interface UserEntity {
+  user: string;
+  alert_count: number;
+}
+
+export interface CloudResourceEntity {
+  resource_id: string;
+  alert_count: number;
+}
+
+export interface IncidentEvidence {
+  incident_id: string;
+  hosts: HostEntity[];
+  ips: IPEntity[];
+  users: UserEntity[];
+  cloud_resources: CloudResourceEntity[];
+}
+
 export interface InvestigateResponse {
   session_id: string;
   intent: string;

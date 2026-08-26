@@ -10,7 +10,9 @@ import pytest
 from app.core.enums import IncidentStatus, UserRole
 from app.db.postgresql import get_db
 from app.main import app
+from app.models.endpoint import Endpoint
 from app.models.incident import Incident, IncidentNote
+from app.models.ti_cache import TICache
 from app.models.user import User
 
 
@@ -34,21 +36,34 @@ class _FakeResult:
 class _FakeSession:
     """Fake AsyncSession standing in for a real DB round-trip (mirrors tests/test_incidents.py)."""
 
-    def __init__(self, existing_incidents=None, existing_notes=None, existing_users=None):
+    def __init__(
+        self, existing_incidents=None, existing_notes=None, existing_users=None,
+        existing_endpoints=None, existing_ti_cache=None,
+    ):
         self.existing_incidents: list[Incident] = list(existing_incidents or [])
         self.existing_notes: list[IncidentNote] = list(existing_notes or [])
         self.existing_users: list[User] = list(existing_users or [])
+        # SS-101: get_incident_evidence's Endpoint/TICache annotation
+        # lookups route through this same fake session — empty by
+        # default (no annotation available), same as a host/IP with no
+        # row in the real tables.
+        self.existing_endpoints: list[Endpoint] = list(existing_endpoints or [])
+        self.existing_ti_cache: list[TICache] = list(existing_ti_cache or [])
         self.added: list = []
 
     async def execute(self, stmt, params=None):
-        # select(IncidentNote)/select(User) are routed to their own lists
-        # by inspecting what entity the statement targets (mirrors
-        # tests/test_incidents.py).
+        # select(IncidentNote)/select(User)/select(Endpoint)/select(TICache)
+        # are routed to their own lists by inspecting what entity the
+        # statement targets (mirrors tests/test_incidents.py).
         target = getattr(stmt, "column_descriptions", [{}])[0].get("type") if hasattr(stmt, "column_descriptions") else None
         if target is IncidentNote:
             return _FakeResult(self.existing_notes)
         if target is User:
             return _FakeResult(self.existing_users)
+        if target is Endpoint:
+            return _FakeResult(self.existing_endpoints)
+        if target is TICache:
+            return _FakeResult(self.existing_ti_cache)
         return _FakeResult(self.existing_incidents)
 
     def add(self, obj):
@@ -441,3 +456,67 @@ def test_get_timeline_returns_interleaved_entries(client, db_session, make_auth_
     assert response.status_code == 200
     entries = response.json()["entries"]
     assert [e["type"] for e in entries] == ["alert", "note"]
+
+
+# ── SS-101: incident evidence explorer endpoint ──────────────────────
+# get_alerts_by_ids hits OpenSearch and Endpoint/TICache lookups hit
+# real queries this router-level _FakeSession doesn't model (see
+# tests/test_incident_evidence.py for the service-level extraction
+# tests) — get_alerts_by_ids is mocked here so these tests exercise
+# only the HTTP layer: auth, 404 handling, and response shape.
+
+@pytest.fixture(autouse=True)
+def _mock_evidence_sources(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr("app.services.incident_evidence.get_alerts_by_ids", AsyncMock(return_value=[]))
+
+
+def test_get_evidence_requires_authentication(client, db_session):
+    response = client.get(f"/api/v1/incidents/{uuid.uuid4()}/evidence")
+    assert response.status_code == 401
+
+
+def test_get_evidence_is_readable_by_a_viewer(client, db_session, make_auth_headers):
+    tenant_id = uuid.uuid4()
+    incident = _seeded_incident(tenant_id=tenant_id)
+    db_session.existing_incidents = [incident]
+    headers = make_auth_headers(tenant_id=tenant_id, role=UserRole.VIEWER)
+
+    response = client.get(f"/api/v1/incidents/{incident.id}/evidence", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["incident_id"] == str(incident.id)
+    assert body["hosts"] == []
+    assert body["ips"] == []
+    assert body["users"] == []
+    assert body["cloud_resources"] == []
+
+
+def test_get_evidence_returns_404_for_a_missing_incident(client, db_session, make_auth_headers):
+    headers = make_auth_headers(role=UserRole.VIEWER)
+
+    response = client.get(f"/api/v1/incidents/{uuid.uuid4()}/evidence", headers=headers)
+
+    assert response.status_code == 404
+
+
+def test_get_evidence_extracts_entities_from_real_alert_data(client, db_session, make_auth_headers, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    tenant_id = uuid.uuid4()
+    incident = _seeded_incident(tenant_id=tenant_id, alert_ids=["a1"])
+    db_session.existing_incidents = [incident]
+    monkeypatch.setattr(
+        "app.services.incident_evidence.get_alerts_by_ids",
+        AsyncMock(return_value=[{"host_id": "H1", "user": "alice", "source": "wazuh"}]),
+    )
+    headers = make_auth_headers(tenant_id=tenant_id, role=UserRole.VIEWER)
+
+    response = client.get(f"/api/v1/incidents/{incident.id}/evidence", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["hosts"][0]["host_id"] == "H1"
+    assert body["users"][0]["user"] == "alice"

@@ -33,6 +33,7 @@ from app.schemas.incidents import (
     IncidentTimelineResponse,
     IncidentTransitionRequest,
 )
+from app.services.incident_evidence import IncidentEvidence, get_incident_evidence
 from app.services.incident_timeline import get_incident_timeline
 from app.services.incidents import (
     add_note,
@@ -191,3 +192,13 @@ async def get_timeline(
     """Chronological narrative merging linked alerts, audit-log activity, and notes (SS-099)."""
     entries = await get_incident_timeline(db, current_user.tenant_id, incident_id)
     return IncidentTimelineResponse(incident_id=incident_id, entries=entries)
+
+
+@router.get("/{incident_id}/evidence", response_model=IncidentEvidence)
+async def get_evidence(
+    incident_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Distinct entities (hosts/IPs/users/cloud resources) involved in an incident, annotated with risk/TI data (SS-100/101)."""
+    return await get_incident_evidence(db, current_user.tenant_id, incident_id)

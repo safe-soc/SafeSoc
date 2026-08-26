@@ -19,6 +19,7 @@ import StatusBadge from '../components/StatusBadge';
 import LevelBadge from '../components/LevelBadge';
 import MitreBadge from '../components/MitreBadge';
 import IncidentTimeline from '../components/IncidentTimeline';
+import EvidenceExplorer from '../components/EvidenceExplorer';
 import Spinner from '../components/Spinner';
 import { api } from '../lib/api';
 import { fetchAlertLookup, type AlertLookup } from '../lib/alertLookup';
@@ -26,6 +27,7 @@ import { formatDateTime, formatRelativeTime } from '../lib/format';
 import {
   ALLOWED_TRANSITIONS,
   type Incident,
+  type IncidentEvidence,
   type IncidentNote,
   type IncidentStatus,
   type TimelineEntry,
@@ -42,6 +44,7 @@ export default function IncidentDetail() {
   const [incident, setIncident] = useState<Incident | null>(null);
   const [notes, setNotes] = useState<IncidentNote[]>([]);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
+  const [evidence, setEvidence] = useState<IncidentEvidence | null>(null);
   const [lookup, setLookup] = useState<AlertLookup | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -59,11 +62,13 @@ export default function IncidentDetail() {
       api.get<Incident>(`/api/v1/incidents/${incidentId}`),
       api.get<IncidentNote[]>(`/api/v1/incidents/${incidentId}/notes`),
       api.get<{ incident_id: string; entries: TimelineEntry[] }>(`/api/v1/incidents/${incidentId}/timeline`),
+      api.get<IncidentEvidence>(`/api/v1/incidents/${incidentId}/evidence`),
     ])
-      .then(([incidentResponse, notesResponse, timelineResponse]) => {
+      .then(([incidentResponse, notesResponse, timelineResponse, evidenceResponse]) => {
         setIncident(incidentResponse.data);
         setNotes(notesResponse.data);
         setTimeline(timelineResponse.data.entries);
+        setEvidence(evidenceResponse.data);
       })
       .catch(() => setError('Failed to load this incident.'))
       .finally(() => setIsLoading(false));
@@ -249,6 +254,12 @@ export default function IncidentDetail() {
         <div className="mt-3">
           <IncidentTimeline entries={timeline} />
         </div>
+      </section>
+
+      {/* Evidence explorer */}
+      <section className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+        <h2 className="text-sm font-semibold text-slate-200">Evidence</h2>
+        <div className="mt-3">{evidence && <EvidenceExplorer evidence={evidence} />}</div>
       </section>
 
       {/* Linked alerts */}
