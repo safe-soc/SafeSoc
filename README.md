@@ -310,7 +310,7 @@ SafeSOC sends Telegram alerts for critical-severity alerts and detected attack c
 Tracked in [`PRODUCT_ROADMAP.md`](PRODUCT_ROADMAP.md), which extends the original 68-issue backlog with what a real open-source SOC platform needs next:
 
 - **Near-term (v1.0 follow-ups):** all three of an audit log (`services/audit.py`), the installer script above, and a [formal API versioning policy](docs/api-versioning-policy.md) are now implemented.
-- **Open-source polish (v1.1+):** [contribution guidelines](CONTRIBUTING.md) are now implemented; security disclosure policy and release automation remain planned.
+- **Open-source polish (v1.1+):** [contribution guidelines](CONTRIBUTING.md) and a [security disclosure policy](SECURITY.md) are now implemented; release automation remains planned.
 - **Research-grade bets (v2.0, speculative):** plugin architecture for third-party detectors, multi-cloud posture management beyond AWS, SOAR-style automated response.
 
 None of this is committed or scheduled — see `PRODUCT_ROADMAP.md`'s own versioning philosophy for how these get prioritized.
