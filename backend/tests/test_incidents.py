@@ -4,6 +4,7 @@ SafeSOC — Incident Creation Service Tests
 
 import uuid
 from datetime import datetime, timezone
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -447,7 +448,7 @@ async def test_assign_incident_sets_the_assigned_analyst_id():
     incident = await assign_incident(session, tenant_id, existing.id, analyst.id)
 
     assert incident.assigned_analyst_id == analyst.id
-    assert session.commit_count == 1
+    assert session.commit_count == 2  # the assignment itself, plus the audit event (SS-097)
 
 
 @pytest.mark.asyncio
@@ -575,3 +576,260 @@ async def test_list_notes_raises_not_found_for_a_missing_incident():
 
     with pytest.raises(IncidentNotFoundError):
         await list_notes(session, tenant_id, uuid.uuid4())
+
+
+# ── SS-097: audit logging for incident actions ─────────────────────
+# Every test here mocks app.services.incidents.record_event directly
+# rather than modeling AuditLog through _FakeSession — the fake can't
+# meaningfully prove tenant-scoped filtering (see the file's other
+# tenant-isolation caveats), so the call args themselves are the
+# assertion, matching how test_investigate_router.py already tests
+# append_turn/get_context.
+
+def _mock_record_event(monkeypatch):
+    mock = AsyncMock()
+    monkeypatch.setattr("app.services.incidents.record_event", mock)
+    return mock
+
+
+@pytest.mark.asyncio
+async def test_manual_creation_records_an_audit_event(monkeypatch):
+    mock_record = _mock_record_event(monkeypatch)
+    session = _FakeSession()
+    tenant_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
+
+    incident = await create_incident(session, tenant_id, ["a1", "a2"], actor_user_id=actor_id)
+
+    mock_record.assert_called_once_with(
+        session,
+        tenant_id,
+        action="incident.created",
+        target_type="incident",
+        target_id=str(incident.id),
+        actor_user_id=actor_id,
+        details={"source": "manual", "alert_ids": ["a1", "a2"]},
+    )
+
+
+@pytest.mark.asyncio
+async def test_automatic_creation_records_an_audit_event_with_no_actor(monkeypatch):
+    mock_record = _mock_record_event(monkeypatch)
+    session = _FakeSession()
+    tenant_id = uuid.uuid4()
+    chain = _chain("a1", pattern=CorrelationPattern.CREDENTIAL_BRUTE_FORCE, confidence=0.75)
+
+    incident = await create_or_merge_incident(session, tenant_id, "HOST-1", chain)
+
+    mock_record.assert_called_once_with(
+        session,
+        tenant_id,
+        action="incident.created",
+        target_type="incident",
+        target_id=str(incident.id),
+        actor_user_id=None,
+        details={
+            "source": "correlation",
+            "alert_ids": ["a1"],
+            "pattern": "credential_brute_force",
+            "confidence": 0.75,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_merge_records_an_audit_event_with_no_actor(monkeypatch):
+    tenant_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1"])
+    session = _FakeSession(existing_incidents=[existing])
+    mock_record = _mock_record_event(monkeypatch)
+    chain = _chain("a1", "a2", pattern=CorrelationPattern.LATERAL_MOVEMENT, confidence=0.9)
+
+    incident = await create_or_merge_incident(session, tenant_id, "HOST-1", chain)
+
+    mock_record.assert_called_once_with(
+        session,
+        tenant_id,
+        action="incident.merged",
+        target_type="incident",
+        target_id=str(existing.id),
+        actor_user_id=None,
+        details={
+            "source": "correlation",
+            "chain_alert_ids": ["a1", "a2"],
+            "pattern": "lateral_movement",
+            "confidence": 0.9,
+        },
+    )
+    assert incident.id == existing.id
+
+
+@pytest.mark.asyncio
+async def test_transition_records_an_audit_event_with_the_acting_user(monkeypatch):
+    tenant_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1"])
+    session = _FakeSession(existing_incidents=[existing])
+    mock_record = _mock_record_event(monkeypatch)
+
+    await transition_incident(session, tenant_id, existing.id, IncidentStatus.INVESTIGATING, actor_id)
+
+    mock_record.assert_called_once_with(
+        session,
+        tenant_id,
+        action="incident.status_transitioned",
+        target_type="incident",
+        target_id=str(existing.id),
+        actor_user_id=actor_id,
+        details={"from_status": "open", "to_status": "investigating"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_assign_records_an_audit_event_with_the_acting_user(monkeypatch):
+    tenant_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
+    analyst = User(
+        id=uuid.uuid4(), tenant_id=tenant_id, email="a@acme.example", password_hash="x", role=UserRole.ANALYST
+    )
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1"])
+    session = _FakeSession(existing_incidents=[existing], existing_users=[analyst])
+    mock_record = _mock_record_event(monkeypatch)
+
+    await assign_incident(session, tenant_id, existing.id, analyst.id, actor_user_id=actor_id)
+
+    mock_record.assert_called_once_with(
+        session,
+        tenant_id,
+        action="incident.assigned",
+        target_type="incident",
+        target_id=str(existing.id),
+        actor_user_id=actor_id,
+        details={"assignee_user_id": str(analyst.id)},
+    )
+
+
+@pytest.mark.asyncio
+async def test_link_alert_records_an_audit_event_on_a_real_link(monkeypatch):
+    tenant_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1"])
+    session = _FakeSession(existing_incidents=[existing])
+    mock_record = _mock_record_event(monkeypatch)
+
+    await link_alert(session, tenant_id, existing.id, "a2", actor_user_id=actor_id)
+
+    mock_record.assert_called_once_with(
+        session,
+        tenant_id,
+        action="incident.alert_linked",
+        target_type="incident",
+        target_id=str(existing.id),
+        actor_user_id=actor_id,
+        details={"alert_id": "a2"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_link_alert_idempotent_no_op_does_not_audit(monkeypatch):
+    """SS-097 AC: the idempotent no-op path must not record an audit event — nothing actually changed."""
+    tenant_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1", "a2"])
+    session = _FakeSession(existing_incidents=[existing])
+    mock_record = _mock_record_event(monkeypatch)
+
+    await link_alert(session, tenant_id, existing.id, "a2", actor_user_id=uuid.uuid4())
+
+    mock_record.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_add_note_records_an_audit_event_with_the_author(monkeypatch):
+    tenant_id = uuid.uuid4()
+    author_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1"])
+    session = _FakeSession(existing_incidents=[existing])
+    mock_record = _mock_record_event(monkeypatch)
+
+    note = await add_note(session, tenant_id, existing.id, author_id, "Confirmed lateral movement.")
+
+    mock_record.assert_called_once_with(
+        session,
+        tenant_id,
+        action="incident.note_added",
+        target_type="incident",
+        target_id=str(existing.id),
+        actor_user_id=author_id,
+        details={"note_id": str(note.id)},
+    )
+
+
+# ── SS-097 (decision #5): only completed actions are audited — never
+# rejected/failed attempts ──────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_a_rejected_transition_does_not_record_an_audit_event(monkeypatch):
+    tenant_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.RESOLVED, alert_ids=["a1"])
+    session = _FakeSession(existing_incidents=[existing])
+    mock_record = _mock_record_event(monkeypatch)
+
+    with pytest.raises(InvalidStateTransitionError):
+        await transition_incident(session, tenant_id, existing.id, IncidentStatus.OPEN)
+
+    mock_record.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_an_action_on_a_missing_incident_does_not_record_an_audit_event(monkeypatch):
+    session = _FakeSession()
+    tenant_id = uuid.uuid4()
+    mock_record = _mock_record_event(monkeypatch)
+
+    with pytest.raises(IncidentNotFoundError):
+        await transition_incident(session, tenant_id, uuid.uuid4(), IncidentStatus.INVESTIGATING)
+
+    mock_record.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_an_assignment_to_a_nonexistent_assignee_does_not_record_an_audit_event(monkeypatch):
+    tenant_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1"])
+    session = _FakeSession(existing_incidents=[existing], existing_users=[])
+    mock_record = _mock_record_event(monkeypatch)
+
+    with pytest.raises(AssigneeNotFoundError):
+        await assign_incident(session, tenant_id, existing.id, uuid.uuid4())
+
+    mock_record.assert_not_called()
+
+
+# ── SS-097 (decision #3): audit logging is best-effort ─────────────
+
+@pytest.mark.asyncio
+async def test_audit_failure_does_not_break_incident_creation(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.incidents.record_event", AsyncMock(side_effect=RuntimeError("db unavailable"))
+    )
+    session = _FakeSession()
+    tenant_id = uuid.uuid4()
+
+    incident = await create_incident(session, tenant_id, ["a1"])  # must not raise
+
+    assert incident.tenant_id == tenant_id
+    assert incident.alert_ids == ["a1"]
+
+
+@pytest.mark.asyncio
+async def test_audit_failure_does_not_break_a_transition(monkeypatch):
+    tenant_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1"])
+    session = _FakeSession(existing_incidents=[existing])
+    monkeypatch.setattr(
+        "app.services.incidents.record_event", AsyncMock(side_effect=RuntimeError("db unavailable"))
+    )
+
+    incident = await transition_incident(session, tenant_id, existing.id, IncidentStatus.INVESTIGATING)  # must not raise
+
+    assert incident.status == IncidentStatus.INVESTIGATING

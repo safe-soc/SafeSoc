@@ -77,7 +77,7 @@ async def create(
     db: AsyncSession = Depends(get_db),
 ):
     """Manually open an incident, independent of correlation-chain auto-detection (SS-031)."""
-    incident = await create_incident(db, current_user.tenant_id, payload.alert_ids)
+    incident = await create_incident(db, current_user.tenant_id, payload.alert_ids, actor_user_id=current_user.user_id)
     return _to_response(incident)
 
 
@@ -137,7 +137,9 @@ async def assign(
     db: AsyncSession = Depends(get_db),
 ):
     """Assign an incident to an analyst within the authenticated tenant."""
-    incident = await assign_incident(db, current_user.tenant_id, incident_id, payload.assignee_user_id)
+    incident = await assign_incident(
+        db, current_user.tenant_id, incident_id, payload.assignee_user_id, actor_user_id=current_user.user_id
+    )
     return _to_response(incident)
 
 
@@ -149,7 +151,9 @@ async def link_alert_route(
     db: AsyncSession = Depends(get_db),
 ):
     """Link an additional alert to an incident. Idempotent: linking the same alert_id twice is a no-op."""
-    incident = await link_alert(db, current_user.tenant_id, incident_id, payload.alert_id)
+    incident = await link_alert(
+        db, current_user.tenant_id, incident_id, payload.alert_id, actor_user_id=current_user.user_id
+    )
     return _to_response(incident)
 
 

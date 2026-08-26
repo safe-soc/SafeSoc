@@ -19,7 +19,11 @@ from app.core.enums import CorrelationPattern, IncidentStatus
 from app.core.exceptions import AssigneeNotFoundError, IncidentNotFoundError, InvalidStateTransitionError
 from app.models.incident import Incident, IncidentNote, IncidentStateTransition
 from app.models.user import User
+from app.services.audit import record_event
 from app.services.correlation import DetectedChain
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 # Incidents in either of these statuses are still "live" and eligible to
 # absorb a newly-detected chain; resolved/false-positive incidents are not
@@ -38,6 +42,44 @@ _ALLOWED_TRANSITIONS: dict[IncidentStatus, frozenset[IncidentStatus]] = {
     IncidentStatus.RESOLVED: frozenset(),
     IncidentStatus.FALSE_POSITIVE: frozenset(),
 }
+
+
+async def _record_audit_event(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    action: str,
+    incident_id: uuid.UUID,
+    actor_user_id: Optional[uuid.UUID] = None,
+    details: Optional[dict] = None,
+) -> None:
+    """
+    Best-effort audit logging for a completed incident action (SS-097).
+    Called as a separate, sequential commit after the action's own
+    commit already succeeded — not folded into the same transaction —
+    consistent with this codebase's existing tolerance for secondary-
+    effect writes (services/realtime.py's publish_event, notification
+    delivery). A record_event() failure is caught and logged here, never
+    allowed to raise back into the caller: audit logging must not be
+    able to break or roll back the incident action it's describing.
+    """
+    try:
+        await record_event(
+            db,
+            tenant_id,
+            action=action,
+            target_type="incident",
+            target_id=str(incident_id),
+            actor_user_id=actor_user_id,
+            details=details or {},
+        )
+    except Exception as e:
+        logger.warning(
+            "Audit logging failed for incident action",
+            action=action,
+            incident_id=str(incident_id),
+            error_type=type(e).__name__,
+            error=str(e),
+        )
 
 
 async def _create_new_incident(
@@ -115,21 +157,62 @@ async def create_or_merge_incident(
         matching_incident.confidence = chain.confidence
         await db.commit()
         await db.refresh(matching_incident)
+        await _record_audit_event(
+            db,
+            tenant_id,
+            "incident.merged",
+            matching_incident.id,
+            actor_user_id=None,
+            details={
+                "source": "correlation",
+                "chain_alert_ids": list(chain.alert_ids),
+                "pattern": chain.pattern.value,
+                "confidence": round(chain.confidence, 2),
+            },
+        )
         return matching_incident
 
-    return await _create_new_incident(
+    incident = await _create_new_incident(
         db, tenant_id, list(chain.alert_ids), category=chain.pattern, confidence=chain.confidence
     )
+    await _record_audit_event(
+        db,
+        tenant_id,
+        "incident.created",
+        incident.id,
+        actor_user_id=None,
+        details={
+            "source": "correlation",
+            "alert_ids": list(chain.alert_ids),
+            "pattern": chain.pattern.value,
+            "confidence": round(chain.confidence, 2),
+        },
+    )
+    return incident
 
 
-async def create_incident(db: AsyncSession, tenant_id: uuid.UUID, alert_ids: Optional[list[str]] = None) -> Incident:
+async def create_incident(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    alert_ids: Optional[list[str]] = None,
+    actor_user_id: Optional[uuid.UUID] = None,
+) -> Incident:
     """
     Manually open an incident (SS-036), independent of correlation-chain
     auto-detection (SS-031). No advisory lock here: unlike
     create_or_merge_incident, this isn't invoked by a batch of concurrent
     Celery tasks racing on the same tenant+host — it's one direct request.
     """
-    return await _create_new_incident(db, tenant_id, alert_ids or [])
+    incident = await _create_new_incident(db, tenant_id, alert_ids or [])
+    await _record_audit_event(
+        db,
+        tenant_id,
+        "incident.created",
+        incident.id,
+        actor_user_id=actor_user_id,
+        details={"source": "manual", "alert_ids": alert_ids or []},
+    )
+    return incident
 
 
 async def list_incidents(
@@ -202,11 +285,23 @@ async def transition_incident(
     )
     await db.commit()
     await db.refresh(incident)
+    await _record_audit_event(
+        db,
+        tenant_id,
+        "incident.status_transitioned",
+        incident.id,
+        actor_user_id=changed_by_user_id,
+        details={"from_status": from_status.value, "to_status": to_status.value},
+    )
     return incident
 
 
 async def assign_incident(
-    db: AsyncSession, tenant_id: uuid.UUID, incident_id: uuid.UUID, assignee_user_id: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    incident_id: uuid.UUID,
+    assignee_user_id: uuid.UUID,
+    actor_user_id: Optional[uuid.UUID] = None,
 ) -> Incident:
     """
     Assign an incident to an analyst within the same tenant (SS-095) —
@@ -229,15 +324,30 @@ async def assign_incident(
     incident.assigned_analyst_id = assignee_user_id
     await db.commit()
     await db.refresh(incident)
+    await _record_audit_event(
+        db,
+        tenant_id,
+        "incident.assigned",
+        incident.id,
+        actor_user_id=actor_user_id,
+        details={"assignee_user_id": str(assignee_user_id)},
+    )
     return incident
 
 
-async def link_alert(db: AsyncSession, tenant_id: uuid.UUID, incident_id: uuid.UUID, alert_id: str) -> Incident:
+async def link_alert(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    incident_id: uuid.UUID,
+    alert_id: str,
+    actor_user_id: Optional[uuid.UUID] = None,
+) -> Incident:
     """
     Link an additional alert to an already-created incident (SS-037).
 
     Idempotent: linking an alert_id that's already present is a no-op
-    (no duplicate entry, no commit), matching the AC exactly.
+    (no duplicate entry, no commit, no audit event — SS-097) matching
+    the AC exactly.
 
     Raises:
         IncidentNotFoundError: via get_incident.
@@ -248,6 +358,14 @@ async def link_alert(db: AsyncSession, tenant_id: uuid.UUID, incident_id: uuid.U
         incident.alert_ids = incident.alert_ids + [alert_id]
         await db.commit()
         await db.refresh(incident)
+        await _record_audit_event(
+            db,
+            tenant_id,
+            "incident.alert_linked",
+            incident.id,
+            actor_user_id=actor_user_id,
+            details={"alert_id": alert_id},
+        )
 
     return incident
 
@@ -270,6 +388,14 @@ async def add_note(
     db.add(note)
     await db.commit()
     await db.refresh(note)
+    await _record_audit_event(
+        db,
+        tenant_id,
+        "incident.note_added",
+        incident.id,
+        actor_user_id=author_user_id,
+        details={"note_id": str(note.id)},
+    )
     return note
 
 
