@@ -2,14 +2,16 @@
 
 ## 1. Current State: Automated Backend Tests Exist (SS-002)
 
-`backend/tests/` now contains a real suite: **545 tests** across 53 files, one per major module/feature (`test_schemas.py`, `test_ingestion.py`, `test_opensearch.py`, `test_exceptions.py`, `test_auth.py`/`test_auth_router.py`, `test_correlation.py`/`test_correlation_worker.py`, `test_incidents.py`/`test_incidents_router.py`, `test_investigation.py`/`test_investigate_router.py`, `test_anomaly.py`, `test_reporting.py`, `test_notifications.py`, `test_rate_limit.py`, `test_rbac.py`, `test_tenant_isolation.py`, and more), plus shared fixtures in `conftest.py`. `pytest`, `pytest-asyncio`, and `httpx` are in `backend/requirements.txt`. Run it:
+`backend/tests/` now contains a real suite: **788 tests** across 60 files, one per major module/feature (`test_schemas.py`, `test_ingestion.py`, `test_opensearch.py`, `test_exceptions.py`, `test_auth.py`/`test_auth_router.py`, `test_correlation.py`/`test_correlation_worker.py`, `test_incidents.py`/`test_incidents_router.py`, `test_investigation.py`/`test_investigate_router.py`, `test_anomaly.py`, `test_reporting.py`, `test_notifications.py`, `test_rate_limit.py`, `test_rbac.py`, `test_tenant_isolation.py`, `test_adapter_sdk.py` (SS-069), `test_observability.py` (SS-077), and more), plus shared fixtures in `conftest.py`. `pytest`, `pytest-asyncio`, and `httpx` are in `backend/requirements.txt`. Run it:
 
 ```bash
 cd backend
 pytest
 ```
 
-All 545 pass, offline — no live OpenSearch, Postgres, Redis, Docker, or network access required. External dependencies are mocked at their call sites (`mock_bulk_index_logs`, `mock_opensearch_unreachable`, and per-test Celery/Redis/HTTP mocks) rather than hitting live infrastructure.
+All 788 pass, offline — no live OpenSearch, Postgres, Redis, or network access required (four of them — `test_injector_demo.py`, `test_injector_scenarios.py`, `test_ml_generate_training_data.py`, `test_ml_train.py` — do need the repository-level `injector/`/`ml/` directories present on disk next to `backend/`, which is true for a normal checkout and for CI's checkout, but **not** automatically true inside the `backend` Docker container — see §7). External dependencies are mocked at their call sites (`mock_bulk_index_logs`, `mock_opensearch_unreachable`, and per-test Celery/Redis/HTTP mocks) rather than hitting live infrastructure.
+
+**Note on `scripts/test_changelog_extract.py` (SS-076):** its 8 tests are a separate suite over `scripts/`, run by CI's own `release-scripts` job (`pytest scripts/` from the repo root) — they are not part of `backend/tests/` and don't show up in the count above; `cd backend && pytest` never collects them, by design (`scripts/` isn't part of the backend package).
 
 **Now automatic:** `.github/workflows/ci.yml`'s `safesoc-backend` job runs this suite (`pytest`, after the install and import-check steps) on every push/PR — a failing test fails the build (SS-003).
 
@@ -80,11 +82,24 @@ These numbers describe a single-node Docker Compose dev setup, not a production 
 
 **SS-078:** see [`docs/performance-benchmarks.md`](performance-benchmarks.md) for the published, reproduction-step-documented version of this same harness, including a more recent measurement pass and the exact environment (host, Docker resources, data volume) each run was measured on.
 
-## 6. Summary
+## 7. Running the Full Suite Inside Docker
+
+`docker-compose.yml`'s `backend` service mounts only `./backend:/app` (matching `backend/Dockerfile`'s build context, `./backend`), so the container's filesystem has no repository-level `injector/` or `ml/` directories. `test_injector_demo.py`, `test_injector_scenarios.py`, `test_ml_generate_training_data.py`, and `test_ml_train.py` reach into those directories via `sys.path` (see their module docstrings) — outside Docker this resolves fine because the whole repo is on disk (true for a normal local checkout and for CI's checkout), but inside the `backend` container those directories simply don't exist at any path, so those four modules fail to collect (`ModuleNotFoundError: No module named 'injector'` / `'ml'`), even though `docker compose exec backend pytest -q` otherwise runs and passes the other 742.
+
+Fixed by `docker-compose.test.yml` — a test-only Compose overlay (not a change to `docker-compose.yml` or the production backend container) that bind-mounts `injector/` and `ml/` read-only at the container's filesystem root, matching where those four tests' own `sys.path` logic already expects the repo root to be from inside `/app`. Apply it when running the suite in Docker:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.test.yml up -d backend
+docker compose -f docker-compose.yml -f docker-compose.test.yml exec backend pytest -q
+```
+
+All 788 tests collect and pass inside the container with the overlay applied — identical to the local/CI result. Return the backend container to its normal state afterward with a plain `docker compose up -d backend` (no `-f docker-compose.test.yml`). See the comments in `docker-compose.test.yml` for why the mounts land at the container's root rather than nested under `/app` (a Docker Desktop/Windows bind-mount-nesting quirk was ruled out live before settling on that design).
+
+## 8. Summary
 
 | Test type | Status |
 |---|---|
-| Unit/integration tests (backend) | **545 tests, passing** across every implemented feature (see §4) — **runs in CI** on every push/PR |
+| Unit/integration tests (backend) | **788 tests, passing** across every implemented feature (see §4) — **runs in CI** on every push/PR, and in Docker via `docker-compose.test.yml` (§7) |
 | Unit/integration tests (CloudLens) | None exist |
 | CI pipeline | `safesoc-backend` job runs install → import check → `pytest`; `cloudlens-*` jobs remain smoke checks (Django check, frontend lint/typecheck/build) — no CloudLens test suite exists yet |
 | Manual verification | Performed for Phase 1 ingestion pipeline (per report), not reproducible from repo alone |

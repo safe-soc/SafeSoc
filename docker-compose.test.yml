@@ -1,0 +1,54 @@
+# SafeSOC — Test-only Docker Compose overlay
+#
+# docker-compose.yml's `backend` service mounts only `./backend:/app`
+# (matching backend/Dockerfile's build context, `./backend`) — the
+# production container's filesystem has no repository-level `injector/`
+# or `ml/` directories. Four tests reach into those directories the same
+# way ml/train.py and injector/injector.py reach back into backend/app at
+# runtime — by inserting the repo root onto sys.path (see the module
+# docstrings in backend/tests/test_injector_demo.py,
+# test_injector_scenarios.py, test_ml_generate_training_data.py, and
+# test_ml_train.py). Concretely, `Path(__file__).resolve().parent.parent
+# .parent` from backend/tests/test_x.py resolves to the repo root on a
+# normal checkout (tests/ -> backend/ -> repo root); inside this
+# container, WORKDIR /app *is* the backend/ level, so that same
+# three-parents-up walk lands on "/" (container filesystem root) — the
+# in-container equivalent of the repo root. Mounting injector/ and ml/
+# there (rather than nested under /app) is what those test files'
+# existing sys.path logic already expects, not a new convention.
+#
+# It also avoids a real Docker Desktop for Windows/WSL2 quirk: a bind
+# mount nested *under* an already bind-mounted path (e.g. at /app/ml,
+# inside the /app mount from ./backend:/app) reliably left an empty
+# `ml`/`injector` directory materialized on the host, inside
+# backend/, after the container mounting it was torn down — polluting
+# the source tree on every up/down cycle. Mounting at top-level,
+# non-nested container paths (siblings of /app, not children of it)
+# sidesteps that entirely; verified clean across repeated up/down
+# cycles before landing this file.
+#
+# Read-only: nothing under test writes back into injector/ or ml/ —
+# dataset/model output goes to pytest's tmp_path fixture. This overlay
+# does not touch docker-compose.yml or change anything about the
+# production backend container; Compose merges `volumes` entries across
+# `-f` files (it doesn't replace them), so `./backend:/app` from the
+# base file is preserved unchanged.
+#
+# Usage (recreate the backend container with the overlay applied, then
+# run the suite against it):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml up -d backend
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml exec backend pytest -q
+#
+# `docker compose exec backend pytest -q` (base file only, no overlay)
+# continues to fail those four modules' collection exactly as before —
+# expected, since the base file is deliberately unchanged. To return the
+# backend container to its normal, non-overlay state afterward:
+#
+#   docker compose up -d backend
+
+services:
+  backend:
+    volumes:
+      - ./injector:/injector:ro
+      - ./ml:/ml:ro

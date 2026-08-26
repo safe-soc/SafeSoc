@@ -36,6 +36,18 @@ jobs:
       - name: Run tests
         run: pytest
 
+  docker-compose-validate:
+    name: Docker Compose — config validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate base compose file
+        run: docker compose -f docker-compose.yml config --quiet
+
+      - name: Validate base + test overlay merge
+        run: docker compose -f docker-compose.yml -f docker-compose.test.yml config --quiet
+
   release-scripts:
     name: Release scripts — tests (SS-076)
     runs-on: ubuntu-latest
