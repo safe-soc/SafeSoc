@@ -35,6 +35,7 @@ from app.schemas.incidents import (
     IncidentTransitionRequest,
 )
 from app.services.incident_evidence import IncidentEvidence, get_incident_evidence
+from app.services.incident_graph import IncidentGraph, get_incident_graph
 from app.services.incident_timeline import get_incident_timeline
 from app.services.incidents import (
     add_note,
@@ -234,3 +235,17 @@ async def get_evidence(
 ):
     """Distinct entities (hosts/IPs/users/cloud resources) involved in an incident, annotated with risk/TI data (SS-100/101)."""
     return await get_incident_evidence(db, current_user.tenant_id, incident_id)
+
+
+@router.get("/{incident_id}/graph", response_model=IncidentGraph)
+async def get_graph(
+    incident_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Lightweight relationship graph (nodes = SS-100's evidence entities,
+    edges = alerts connecting them, MITRE-annotated) — computed fresh
+    per request, no graph database (SS-104).
+    """
+    return await get_incident_graph(db, current_user.tenant_id, incident_id)

@@ -639,3 +639,67 @@ def test_link_alert_requires_alert_id_or_alert_ids(client, db_session, make_auth
     response = client.post(f"/api/v1/incidents/{incident.id}/alerts", json={}, headers=headers)
 
     assert response.status_code == 422
+
+
+# ── SS-104: investigation graph endpoint ─────────────────────────────
+# get_alerts_by_ids/Endpoint/TICache queries are mocked/routed through
+# this router-level fake (see tests/test_incident_graph.py for the
+# service-level node/edge construction tests) — these exercise only
+# the HTTP layer: auth, 404 handling, and response shape.
+
+@pytest.fixture(autouse=True)
+def _mock_graph_sources(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr("app.services.incident_graph.get_alerts_by_ids", AsyncMock(return_value=[]))
+    monkeypatch.setattr("app.services.incident_evidence.get_alerts_by_ids", AsyncMock(return_value=[]))
+
+
+def test_get_graph_requires_authentication(client, db_session):
+    response = client.get(f"/api/v1/incidents/{uuid.uuid4()}/graph")
+    assert response.status_code == 401
+
+
+def test_get_graph_is_readable_by_a_viewer(client, db_session, make_auth_headers):
+    tenant_id = uuid.uuid4()
+    incident = _seeded_incident(tenant_id=tenant_id)
+    db_session.existing_incidents = [incident]
+    headers = make_auth_headers(tenant_id=tenant_id, role=UserRole.VIEWER)
+
+    response = client.get(f"/api/v1/incidents/{incident.id}/graph", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["incident_id"] == str(incident.id)
+    assert body["nodes"] == []
+    assert body["edges"] == []
+
+
+def test_get_graph_returns_404_for_a_missing_incident(client, db_session, make_auth_headers):
+    headers = make_auth_headers(role=UserRole.VIEWER)
+
+    response = client.get(f"/api/v1/incidents/{uuid.uuid4()}/graph", headers=headers)
+
+    assert response.status_code == 404
+
+
+def test_get_graph_builds_nodes_and_edges_from_real_alert_data(client, db_session, make_auth_headers, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    tenant_id = uuid.uuid4()
+    incident = _seeded_incident(tenant_id=tenant_id, alert_ids=["a1"])
+    db_session.existing_incidents = [incident]
+    alert = {
+        "alert_id": "a1", "host_id": "H1", "user": "alice", "timestamp": "2026-08-01T10:00:00Z", "source": "wazuh",
+    }
+    monkeypatch.setattr("app.services.incident_graph.get_alerts_by_ids", AsyncMock(return_value=[alert]))
+    monkeypatch.setattr("app.services.incident_evidence.get_alerts_by_ids", AsyncMock(return_value=[alert]))
+    headers = make_auth_headers(tenant_id=tenant_id, role=UserRole.VIEWER)
+
+    response = client.get(f"/api/v1/incidents/{incident.id}/graph", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert {n["id"] for n in body["nodes"]} == {"host:H1", "user:alice"}
+    assert len(body["edges"]) == 1
+    assert body["edges"][0]["alert_id"] == "a1"
