@@ -182,7 +182,14 @@ export default function IncidentDetail() {
               Created {formatDateTime(incident.created_at)} · Updated {formatRelativeTime(incident.updated_at)}
             </>
           }
-          actions={<StatusBadge status={incident.status} />}
+          actions={
+            <div className="flex items-center gap-2">
+              {incident.confidence != null && (
+                <span className="text-xs text-slate-500">{Math.round(incident.confidence * 100)}% confidence</span>
+              )}
+              <StatusBadge status={incident.status} />
+            </div>
+          }
         />
       </div>
 

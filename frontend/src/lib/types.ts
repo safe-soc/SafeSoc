@@ -70,6 +70,9 @@ export interface Incident {
   status: IncidentStatus;
   alert_ids: string[];
   assigned_analyst_id: string | null;
+  // SS-094: the detected chain's confidence at creation/last merge —
+  // null for a manually-created incident, which has no detected chain.
+  confidence: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -119,6 +122,8 @@ export interface HostEntity {
   risk_score?: number | null;
   risk_level?: Severity | null;
   alert_count: number;
+  // SS-103: true if any alert tied to this host exceeded the anomaly threshold.
+  has_anomalous_activity?: boolean;
 }
 
 export interface IPEntity {

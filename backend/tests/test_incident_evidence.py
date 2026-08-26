@@ -241,3 +241,73 @@ async def test_incident_with_no_alerts_produces_empty_evidence(monkeypatch):
     assert evidence.ips == []
     assert evidence.users == []
     assert evidence.cloud_resources == []
+
+
+# ── SS-103: host anomaly flag ────────────────────────────────────────
+# Uses settings.ANOMALY_THRESHOLD (default 0.7, see core/config.py) —
+# the same threshold services/anomaly.py itself uses for is_anomalous,
+# not a new one invented for this issue.
+
+@pytest.mark.asyncio
+async def test_host_flagged_anomalous_when_an_alert_meets_the_threshold(monkeypatch):
+    incident = _incident()
+    _mock_get_incident(monkeypatch, incident)
+    _mock_alerts(monkeypatch, [{"host_id": "H1", "anomaly_score": 0.85}])
+    session = _FakeSession()
+
+    evidence = await get_incident_evidence(session, incident.tenant_id, incident.id)
+
+    assert evidence.hosts[0].has_anomalous_activity is True
+
+
+@pytest.mark.asyncio
+async def test_host_flagged_anomalous_at_exactly_the_threshold(monkeypatch):
+    incident = _incident()
+    _mock_get_incident(monkeypatch, incident)
+    _mock_alerts(monkeypatch, [{"host_id": "H1", "anomaly_score": 0.7}])
+    session = _FakeSession()
+
+    evidence = await get_incident_evidence(session, incident.tenant_id, incident.id)
+
+    assert evidence.hosts[0].has_anomalous_activity is True
+
+
+@pytest.mark.asyncio
+async def test_host_not_flagged_when_below_the_threshold(monkeypatch):
+    incident = _incident()
+    _mock_get_incident(monkeypatch, incident)
+    _mock_alerts(monkeypatch, [{"host_id": "H1", "anomaly_score": 0.3}])
+    session = _FakeSession()
+
+    evidence = await get_incident_evidence(session, incident.tenant_id, incident.id)
+
+    assert evidence.hosts[0].has_anomalous_activity is False
+
+
+@pytest.mark.asyncio
+async def test_host_not_flagged_when_never_scored(monkeypatch):
+    """AC: degrades gracefully — no anomaly_score at all is not treated as anomalous."""
+    incident = _incident()
+    _mock_get_incident(monkeypatch, incident)
+    _mock_alerts(monkeypatch, [{"host_id": "H1", "anomaly_score": None}])
+    session = _FakeSession()
+
+    evidence = await get_incident_evidence(session, incident.tenant_id, incident.id)
+
+    assert evidence.hosts[0].has_anomalous_activity is False
+
+
+@pytest.mark.asyncio
+async def test_host_flagged_if_any_one_of_its_alerts_is_anomalous(monkeypatch):
+    incident = _incident()
+    _mock_get_incident(monkeypatch, incident)
+    _mock_alerts(
+        monkeypatch,
+        [{"host_id": "H1", "anomaly_score": 0.1}, {"host_id": "H1", "anomaly_score": 0.9}],
+    )
+    session = _FakeSession()
+
+    evidence = await get_incident_evidence(session, incident.tenant_id, incident.id)
+
+    assert evidence.hosts[0].has_anomalous_activity is True
+    assert evidence.hosts[0].alert_count == 2

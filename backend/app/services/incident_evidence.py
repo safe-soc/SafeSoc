@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.enums import LogSource, RiskLevel
 from app.db.opensearch import get_alerts_by_ids
 from app.models.endpoint import Endpoint
@@ -37,6 +38,11 @@ class HostEntity(BaseModel):
     risk_score: Optional[int] = None
     risk_level: Optional[RiskLevel] = None
     alert_count: int
+    # SS-103: true if any alert tied to this host had an anomaly_score
+    # (SS-102) at or above settings.ANOMALY_THRESHOLD — the same
+    # threshold services/anomaly.py itself uses to decide is_anomalous,
+    # not a new one invented here.
+    has_anomalous_activity: bool = False
 
 
 class IPEntity(BaseModel):
@@ -100,6 +106,7 @@ async def get_incident_evidence(db: AsyncSession, tenant_id: uuid.UUID, incident
 
     host_os: dict[str, Optional[str]] = {}
     host_alert_counts: dict[str, int] = {}
+    host_has_anomaly: dict[str, bool] = {}
     cloud_alert_counts: dict[str, int] = {}
     ip_roles: dict[str, set[str]] = {}
     ip_alert_counts: dict[str, int] = {}
@@ -118,6 +125,9 @@ async def get_incident_evidence(db: AsyncSession, tenant_id: uuid.UUID, incident
                 host_alert_counts[host_id] = host_alert_counts.get(host_id, 0) + 1
                 if alert.get("host_os"):
                     host_os[host_id] = alert["host_os"]
+                anomaly_score = alert.get("anomaly_score")
+                if anomaly_score is not None and anomaly_score >= settings.ANOMALY_THRESHOLD:
+                    host_has_anomaly[host_id] = True
 
         for field, role in (("source_ip", "source"), ("destination_ip", "destination")):
             ip = alert.get(field)
@@ -139,6 +149,7 @@ async def get_incident_evidence(db: AsyncSession, tenant_id: uuid.UUID, incident
             risk_score=endpoints[host_id].risk_score if host_id in endpoints else None,
             risk_level=endpoints[host_id].risk_level if host_id in endpoints else None,
             alert_count=count,
+            has_anomalous_activity=host_has_anomaly.get(host_id, False),
         )
         for host_id, count in host_alert_counts.items()
     ]

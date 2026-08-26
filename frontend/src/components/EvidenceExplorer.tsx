@@ -42,6 +42,11 @@ export default function EvidenceExplorer({ evidence }: { evidence: IncidentEvide
                 ) : (
                   <span className="text-xs text-slate-600">Not yet scored</span>
                 )}
+                {host.has_anomalous_activity && (
+                  <span className="rounded-full bg-purple-500/15 px-2 py-0.5 text-xs font-medium text-purple-300 ring-1 ring-inset ring-purple-500/40">
+                    Anomalous
+                  </span>
+                )}
                 <span className="ml-auto text-xs text-slate-600">{host.alert_count} alert{host.alert_count === 1 ? '' : 's'}</span>
               </li>
             ))}
