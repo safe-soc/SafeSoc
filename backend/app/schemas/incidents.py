@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.core.enums import CorrelationPattern, IncidentStatus
 
@@ -58,6 +58,12 @@ class IncidentResponse(BaseModel):
     tags: list[str]
     created_at: datetime
     updated_at: datetime
+    # SS-108: populated only by the bulk alert-link endpoint's batch
+    # path (AlertLinkRequest.alert_ids); null for every other
+    # IncidentResponse-returning endpoint, including single-alert
+    # linking — an additive field, not a breaking response-shape change.
+    accepted_alert_ids: Optional[list[str]] = None
+    rejected_alert_ids: Optional[list[str]] = None
 
 
 class IncidentListResponse(BaseModel):
@@ -69,7 +75,17 @@ class IncidentListResponse(BaseModel):
 
 
 class AlertLinkRequest(BaseModel):
-    alert_id: str
+    # SS-108: alert_ids (batch) is additive — alert_id (single) is
+    # untouched so existing callers keep working exactly as before.
+    # Exactly one of the two must be supplied.
+    alert_id: Optional[str] = None
+    alert_ids: Optional[list[str]] = None
+
+    @model_validator(mode="after")
+    def _require_alert_id_or_alert_ids(self) -> "AlertLinkRequest":
+        if self.alert_id is None and self.alert_ids is None:
+            raise ValueError("Provide either alert_id or alert_ids.")
+        return self
 
     model_config = {
         "json_schema_extra": {

@@ -577,3 +577,65 @@ def test_set_tags_returns_404_for_a_missing_incident(client, db_session, make_au
     response = client.post(f"/api/v1/incidents/{uuid.uuid4()}/tags", json={"tags": ["x"]}, headers=headers)
 
     assert response.status_code == 404
+
+
+# ── SS-108: bulk alert linking ───────────────────────────────────────
+
+def test_link_alerts_batch_links_every_valid_id(client, db_session, make_auth_headers):
+    tenant_id = uuid.uuid4()
+    incident = _seeded_incident(tenant_id=tenant_id, alert_ids=["a1"])
+    db_session.existing_incidents = [incident]
+    headers = make_auth_headers(tenant_id=tenant_id, role=UserRole.ANALYST)
+
+    response = client.post(
+        f"/api/v1/incidents/{incident.id}/alerts", json={"alert_ids": ["a2", "a3"]}, headers=headers
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["alert_ids"] == ["a1", "a2", "a3"]
+    assert body["accepted_alert_ids"] == ["a2", "a3"]
+    assert body["rejected_alert_ids"] == []
+
+
+def test_link_alerts_batch_reports_rejected_entries(client, db_session, make_auth_headers):
+    tenant_id = uuid.uuid4()
+    incident = _seeded_incident(tenant_id=tenant_id, alert_ids=[])
+    db_session.existing_incidents = [incident]
+    headers = make_auth_headers(tenant_id=tenant_id, role=UserRole.ANALYST)
+
+    response = client.post(
+        f"/api/v1/incidents/{incident.id}/alerts", json={"alert_ids": ["a1", ""]}, headers=headers
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["alert_ids"] == ["a1"]
+    assert body["accepted_alert_ids"] == ["a1"]
+    assert body["rejected_alert_ids"] == [""]
+
+
+def test_link_alert_single_is_backward_compatible(client, db_session, make_auth_headers):
+    """The original SS-037 shape ({"alert_id": ...}) must keep working exactly as before, with no accepted/rejected fields."""
+    tenant_id = uuid.uuid4()
+    incident = _seeded_incident(tenant_id=tenant_id, alert_ids=["a1"])
+    db_session.existing_incidents = [incident]
+    headers = make_auth_headers(tenant_id=tenant_id, role=UserRole.ANALYST)
+
+    response = client.post(f"/api/v1/incidents/{incident.id}/alerts", json={"alert_id": "a2"}, headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["alert_ids"] == ["a1", "a2"]
+    assert body["accepted_alert_ids"] is None
+    assert body["rejected_alert_ids"] is None
+
+
+def test_link_alert_requires_alert_id_or_alert_ids(client, db_session, make_auth_headers):
+    incident = _seeded_incident()
+    db_session.existing_incidents = [incident]
+    headers = make_auth_headers(role=UserRole.ANALYST)
+
+    response = client.post(f"/api/v1/incidents/{incident.id}/alerts", json={}, headers=headers)
+
+    assert response.status_code == 422

@@ -20,6 +20,7 @@ from app.services.incidents import (
     create_or_merge_incident,
     get_incident,
     link_alert,
+    link_alerts,
     list_incidents,
     list_notes,
     set_tags,
@@ -908,3 +909,66 @@ async def test_set_tags_can_clear_all_tags(monkeypatch):
     incident = await set_tags(session, tenant_id, existing.id, [])
 
     assert incident.tags == []
+
+
+# ── SS-108: bulk alert linking ───────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_link_alerts_links_every_valid_id():
+    tenant_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1"])
+    session = _FakeSession(existing_incidents=[existing])
+
+    incident, accepted, rejected = await link_alerts(session, tenant_id, existing.id, ["a2", "a3"])
+
+    assert incident.alert_ids == ["a1", "a2", "a3"]
+    assert accepted == ["a2", "a3"]
+    assert rejected == []
+
+
+@pytest.mark.asyncio
+async def test_link_alerts_rejects_blank_ids_without_blocking_valid_ones():
+    """AC: a batch with one invalid ID still links the valid ones (accepted/rejected pattern)."""
+    tenant_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=[])
+    session = _FakeSession(existing_incidents=[existing])
+
+    incident, accepted, rejected = await link_alerts(session, tenant_id, existing.id, ["a1", "", "  ", "a2"])
+
+    assert incident.alert_ids == ["a1", "a2"]
+    assert accepted == ["a1", "a2"]
+    assert rejected == ["", "  "]
+
+
+@pytest.mark.asyncio
+async def test_link_alerts_is_idempotent_per_item():
+    tenant_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1"])
+    session = _FakeSession(existing_incidents=[existing])
+
+    incident, accepted, rejected = await link_alerts(session, tenant_id, existing.id, ["a1", "a2"])
+
+    assert incident.alert_ids == ["a1", "a2"]  # a1 not duplicated
+    assert accepted == ["a1", "a2"]  # already-linked still counts as accepted, not rejected
+
+
+@pytest.mark.asyncio
+async def test_link_alerts_raises_not_found_for_a_missing_incident():
+    session = _FakeSession()
+    tenant_id = uuid.uuid4()
+
+    with pytest.raises(IncidentNotFoundError):
+        await link_alerts(session, tenant_id, uuid.uuid4(), ["a1"])
+
+
+@pytest.mark.asyncio
+async def test_link_alerts_records_one_audit_event_per_newly_linked_alert(monkeypatch):
+    """Batch linking reuses link_alert per item, so it inherits SS-097's existing per-link audit behavior."""
+    mock_record = _mock_record_event(monkeypatch)
+    tenant_id = uuid.uuid4()
+    existing = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=[])
+    session = _FakeSession(existing_incidents=[existing])
+
+    await link_alerts(session, tenant_id, existing.id, ["a1", "a2"])
+
+    assert mock_record.call_count == 2

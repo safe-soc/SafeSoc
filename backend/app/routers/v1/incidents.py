@@ -42,6 +42,7 @@ from app.services.incidents import (
     create_incident,
     get_incident,
     link_alert,
+    link_alerts,
     list_incidents,
     list_notes,
     set_tags,
@@ -168,7 +169,23 @@ async def link_alert_route(
     current_user: CurrentUser = Depends(require_role(UserRole.ANALYST)),
     db: AsyncSession = Depends(get_db),
 ):
-    """Link an additional alert to an incident. Idempotent: linking the same alert_id twice is a no-op."""
+    """
+    Link one or more alerts to an incident. Idempotent per alert_id:
+    linking one already present is a no-op. SS-108: pass alert_ids
+    (a list) to link a batch in one request — a blank entry is
+    rejected without blocking the rest (accepted_alert_ids/
+    rejected_alert_ids on the response); pass alert_id (singular, the
+    original SS-037 shape) for a single link, unchanged.
+    """
+    if payload.alert_ids is not None:
+        incident, accepted, rejected = await link_alerts(
+            db, current_user.tenant_id, incident_id, payload.alert_ids, actor_user_id=current_user.user_id
+        )
+        response = _to_response(incident)
+        response.accepted_alert_ids = accepted
+        response.rejected_alert_ids = rejected
+        return response
+
     incident = await link_alert(
         db, current_user.tenant_id, incident_id, payload.alert_id, actor_user_id=current_user.user_id
     )

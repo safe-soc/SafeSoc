@@ -149,9 +149,15 @@ export default function IncidentDetail() {
     setActionError(null);
     setIsSubmitting(true);
     try {
-      const response = await api.post<Incident>(`/api/v1/incidents/${incidentId}/alerts`, {
-        alert_id: newAlertId.trim(),
-      });
+      // SS-108: a comma-separated list links a batch in one request;
+      // a single id (the common case) keeps sending the original
+      // alert_id shape unchanged.
+      const ids = newAlertId
+        .split(',')
+        .map((id) => id.trim())
+        .filter(Boolean);
+      const payload = ids.length > 1 ? { alert_ids: ids } : { alert_id: ids[0] };
+      const response = await api.post<Incident>(`/api/v1/incidents/${incidentId}/alerts`, payload);
       setIncident(response.data);
       setNewAlertId('');
       refreshTimeline();
@@ -380,7 +386,7 @@ export default function IncidentDetail() {
           <input
             id="linkAlertId"
             type="text"
-            placeholder="Alert ID to link"
+            placeholder="Alert ID to link (comma-separated for multiple)"
             value={newAlertId}
             onChange={(e) => setNewAlertId(e.target.value)}
             className={inputClasses}

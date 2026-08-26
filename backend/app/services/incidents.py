@@ -401,6 +401,42 @@ async def link_alert(
     return incident
 
 
+async def link_alerts(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    incident_id: uuid.UUID,
+    alert_ids: list[str],
+    actor_user_id: Optional[uuid.UUID] = None,
+) -> tuple[Incident, list[str], list[str]]:
+    """
+    Link multiple alerts to an incident in one request (SS-108),
+    reusing link_alert's idempotent per-item logic exactly — each id
+    is validated independently so a batch with one invalid entry still
+    links the valid ones (partial-success/accepted-rejected pattern,
+    consistent with the ingestion batch convention). A blank/whitespace
+    id is the only thing considered "invalid" here, since alert_id is
+    otherwise just an opaque string with no existence check anywhere
+    else in this codebase either (see link_alert).
+
+    Raises:
+        IncidentNotFoundError: via get_incident, checked once up front
+        so an unknown/wrong-tenant incident_id fails the whole request
+        rather than reporting every item as rejected.
+    """
+    incident = await get_incident(db, tenant_id, incident_id)
+
+    accepted: list[str] = []
+    rejected: list[str] = []
+    for alert_id in alert_ids:
+        if not alert_id or not alert_id.strip():
+            rejected.append(alert_id)
+            continue
+        incident = await link_alert(db, tenant_id, incident_id, alert_id, actor_user_id=actor_user_id)
+        accepted.append(alert_id)
+
+    return incident, accepted, rejected
+
+
 async def add_note(
     db: AsyncSession, tenant_id: uuid.UUID, incident_id: uuid.UUID, author_user_id: uuid.UUID, body: str
 ) -> IncidentNote:
