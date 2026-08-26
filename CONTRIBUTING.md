@@ -39,6 +39,17 @@ Follow [`docs/coding-standards.md`](docs/coding-standards.md) — it documents t
 
 If your change adds or modifies backend behavior, keep the relevant `docs/` file (`architecture.md`, `api-design.md`, `database-schema.md`, `requirements.md`) in sync — including moving something from **Planned**/**Partial** to **Implemented** — per this repo's Implemented/Partial/Planned documentation discipline. If it adds a new environment variable, update `.env.example` too.
 
+## Documentation site
+
+The `docs/` directory doubles as the source for a browsable site ([`mkdocs.yml`](mkdocs.yml), SS-073). Preview it locally:
+
+```bash
+pip install -r requirements-docs.txt
+mkdocs serve       # live preview at http://localhost:8000, auto-reloads on save
+```
+
+`.github/workflows/docs.yml` builds it with `mkdocs build --strict` on every push/PR touching `docs/**` — a broken internal link or a page missing from `mkdocs.yml`'s `nav:` fails that check. If you add a new file under `docs/`, add it to `mkdocs.yml`'s `nav:` too, or it won't be reachable from the site (it'll still build, just be an orphan page).
+
 ## Running tests
 
 Backend:

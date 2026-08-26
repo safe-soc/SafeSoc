@@ -47,6 +47,9 @@ celerybeat-schedule
 *.log
 logs/
 
+# ── Documentation site (SS-073, built from mkdocs.yml) ──
+site/
+
 # ── OS / editor ─────────────────────────────────────
 .DS_Store
 Thumbs.db

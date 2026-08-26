@@ -312,7 +312,7 @@ SafeSOC sends Telegram alerts for critical-severity alerts and detected attack c
 Tracked in [`PRODUCT_ROADMAP.md`](PRODUCT_ROADMAP.md), which extends the original 68-issue backlog with what a real open-source SOC platform needs next:
 
 - **Near-term (v1.0 follow-ups):** all three of an audit log (`services/audit.py`), the installer script above, and a [formal API versioning policy](docs/api-versioning-policy.md) are now implemented.
-- **Open-source polish (v1.1+):** [contribution guidelines](CONTRIBUTING.md), a [security disclosure policy](SECURITY.md), and a [formal adapter/plugin SDK](docs/plugin-architecture.md) are now implemented; release automation remains planned.
+- **Open-source polish (v1.1+):** [contribution guidelines](CONTRIBUTING.md), a [security disclosure policy](SECURITY.md), a [formal adapter/plugin SDK](docs/plugin-architecture.md), and a buildable [documentation site](mkdocs.yml) (`mkdocs build`, `.github/workflows/docs.yml`) are now implemented — the docs site isn't live on GitHub Pages yet, since that needs a one-time "Source: GitHub Actions" setting enabled in the repo itself; release automation remains planned.
 - **Research-grade bets (v2.0, speculative):** a community plugin/detection-rule marketplace built on that SDK, multi-cloud posture management beyond AWS, SOAR-style automated response — all explicitly gated on validated demand this project doesn't have yet.
 
 None of this is committed or scheduled — see `PRODUCT_ROADMAP.md`'s own versioning philosophy for how these get prioritized.

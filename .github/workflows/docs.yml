@@ -1,0 +1,72 @@
+name: Docs
+
+# Builds the mkdocs site (SS-073) on every push/PR that touches docs
+# content, validating it the same way CI validates the backend —
+# broken links/nav fail the build (`mkdocs build --strict`). Deploys
+# to GitHub Pages only on a push to main, and only once GitHub Pages
+# is enabled for this repository (Settings -> Pages -> Source: GitHub
+# Actions) — that's a one-time manual step in the repo's own settings,
+# not something this workflow can do for you. Until then, the build
+# job still runs and still validates the site; only the deploy job
+# needs Pages enabled to succeed.
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "requirements-docs.txt"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    branches: [main, master]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "requirements-docs.txt"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "docs-pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (strict — broken links/nav fail the build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install docs dependencies
+        run: pip install -r requirements-docs.txt
+
+      - name: Build site
+        run: mkdocs build --strict
+
+      - name: Upload build artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/
+
+  deploy:
+    name: Deploy to GitHub Pages
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

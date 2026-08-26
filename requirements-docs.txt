@@ -1,0 +1,12 @@
+# SafeSOC — Documentation site dependencies (SS-073)
+# Separate from backend/requirements.txt — these are build-time tools
+# for the mkdocs.yml-driven docs site, not application runtime
+# dependencies. Install and build locally:
+#
+#   pip install -r requirements-docs.txt
+#   mkdocs serve      # live preview at http://localhost:8000
+#   mkdocs build      # static output to ./site/ (gitignored)
+
+mkdocs==1.6.1
+mkdocs-material==9.7.7
+pymdown-extensions==11.0.2

@@ -1,0 +1,70 @@
+site_name: SafeSOC Documentation
+site_description: AI-assisted, multi-tenant Security Operations Platform for SMBs
+repo_url: https://github.com/safe-soc/SafeSoc
+repo_name: safe-soc/SafeSoc
+edit_uri: edit/main/docs/
+
+# docs_dir defaults to "docs" — the same directory this repo already
+# uses as its documentation source of truth (SS-073: "generated from
+# docs/"). No files were moved or duplicated to build this site.
+docs_dir: docs
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.top
+    - content.code.copy
+    - search.suggest
+
+markdown_extensions:
+  - tables
+  - toc:
+      permalink: true
+  - admonition
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+
+nav:
+  - Home: index.md
+  - Overview:
+      - Product Principles: PRODUCT_PRINCIPLES.md
+      - Architecture: architecture.md
+      - Requirements (SRS): requirements.md
+      - Tech Stack: tech-stack.md
+      - Database Schema: database-schema.md
+  - API:
+      - API Design: api-design.md
+      - Versioning Policy: api-versioning-policy.md
+      - Plugin/Adapter SDK: plugin-architecture.md
+  - Operations:
+      - Deployment: deployment.md
+      - Testing: testing.md
+      - Performance Benchmarks: performance-benchmarks.md
+  - Security:
+      - Security Review: security-review.md
+  - AI Investigation Assistant:
+      - Threat Model: ai-threat-model.md
+      - LLM Benchmark: ai-llm-benchmark.md
+      - Latency Diagnosis: ai-llm-latency-diagnosis.md
+  - Project History:
+      - Decisions (ADRs): decisions.md
+      - Project Roadmap: project-roadmap.md
+      - Roadmap Issues: roadmap-issues.md
+      - Coding Standards: coding-standards.md
+      - Meeting Notes: meeting-notes.md
