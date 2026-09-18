@@ -1,0 +1,1034 @@
+{
+  "started_at": "2026-09-07T17:07:22.483107+00:00",
+  "finished_at": "2026-09-07T17:10:53.373095+00:00",
+  "api_base": "http://localhost:8000",
+  "tenants": {
+    "a": "00000000-0be0-0000-0000-00000000000a",
+    "b": "00000000-0be0-0000-0000-00000000000b"
+  },
+  "scenarios": [
+    {
+      "id": "bm-a-credential-brute-force",
+      "name": "A. Credential Brute Force",
+      "passed": true,
+      "incident_id": "7ff99fdc-bac2-4cc7-97c6-746bd1cbab66",
+      "detected_category": "credential_brute_force",
+      "detected_confidence": 0.6,
+      "events_injected": 6,
+      "events_accepted": 6,
+      "runs": [
+        "pb-credential-brute-force"
+      ],
+      "actions": [
+        {
+          "type": "create_investigation_action",
+          "autonomy": "automatic",
+          "status": "succeeded",
+          "verification": "verified"
+        },
+        {
+          "type": "enrich_indicator",
+          "autonomy": "automatic",
+          "status": "succeeded",
+          "verification": "verified"
+        }
+      ],
+      "skipped": [],
+      "timeline_soar_events": 7,
+      "observed_time_to_incident": 1.749012100044638,
+      "observed_time_to_settle": 3.368196600000374,
+      "time_to_soar": 0.221047,
+      "time_to_response": 1.299506,
+      "time_to_verification": 2.357588,
+      "checks": [
+        {
+          "name": "all events accepted",
+          "passed": true,
+          "detail": "6/6 accepted"
+        },
+        {
+          "name": "incident created",
+          "passed": true,
+          "detail": "7ff99fdc-bac2-4cc7-97c6-746bd1cbab66"
+        },
+        {
+          "name": "detected category is one of the expected patterns",
+          "passed": true,
+          "detail": "credential_brute_force"
+        },
+        {
+          "name": "expected playbooks triggered",
+          "passed": true,
+          "detail": "got ['pb-credential-brute-force'] expected ['pb-credential-brute-force']"
+        },
+        {
+          "name": "expected actions instantiated",
+          "passed": true,
+          "detail": "got ['create_investigation_action', 'enrich_indicator'] expected ['create_investigation_action', 'enrich_indicator']"
+        },
+        {
+          "name": "expected actions skipped for unavailable evidence",
+          "passed": true,
+          "detail": "got [] expected []"
+        },
+        {
+          "name": "no skipped action left an executable record",
+          "passed": true,
+          "detail": "overlap []"
+        },
+        {
+          "name": "no approval-required action executed without approval",
+          "passed": true,
+          "detail": "0 violation(s)"
+        },
+        {
+          "name": "approval-required actions are parked awaiting approval",
+          "passed": true,
+          "detail": "[]"
+        },
+        {
+          "name": "automatic actions executed unattended",
+          "passed": true,
+          "detail": "2/2 executed"
+        },
+        {
+          "name": "SOAR lifecycle events reached the incident timeline",
+          "passed": true,
+          "detail": "7 events"
+        },
+        {
+          "name": "pipeline settled within timeout",
+          "passed": true,
+          "detail": "3.4s"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "id": "bm-b-successful-compromise",
+      "name": "B. Successful Compromise",
+      "passed": true,
+      "incident_id": "5b6de4a3-cc02-4649-95b9-d9cc1ddaf1e2",
+      "detected_category": "successful_compromise",
+      "detected_confidence": 0.64,
+      "events_injected": 7,
+      "events_accepted": 7,
+      "runs": [
+        "pb-successful-compromise",
+        "pb-credential-brute-force"
+      ],
+      "actions": [
+        {
+          "type": "isolate_endpoint",
+          "autonomy": "approval_required",
+          "status": "awaiting_approval",
+          "verification": "not_verified"
+        },
+        {
+          "type": "terminate_process",
+          "autonomy": "approval_required",
+          "status": "awaiting_approval",
+          "verification": "not_verified"
+        },
+        {
+          "type": "add_incident_note",
+          "autonomy": "automatic",
+          "status": "succeeded",
+          "verification": "verified"
+        },
+        {
+          "type": "enrich_indicator",
+          "autonomy": "automatic",
+          "status": "succeeded",
+          "verification": "verified"
+        },
+        {
+          "type": "create_investigation_action",
+          "autonomy": "automatic",
+          "status": "succeeded",
+          "verification": "verified"
+        },
+        {
+          "type": "enrich_indicator",
+          "autonomy": "automatic",
+          "status": "succeeded",
+          "verification": "verified"
+        }
+      ],
+      "skipped": [],
+      "timeline_soar_events": 15,
+      "observed_time_to_incident": 1.5921063999412581,
+      "observed_time_to_settle": 31.76509219990112,
+      "time_to_soar": 0.363978,
+      "time_to_response": 1.958952,
+      "time_to_verification": 31.398343,
+      "checks": [
+        {
+          "name": "all events accepted",
+          "passed": true,
+          "detail": "7/7 accepted"
+        },
+        {
+          "name": "incident created",
+          "passed": true,
+          "detail": "5b6de4a3-cc02-4649-95b9-d9cc1ddaf1e2"
+        },
+        {
+          "name": "detected category is one of the expected patterns",
+          "passed": true,
+          "detail": "successful_compromise"
+        },
+        {
+          "name": "expected playbooks triggered",
+          "passed": true,
+          "detail": "got ['pb-credential-brute-force', 'pb-successful-compromise'] expected ['pb-credential-brute-force', 'pb-successful-compromise']"
+        },
+        {
+          "name": "expected actions instantiated",
+          "passed": true,
+          "detail": "got ['add_incident_note', 'create_investigation_action', 'enrich_indicator', 'isolate_endpoint', 'terminate_process'] expected ['add_incident_note', 'create_investigation_action', 'enrich_indicator', 'isolate_endpoint', 'terminate_process']"
+        },
+        {
+          "name": "expected actions skipped for unavailable evidence",
+          "passed": true,
+          "detail": "got [] expected []"
+        },
+        {
+          "name": "no skipped action left an executable record",
+          "passed": true,
+          "detail": "overlap []"
+        },
+        {
+          "name": "no approval-required action executed without approval",
+          "passed": true,
+          "detail": "0 violation(s)"
+        },
+        {
+          "name": "approval-required actions are parked awaiting approval",
+          "passed": true,
+          "detail": "['awaiting_approval', 'awaiting_approval']"
+        },
+        {
+          "name": "automatic actions executed unattended",
+          "passed": true,
+          "detail": "4/4 executed"
+        },
+        {
+          "name": "SOAR lifecycle events reached the incident timeline",
+          "passed": true,
+          "detail": "15 events"
+        },
+        {
+          "name": "pipeline settled within timeout",
+          "passed": true,
+          "detail": "31.8s"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "id": "bm-c-privilege-escalation",
+      "name": "C. Privilege Escalation",
+      "passed": true,
+      "incident_id": "d7ea17d9-8f24-404c-a375-5f38b33406ae",
+      "detected_category": "privilege_escalation",
+      "detected_confidence": 0.95,
+      "events_injected": 2,
+      "events_accepted": 2,
+      "runs": [
+        "pb-privilege-escalation"
+      ],
+      "actions": [
+        {
+          "type": "disable_account",
+          "autonomy": "approval_required",
+          "status": "awaiting_approval",
+          "verification": "not_verified"
+        },
+        {
+          "type": "increase_incident_priority",
+          "autonomy": "automatic",
+          "status": "failed",
+          "verification": "not_verified"
+        },
+        {
+          "type": "create_investigation_action",
+          "autonomy": "automatic",
+          "status": "succeeded",
+          "verification": "verified"
+        }
+      ],
+      "skipped": [],
+      "timeline_soar_events": 7,
+      "observed_time_to_incident": 1.5814685999648646,
+      "observed_time_to_settle": 3.1759915999136865,
+      "time_to_soar": 0.21253,
+      "time_to_response": 0.89202,
+      "time_to_verification": 1.46932,
+      "checks": [
+        {
+          "name": "all events accepted",
+          "passed": true,
+          "detail": "2/2 accepted"
+        },
+        {
+          "name": "incident created",
+          "passed": true,
+          "detail": "d7ea17d9-8f24-404c-a375-5f38b33406ae"
+        },
+        {
+          "name": "detected category is one of the expected patterns",
+          "passed": true,
+          "detail": "privilege_escalation"
+        },
+        {
+          "name": "expected playbooks triggered",
+          "passed": true,
+          "detail": "got ['pb-privilege-escalation'] expected ['pb-privilege-escalation']"
+        },
+        {
+          "name": "expected actions instantiated",
+          "passed": true,
+          "detail": "got ['create_investigation_action', 'disable_account', 'increase_incident_priority'] expected ['create_investigation_action', 'disable_account', 'increase_incident_priority']"
+        },
+        {
+          "name": "expected actions skipped for unavailable evidence",
+          "passed": true,
+          "detail": "got [] expected []"
+        },
+        {
+          "name": "no skipped action left an executable record",
+          "passed": true,
+          "detail": "overlap []"
+        },
+        {
+          "name": "no approval-required action executed without approval",
+          "passed": true,
+          "detail": "0 violation(s)"
+        },
+        {
+          "name": "approval-required actions are parked awaiting approval",
+          "passed": true,
+          "detail": "['awaiting_approval']"
+        },
+        {
+          "name": "automatic actions executed unattended",
+          "passed": true,
+          "detail": "2/2 executed"
+        },
+        {
+          "name": "SOAR lifecycle events reached the incident timeline",
+          "passed": true,
+          "detail": "7 events"
+        },
+        {
+          "name": "pipeline settled within timeout",
+          "passed": true,
+          "detail": "3.2s"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "id": "bm-d-lateral-movement",
+      "name": "D. Lateral Movement",
+      "passed": true,
+      "incident_id": "1f05488b-60ee-4a78-88bd-e5e5448cebf3",
+      "detected_category": "lateral_movement",
+      "detected_confidence": 0.7,
+      "events_injected": 3,
+      "events_accepted": 3,
+      "runs": [
+        "pb-lateral-movement"
+      ],
+      "actions": [
+        {
+          "type": "revoke_credentials",
+          "autonomy": "approval_required",
+          "status": "awaiting_approval",
+          "verification": "not_verified"
+        },
+        {
+          "type": "collect_additional_evidence",
+          "autonomy": "automatic",
+          "status": "succeeded",
+          "verification": "verified"
+        },
+        {
+          "type": "create_investigation_action",
+          "autonomy": "automatic",
+          "status": "succeeded",
+          "verification": "verified"
+        }
+      ],
+      "skipped": [],
+      "timeline_soar_events": 8,
+      "observed_time_to_incident": 1.5620240999851376,
+      "observed_time_to_settle": 1.6004318000050262,
+      "time_to_soar": 0.169704,
+      "time_to_response": 0.872353,
+      "time_to_verification": 1.35361,
+      "checks": [
+        {
+          "name": "all events accepted",
+          "passed": true,
+          "detail": "3/3 accepted"
+        },
+        {
+          "name": "incident created",
+          "passed": true,
+          "detail": "1f05488b-60ee-4a78-88bd-e5e5448cebf3"
+        },
+        {
+          "name": "detected category is one of the expected patterns",
+          "passed": true,
+          "detail": "lateral_movement"
+        },
+        {
+          "name": "expected playbooks triggered",
+          "passed": true,
+          "detail": "got ['pb-lateral-movement'] expected ['pb-lateral-movement']"
+        },
+        {
+          "name": "expected actions instantiated",
+          "passed": true,
+          "detail": "got ['collect_additional_evidence', 'create_investigation_action', 'revoke_credentials'] expected ['collect_additional_evidence', 'create_investigation_action', 'revoke_credentials']"
+        },
+        {
+          "name": "expected actions skipped for unavailable evidence",
+          "passed": true,
+          "detail": "got [] expected []"
+        },
+        {
+          "name": "no skipped action left an executable record",
+          "passed": true,
+          "detail": "overlap []"
+        },
+        {
+          "name": "no approval-required action executed without approval",
+          "passed": true,
+          "detail": "0 violation(s)"
+        },
+        {
+          "name": "approval-required actions are parked awaiting approval",
+          "passed": true,
+          "detail": "['awaiting_approval']"
+        },
+        {
+          "name": "automatic actions executed unattended",
+          "passed": true,
+          "detail": "2/2 executed"
+        },
+        {
+          "name": "SOAR lifecycle events reached the incident timeline",
+          "passed": true,
+          "detail": "8 events"
+        },
+        {
+          "name": "pipeline settled within timeout",
+          "passed": true,
+          "detail": "1.6s"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "id": "bm-e-data-exfiltration",
+      "name": "E. Data Exfiltration",
+      "passed": true,
+      "incident_id": "85934310-4c5d-48af-8885-698bf7ad39e0",
+      "detected_category": "data_exfiltration",
+      "detected_confidence": 0.64,
+      "events_injected": 12,
+      "events_accepted": 12,
+      "runs": [
+        "pb-data-exfiltration"
+      ],
+      "actions": [
+        {
+          "type": "enrich_indicator",
+          "autonomy": "automatic",
+          "status": "succeeded",
+          "verification": "verified"
+        },
+        {
+          "type": "block_indicator",
+          "autonomy": "approval_required",
+          "status": "awaiting_approval",
+          "verification": "not_verified"
+        },
+        {
+          "type": "add_incident_note",
+          "autonomy": "automatic",
+          "status": "succeeded",
+          "verification": "verified"
+        }
+      ],
+      "skipped": [],
+      "timeline_soar_events": 8,
+      "observed_time_to_incident": 1.7171639000298455,
+      "observed_time_to_settle": 5.031053600017913,
+      "time_to_soar": 0.276863,
+      "time_to_response": 1.888634,
+      "time_to_verification": 3.083543,
+      "checks": [
+        {
+          "name": "all events accepted",
+          "passed": true,
+          "detail": "12/12 accepted"
+        },
+        {
+          "name": "incident created",
+          "passed": true,
+          "detail": "85934310-4c5d-48af-8885-698bf7ad39e0"
+        },
+        {
+          "name": "detected category is one of the expected patterns",
+          "passed": true,
+          "detail": "data_exfiltration"
+        },
+        {
+          "name": "expected playbooks triggered",
+          "passed": true,
+          "detail": "got ['pb-data-exfiltration'] expected ['pb-data-exfiltration']"
+        },
+        {
+          "name": "expected actions instantiated",
+          "passed": true,
+          "detail": "got ['add_incident_note', 'block_indicator', 'enrich_indicator'] expected ['add_incident_note', 'block_indicator', 'enrich_indicator']"
+        },
+        {
+          "name": "expected actions skipped for unavailable evidence",
+          "passed": true,
+          "detail": "got [] expected []"
+        },
+        {
+          "name": "no skipped action left an executable record",
+          "passed": true,
+          "detail": "overlap []"
+        },
+        {
+          "name": "no approval-required action executed without approval",
+          "passed": true,
+          "detail": "0 violation(s)"
+        },
+        {
+          "name": "approval-required actions are parked awaiting approval",
+          "passed": true,
+          "detail": "['awaiting_approval']"
+        },
+        {
+          "name": "automatic actions executed unattended",
+          "passed": true,
+          "detail": "2/2 executed"
+        },
+        {
+          "name": "SOAR lifecycle events reached the incident timeline",
+          "passed": true,
+          "detail": "8 events"
+        },
+        {
+          "name": "pipeline settled within timeout",
+          "passed": true,
+          "detail": "5.0s"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "id": "bm-f-incomplete-evidence",
+      "name": "F. Incomplete Evidence (Phase 3.5 regression)",
+      "passed": true,
+      "incident_id": "62d6c326-2aba-4dc6-939f-05979212a73a",
+      "detected_category": "successful_compromise",
+      "detected_confidence": 0.64,
+      "events_injected": 7,
+      "events_accepted": 7,
+      "runs": [
+        "pb-successful-compromise",
+        "pb-credential-brute-force"
+      ],
+      "actions": [
+        {
+          "type": "terminate_process",
+          "autonomy": "approval_required",
+          "status": "awaiting_approval",
+          "verification": "not_verified"
+        },
+        {
+          "type": "add_incident_note",
+          "autonomy": "automatic",
+          "status": "succeeded",
+          "verification": "verified"
+        },
+        {
+          "type": "isolate_endpoint",
+          "autonomy": "approval_required",
+          "status": "awaiting_approval",
+          "verification": "not_verified"
+        },
+        {
+          "type": "create_investigation_action",
+          "autonomy": "automatic",
+          "status": "succeeded",
+          "verification": "verified"
+        }
+      ],
+      "skipped": [
+        {
+          "action_type": "enrich_indicator",
+          "incident_id": "62d6c326-2aba-4dc6-939f-05979212a73a",
+          "playbook_id": "pb-credential-brute-force",
+          "reason": "required_evidence_unavailable",
+          "detail": "primary_ip"
+        },
+        {
+          "action_type": "enrich_indicator",
+          "incident_id": "62d6c326-2aba-4dc6-939f-05979212a73a",
+          "playbook_id": "pb-successful-compromise",
+          "reason": "required_evidence_unavailable",
+          "detail": "primary_ip"
+        }
+      ],
+      "timeline_soar_events": 12,
+      "observed_time_to_incident": 1.5784933000104502,
+      "observed_time_to_settle": 3.2136426999932155,
+      "time_to_soar": 0.224159,
+      "time_to_response": 1.491447,
+      "time_to_verification": 1.768958,
+      "checks": [
+        {
+          "name": "all events accepted",
+          "passed": true,
+          "detail": "7/7 accepted"
+        },
+        {
+          "name": "incident created",
+          "passed": true,
+          "detail": "62d6c326-2aba-4dc6-939f-05979212a73a"
+        },
+        {
+          "name": "detected category is one of the expected patterns",
+          "passed": true,
+          "detail": "successful_compromise"
+        },
+        {
+          "name": "expected playbooks triggered",
+          "passed": true,
+          "detail": "got ['pb-credential-brute-force', 'pb-successful-compromise'] expected ['pb-credential-brute-force', 'pb-successful-compromise']"
+        },
+        {
+          "name": "expected actions instantiated",
+          "passed": true,
+          "detail": "got ['add_incident_note', 'create_investigation_action', 'isolate_endpoint', 'terminate_process'] expected ['add_incident_note', 'create_investigation_action', 'isolate_endpoint', 'terminate_process']"
+        },
+        {
+          "name": "expected actions skipped for unavailable evidence",
+          "passed": true,
+          "detail": "got ['enrich_indicator'] expected ['enrich_indicator']"
+        },
+        {
+          "name": "no skipped action left an executable record",
+          "passed": true,
+          "detail": "overlap []"
+        },
+        {
+          "name": "no approval-required action executed without approval",
+          "passed": true,
+          "detail": "0 violation(s)"
+        },
+        {
+          "name": "approval-required actions are parked awaiting approval",
+          "passed": true,
+          "detail": "['awaiting_approval', 'awaiting_approval']"
+        },
+        {
+          "name": "automatic actions executed unattended",
+          "passed": true,
+          "detail": "2/2 executed"
+        },
+        {
+          "name": "SOAR lifecycle events reached the incident timeline",
+          "passed": true,
+          "detail": "12 events"
+        },
+        {
+          "name": "pipeline settled within timeout",
+          "passed": true,
+          "detail": "3.2s"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "id": "bm-g-benign-activity",
+      "name": "G. Benign Activity (restraint)",
+      "passed": true,
+      "incident_id": null,
+      "detected_category": null,
+      "detected_confidence": null,
+      "events_injected": 1,
+      "events_accepted": 1,
+      "runs": [],
+      "actions": [],
+      "skipped": [],
+      "timeline_soar_events": 0,
+      "observed_time_to_incident": null,
+      "observed_time_to_settle": 45.7270030999789,
+      "time_to_soar": null,
+      "time_to_response": null,
+      "time_to_verification": null,
+      "checks": [
+        {
+          "name": "all events accepted",
+          "passed": true,
+          "detail": "1/1 accepted"
+        },
+        {
+          "name": "no incident created (restraint)",
+          "passed": true,
+          "detail": "none"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "id": "bm-h-tenant-isolation",
+      "name": "H. Tenant Isolation",
+      "passed": true,
+      "incident_id": "7e2886ce-ce67-4805-a7d9-e8692a695589",
+      "detected_category": "successful_compromise",
+      "detected_confidence": 0.64,
+      "events_injected": 7,
+      "events_accepted": 7,
+      "runs": [
+        "pb-successful-compromise",
+        "pb-credential-brute-force"
+      ],
+      "actions": [
+        {
+          "type": "add_incident_note",
+          "autonomy": "automatic",
+          "status": "succeeded",
+          "verification": "verified"
+        },
+        {
+          "type": "terminate_process",
+          "autonomy": "approval_required",
+          "status": "awaiting_approval",
+          "verification": "not_verified"
+        },
+        {
+          "type": "isolate_endpoint",
+          "autonomy": "approval_required",
+          "status": "awaiting_approval",
+          "verification": "not_verified"
+        },
+        {
+          "type": "enrich_indicator",
+          "autonomy": "automatic",
+          "status": "succeeded",
+          "verification": "verified"
+        },
+        {
+          "type": "create_investigation_action",
+          "autonomy": "automatic",
+          "status": "succeeded",
+          "verification": "verified"
+        },
+        {
+          "type": "enrich_indicator",
+          "autonomy": "automatic",
+          "status": "succeeded",
+          "verification": "verified"
+        }
+      ],
+      "skipped": [],
+      "timeline_soar_events": 16,
+      "observed_time_to_incident": 1.5671130999689922,
+      "observed_time_to_settle": 3.228315099957399,
+      "time_to_soar": 0.179817,
+      "time_to_response": 1.252933,
+      "time_to_verification": 2.320403,
+      "checks": [
+        {
+          "name": "all events accepted",
+          "passed": true,
+          "detail": "7/7 accepted"
+        },
+        {
+          "name": "incident created",
+          "passed": true,
+          "detail": "7e2886ce-ce67-4805-a7d9-e8692a695589"
+        },
+        {
+          "name": "detected category is one of the expected patterns",
+          "passed": true,
+          "detail": "successful_compromise"
+        },
+        {
+          "name": "expected playbooks triggered",
+          "passed": true,
+          "detail": "got ['pb-credential-brute-force', 'pb-successful-compromise'] expected ['pb-credential-brute-force', 'pb-successful-compromise']"
+        },
+        {
+          "name": "expected actions instantiated",
+          "passed": true,
+          "detail": "got ['add_incident_note', 'create_investigation_action', 'enrich_indicator', 'isolate_endpoint', 'terminate_process'] expected ['add_incident_note', 'create_investigation_action', 'enrich_indicator', 'isolate_endpoint', 'terminate_process']"
+        },
+        {
+          "name": "expected actions skipped for unavailable evidence",
+          "passed": true,
+          "detail": "got [] expected []"
+        },
+        {
+          "name": "no skipped action left an executable record",
+          "passed": true,
+          "detail": "overlap []"
+        },
+        {
+          "name": "no approval-required action executed without approval",
+          "passed": true,
+          "detail": "0 violation(s)"
+        },
+        {
+          "name": "approval-required actions are parked awaiting approval",
+          "passed": true,
+          "detail": "['awaiting_approval', 'awaiting_approval']"
+        },
+        {
+          "name": "automatic actions executed unattended",
+          "passed": true,
+          "detail": "4/4 executed"
+        },
+        {
+          "name": "SOAR lifecycle events reached the incident timeline",
+          "passed": true,
+          "detail": "16 events"
+        },
+        {
+          "name": "pipeline settled within timeout",
+          "passed": true,
+          "detail": "3.2s"
+        },
+        {
+          "name": "[isolation] incident sets are disjoint",
+          "passed": true,
+          "detail": "A=182 B=5 shared=0"
+        },
+        {
+          "name": "[isolation] tenant A cannot read tenant B's incident",
+          "passed": true,
+          "detail": "HTTP 404"
+        },
+        {
+          "name": "[isolation] tenant A cannot read tenant B's evidence",
+          "passed": true,
+          "detail": "HTTP 404"
+        },
+        {
+          "name": "[isolation] tenant A cannot read tenant B's timeline",
+          "passed": true,
+          "detail": "HTTP 404"
+        },
+        {
+          "name": "[isolation] tenant A's SOAR runs reference only tenant A incidents",
+          "passed": true,
+          "detail": "89 runs, 0 pointing at tenant B"
+        },
+        {
+          "name": "[isolation] identical attacks produced separate incidents",
+          "passed": true,
+          "detail": "A=7e2886ce B=1d583cdb"
+        }
+      ],
+      "errors": []
+    }
+  ],
+  "soar_scorecard": {
+    "playbooks_triggered": 10,
+    "actions_created": 27,
+    "actions_automatic": 18,
+    "actions_approval_required": 9,
+    "actions_executed_automatically": 18,
+    "actions_awaiting_approval": 9,
+    "actions_succeeded": 17,
+    "actions_failed": 1,
+    "actions_skipped": 2,
+    "skipped_by_reason": {
+      "required_evidence_unavailable": 2
+    },
+    "automatic_execution_rate": 1.0,
+    "approval_gate_enforcement_rate": 1.0,
+    "skipped_action_rate": 0.06896551724137931,
+    "verification_success_rate": 1.0
+  },
+  "timing": {
+    "sample_size": 7,
+    "median_observed_time_to_incident": 1.5814685999648646,
+    "median_observed_time_to_settle": 3.228315099957399,
+    "median_time_to_soar": 0.221047,
+    "median_time_to_response": 1.299506,
+    "median_time_to_verification": 2.320403
+  },
+  "ai_probes": [],
+  "security_probes": [
+    {
+      "category": "Approval bypass",
+      "name": "no HTTP execute route exists",
+      "verdict": "PASS",
+      "detail": "execution is reachable only through the Celery worker",
+      "evidence": ""
+    },
+    {
+      "category": "Approval bypass",
+      "name": "direct execute call is not routed",
+      "verdict": "PASS",
+      "detail": "HTTP 404",
+      "evidence": ""
+    },
+    {
+      "category": "Authorization",
+      "name": "viewer cannot approve",
+      "verdict": "PASS",
+      "detail": "HTTP 403",
+      "evidence": ""
+    },
+    {
+      "category": "Tenant isolation",
+      "name": "cross-tenant approval is refused",
+      "verdict": "PASS",
+      "detail": "HTTP 404 (404 keeps existence indistinguishable)",
+      "evidence": ""
+    },
+    {
+      "category": "Relationship scoping",
+      "name": "action under the wrong incident is refused",
+      "verdict": "PASS",
+      "detail": "HTTP 404",
+      "evidence": ""
+    },
+    {
+      "category": "Relationship scoping",
+      "name": "action under the wrong run is refused",
+      "verdict": "PASS",
+      "detail": "HTTP 404",
+      "evidence": ""
+    },
+    {
+      "category": "Relationship scoping",
+      "name": "unknown action id is refused",
+      "verdict": "PASS",
+      "detail": "HTTP 404",
+      "evidence": ""
+    },
+    {
+      "category": "Idempotency",
+      "name": "duplicate approval does not re-decide",
+      "verdict": "PASS",
+      "detail": "approved_at unchanged on the second call",
+      "evidence": ""
+    },
+    {
+      "category": "State machine",
+      "name": "approve after reject is refused",
+      "verdict": "PASS",
+      "detail": "reject HTTP 200, then approve HTTP 409",
+      "evidence": ""
+    },
+    {
+      "category": "State machine",
+      "name": "rejected action never executes",
+      "verdict": "PASS",
+      "detail": "status=rejected executed_at=None result=null",
+      "evidence": ""
+    }
+  ],
+  "isolation_probes": [
+    {
+      "category": "Tenant isolation",
+      "name": "incident sets are disjoint",
+      "verdict": "PASS",
+      "detail": "A=182 B=5 shared=0",
+      "evidence": ""
+    },
+    {
+      "category": "Tenant isolation",
+      "name": "tenant A cannot read tenant B's incident",
+      "verdict": "PASS",
+      "detail": "HTTP 404",
+      "evidence": ""
+    },
+    {
+      "category": "Tenant isolation",
+      "name": "tenant A cannot read tenant B's evidence",
+      "verdict": "PASS",
+      "detail": "HTTP 404",
+      "evidence": ""
+    },
+    {
+      "category": "Tenant isolation",
+      "name": "tenant A cannot read tenant B's timeline",
+      "verdict": "PASS",
+      "detail": "HTTP 404",
+      "evidence": ""
+    },
+    {
+      "category": "Tenant isolation",
+      "name": "tenant A's SOAR runs reference only tenant A incidents",
+      "verdict": "PASS",
+      "detail": "89 runs, 0 pointing at tenant B",
+      "evidence": ""
+    },
+    {
+      "category": "Tenant isolation",
+      "name": "identical attacks produced separate incidents",
+      "verdict": "PASS",
+      "detail": "A=7e2886ce B=1d583cdb",
+      "evidence": ""
+    }
+  ],
+  "resource_probes": [
+    {
+      "category": "Resource management",
+      "name": "no Postgres connections leaked",
+      "verdict": "PASS",
+      "detail": "idle-in-transaction 0 -> 0 after 4 SOAR-triggering scenarios (delta +0; total connections 2)",
+      "evidence": ""
+    }
+  ],
+  "concurrency": [
+    {
+      "level": 10,
+      "incidents_created": 7,
+      "runs_created": 7,
+      "duplicate_runs": [],
+      "over_instantiated_runs": [],
+      "stuck_actions": [
+        "14586460-8bbc-4107-abe6-b4c8762834e4/enrich_indicator=pending",
+        "14586460-8bbc-4107-abe6-b4c8762834e4/create_investigation_action=pending",
+        "e61087c8-e3ff-41a3-b97d-33e5eb1db09f/enrich_indicator=pending",
+        "e61087c8-e3ff-41a3-b97d-33e5eb1db09f/create_investigation_action=pending",
+        "5ed2b927-e0da-44f6-b178-4d7761eb52a3/enrich_indicator=pending",
+        "5ed2b927-e0da-44f6-b178-4d7761eb52a3/create_investigation_action=pending",
+        "d11ec729-50d4-4be6-9c5a-4d83a64a413f/enrich_indicator=pending",
+        "d11ec729-50d4-4be6-9c5a-4d83a64a413f/create_investigation_action=pending",
+        "6108b95a-d291-4f56-a641-0b12abd44f35/enrich_indicator=pending",
+        "6108b95a-d291-4f56-a641-0b12abd44f35/create_investigation_action=pending",
+        "052c1688-6628-4b72-817d-e5a7da1bc6c4/enrich_indicator=pending",
+        "052c1688-6628-4b72-817d-e5a7da1bc6c4/create_investigation_action=pending",
+        "6158fe65-4a22-4292-b9be-3f7573ff75e1/enrich_indicator=pending",
+        "6158fe65-4a22-4292-b9be-3f7573ff75e1/create_investigation_action=pending"
+      ],
+      "errors": [],
+      "wall_seconds": 61.63410759996623,
+      "passed": false
+    }
+  ],
+  "worker_tasks": {
+    "correlation_succeeded": 184,
+    "correlation_failed": 0,
+    "soar_succeeded": 56,
+    "soar_failed": 0
+  }
+}

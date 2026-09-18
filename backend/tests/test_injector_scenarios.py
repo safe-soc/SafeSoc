@@ -327,3 +327,41 @@ def test_send_logs_includes_tenant_id_when_unauthenticated(monkeypatch):
 
     assert captured["json"]["tenant_id"] == TENANT_ID
     assert captured["headers"] is None
+
+
+# ── Remote-end addressing (Phase 3.5) ────────────────────────────────
+#
+# Synthetic auth/network events carry the IP of the OTHER end of the
+# event, not just the monitored host's own address. Without it, an
+# incident built from these alerts has no IP evidence, and the SOAR
+# playbook steps that act on an indicator have nothing to resolve —
+# they degrade correctly (skipped and audited) but can never be
+# demonstrated end to end, which is what made this gap invisible until
+# Phase 3's live verification.
+
+
+def test_authentication_events_carry_a_source_ip():
+    event = generate_log(log_type="authentication")
+    assert event["source_ip"]
+    assert event["source_ip"] != event["host_ip"]  # the remote end, not the host's own address
+
+
+def test_network_events_carry_both_ends_of_the_connection():
+    event = generate_log(log_type="network")
+    assert event["source_ip"]
+    assert event["destination_ip"]
+
+
+@pytest.mark.parametrize("log_type", ["process", "file"])
+def test_host_local_events_carry_no_remote_address(log_type):
+    """A process start or a file write has no remote end — inventing one would be fabricated telemetry."""
+    event = generate_log(log_type=log_type)
+    assert "source_ip" not in event
+    assert "destination_ip" not in event
+
+
+def test_source_ips_are_reserved_documentation_addresses():
+    """RFC 5737 ranges only — synthetic traffic must never name an address that could belong to someone real."""
+    for _ in range(25):
+        event = generate_log(log_type="authentication")
+        assert event["source_ip"].startswith(("203.0.113.", "198.51.100.")), event["source_ip"]

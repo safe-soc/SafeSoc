@@ -18,6 +18,28 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   'incident.assigned': 'Assigned',
   'incident.alert_linked': 'Alert linked',
   'incident.note_added': 'Note added',
+  // SOAR lifecycle (Phase 3.5) — the backend decides which of these
+  // reach the timeline (services/incident_timeline.py); this only
+  // decides how they read.
+  'soar.playbook.triggered': 'SOAR playbook triggered',
+  'soar.playbook_run.cancelled': 'SOAR playbook cancelled',
+  'soar.action.skipped': 'SOAR action skipped',
+  'soar.action.awaiting_approval': 'SOAR action awaiting approval',
+  'soar.action.approved': 'SOAR action approved',
+  'soar.action.rejected': 'SOAR action rejected',
+  'soar.action.started': 'SOAR action started',
+  'soar.action.succeeded': 'SOAR action succeeded',
+  'soar.action.failed': 'SOAR action failed',
+  'soar.action.verified': 'SOAR action verified',
+  'soar.action.verification_failed': 'SOAR action could not be verified',
+};
+
+// Why a SOAR action never ran. Mirrors services/soar.py's own
+// _SKIP_* reasons — worth spelling out rather than showing the raw
+// enum, since "we did nothing here" needs to explain itself.
+const SOAR_SKIP_REASONS: Record<string, string> = {
+  required_evidence_unavailable: 'this incident carries no such evidence',
+  parameter_validation_failed: 'its parameters failed validation',
 };
 
 function describeAuditEntry(data: Record<string, unknown>): string {
@@ -26,6 +48,16 @@ function describeAuditEntry(data: Record<string, unknown>): string {
   const details = (data.details ?? {}) as Record<string, unknown>;
   if (action === 'incident.status_transitioned' && details.from_status && details.to_status) {
     return `${label}: ${details.from_status} → ${details.to_status}`;
+  }
+  if (action === 'soar.playbook.triggered' && details.playbook_id) {
+    return `${label}: ${details.playbook_id}`;
+  }
+  if (action === 'soar.action.skipped' && details.action_type) {
+    const reason = typeof details.reason === 'string' ? SOAR_SKIP_REASONS[details.reason] ?? details.reason : null;
+    return reason ? `${label}: ${details.action_type} — ${reason}` : `${label}: ${details.action_type}`;
+  }
+  if (action.startsWith('soar.action.') && details.action_type) {
+    return `${label}: ${details.action_type}`;
   }
   return label;
 }

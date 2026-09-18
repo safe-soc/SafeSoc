@@ -44,6 +44,13 @@ DEMO_PASSWORD = "SafeSOC-Demo-2026!"
 # Demo data pools
 HOSTS = [f"DESKTOP-{i:03d}" for i in range(1, 51)]
 USERS = ["john.doe", "jane.smith", "bob.admin", "alice.it", "charlie.eng"]
+# RFC 5737 documentation ranges — reserved by the IETF precisely so
+# example/synthetic traffic can name an address that is guaranteed not
+# to belong to anyone and is not globally routable. Used for the
+# remote end of an event (where a login came from, what a connection
+# talked to), as distinct from host_ip, which is the monitored
+# machine's own address on the LAN.
+EXTERNAL_IPS = [f"203.0.113.{i}" for i in range(2, 40)] + [f"198.51.100.{i}" for i in range(2, 40)]
 ACTIONS = {
     "authentication": ["failed_login", "login_success", "logout", "password_change"],
     "network": ["outbound_connection", "inbound_connection", "dns_query"],
@@ -61,7 +68,7 @@ def generate_log(
     host = host_id or random.choice(HOSTS)
     action = random.choice(ACTIONS.get(log_type, ACTIONS["authentication"]))
 
-    return {
+    event = {
         "tenant_id": TENANT_ID,
         "source": "synthetic",
         "log_type": log_type,
@@ -75,6 +82,20 @@ def generate_log(
         "severity": severity,
         "raw_log": json.dumps({"synthetic": True, "action": action}),
     }
+    # The remote end of the event. Authentication and network events
+    # have one in reality (a login arrives FROM somewhere; a connection
+    # goes TO somewhere) and process/file events don't, so only those
+    # two carry it here. Without this, an incident built purely from
+    # synthetic auth events has no IP evidence at all, and the
+    # playbooks whose steps need one (enrich/block indicator) have
+    # nothing to act on — they degrade correctly (the step is skipped
+    # and audited, see services/soar.py::create_playbook_run) but can
+    # never be demonstrated end to end.
+    if log_type in ("authentication", "network"):
+        event["source_ip"] = random.choice(EXTERNAL_IPS)
+    if log_type == "network":
+        event["destination_ip"] = random.choice(EXTERNAL_IPS)
+    return event
 
 
 def send_logs(target_url: str, logs: list[dict], token: Optional[str] = None) -> dict:

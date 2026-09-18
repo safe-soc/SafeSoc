@@ -1,11 +1,16 @@
 /**
  * SafeSOC — Severity Distribution Chart
- * Client-side grouping of the Dashboard's alert fetch by severity —
- * same 4-tier vocabulary as LevelBadge, same colors for consistency.
+ * Renders GET /api/v1/alerts/summary's severity breakdown — a backend
+ * aggregation over the SAME tenant+time-window population the
+ * dashboard's "Total Alerts" KPI counts, not a client-side tally of a
+ * single fetched page of documents (that page is capped at 500 by
+ * GET /api/v1/alerts' `size` limit, which silently undercounted once
+ * total alerts exceeded it).
  */
 
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
-import { SEVERITIES, type Alert } from '../../lib/types';
+import Spinner from '../Spinner';
+import { SEVERITIES, type AlertSeveritySummary } from '../../lib/types';
 import ChartCard from './ChartCard';
 
 const COLORS: Record<string, string> = {
@@ -15,17 +20,31 @@ const COLORS: Record<string, string> = {
   critical: '#ef4444',
 };
 
-export default function SeverityDistributionChart({ alerts }: { alerts: Alert[] }) {
+export default function SeverityDistributionChart({ summary }: { summary: AlertSeveritySummary | null }) {
+  const total = summary?.total ?? 0;
+  const bySeverity = summary?.by_severity ?? {};
+
+  // Preserve the low->critical ordering regardless of bucket order returned
+  // by the backend; only include severities actually present in the window.
   const counts = SEVERITIES.map((severity) => ({
     name: severity,
-    value: alerts.filter((a) => a.severity === severity).length,
+    value: bySeverity[severity] ?? 0,
   })).filter((entry) => entry.value > 0);
 
-  const total = alerts.length;
+  // Buckets not recognized as one of the 4 known severities (shouldn't
+  // occur — NormalizedLog validation rejects anything else at ingestion —
+  // but surfaced rather than silently dropped if it ever does).
+  const unknownCount = Object.entries(bySeverity)
+    .filter(([key]) => !SEVERITIES.includes(key as (typeof SEVERITIES)[number]))
+    .reduce((sum, [, value]) => sum + (value ?? 0), 0);
 
   return (
     <ChartCard title="Severity Distribution" subtitle={`${total} alert${total === 1 ? '' : 's'} in window`}>
-      {counts.length === 0 ? (
+      {summary === null ? (
+        <div className="flex h-56 items-center justify-center">
+          <Spinner className="h-5 w-5 text-slate-600" />
+        </div>
+      ) : counts.length === 0 ? (
         <div className="flex h-56 items-center justify-center text-sm text-slate-500">No alerts in this window.</div>
       ) : (
         <div className="flex items-center gap-4">
@@ -54,6 +73,15 @@ export default function SeverityDistributionChart({ alerts }: { alerts: Alert[] 
                 </span>
               </li>
             ))}
+            {unknownCount > 0 && (
+              <li className="flex items-center justify-between text-sm">
+                <span className="flex items-center gap-2 capitalize text-slate-400">
+                  <span className="h-2.5 w-2.5 rounded-full bg-slate-600" />
+                  Unrecognized
+                </span>
+                <span className="font-medium tabular-nums text-slate-100">{unknownCount}</span>
+              </li>
+            )}
           </ul>
         </div>
       )}

@@ -9,10 +9,12 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import {
   AlertIcon,
+  ComplianceIcon,
   DashboardIcon,
   EndpointIcon,
   IncidentIcon,
   InvestigateIcon,
+  SoarIcon,
   TrendingIcon,
 } from './icons';
 
@@ -23,8 +25,10 @@ const NAV_LINKS = [
   { to: '/alerts', label: 'Alerts', icon: AlertIcon },
   { to: '/endpoints', label: 'Endpoints', icon: EndpointIcon },
   { to: '/incidents', label: 'Incidents', icon: IncidentIcon },
+  { to: '/soar', label: 'SOAR', icon: SoarIcon },
   { to: '/investigate', label: 'Investigate', icon: InvestigateIcon },
   { to: '/threat-analytics', label: 'Threat Analytics', icon: TrendingIcon },
+  { to: '/compliance', label: 'Compliance', icon: ComplianceIcon },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {

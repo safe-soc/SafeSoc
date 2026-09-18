@@ -284,6 +284,60 @@ async def search_alerts(
     }
 
 
+async def get_alert_severity_summary(tenant_id: str, timerange_hours: int = 24, host_id: Optional[str] = None) -> dict:
+    """
+    Aggregate severity counts for the SAME tenant+time-window population
+    search_alerts() would page through — total count plus a per-severity
+    breakdown — via a size:0 terms aggregation rather than fetching
+    documents, so the result doesn't depend on (and isn't capped by) any
+    page-size limit. Used by dashboard severity distribution (the naive
+    approach of counting a single fetched page client-side silently
+    undercounts once total alerts exceed that page size), and, with
+    host_id set, by the endpoint detail page's own severity breakdown —
+    same reasoning, scoped to one host instead of the whole tenant.
+
+    Every indexed alert has passed NormalizedLog validation (severity is
+    a required Severity enum field — app/schemas/log.py), so a malformed
+    or missing severity is rejected at ingestion, never indexed. Bucket
+    keys are therefore always one of low/medium/high/critical in
+    practice; buckets are still returned as-is (not coerced to a fixed
+    set of 4) so an unexpected value is surfaced rather than silently
+    folded into another severity.
+    """
+    client = get_client()
+
+    must_filters = [{"term": {"tenant_id": tenant_id}}]
+    if host_id:
+        must_filters.append({"term": {"host_id": host_id}})
+
+    query = {
+        "query": {
+            "bool": {
+                "must": must_filters,
+                "filter": [{"range": {"timestamp": {"gte": f"now-{timerange_hours}h", "lte": "now"}}}],
+            }
+        },
+        "size": 0,
+        "track_total_hits": True,
+        "aggs": {
+            "by_severity": {"terms": {"field": "severity", "size": 10}},
+        },
+    }
+
+    response = client.search(index="safesoc-alerts-*", body=query)
+
+    total = response["hits"]["total"]["value"]
+    by_severity = {
+        bucket["key"]: bucket["doc_count"] for bucket in response["aggregations"]["by_severity"]["buckets"]
+    }
+
+    return {
+        "total": total,
+        "timerange_hours": timerange_hours,
+        "by_severity": by_severity,
+    }
+
+
 async def get_known_endpoints(timerange_hours: int = 24) -> list[dict]:
     """
     Discover every distinct (tenant_id, host_id) pair with at least one

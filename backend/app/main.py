@@ -9,7 +9,7 @@ from app.core.config import settings
 from app.core.exceptions import SafeSOCError, safesoc_exception_handler
 from app.middleware.observability import ObservabilityMiddleware
 from app.routers import health, ws
-from app.routers.v1 import auth, cloud, endpoints, incidents, ingest, investigate, reports, threat_analytics
+from app.routers.v1 import auth, cloud, compliance, endpoints, incidents, ingest, investigate, investigation_sessions, reports, soar, threat_analytics
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -44,11 +44,14 @@ app.include_router(ingest.router)
 app.include_router(alerts.router)
 app.include_router(auth.router)
 app.include_router(incidents.router)
+app.include_router(investigation_sessions.router)
 app.include_router(cloud.router)
 app.include_router(endpoints.router)
 app.include_router(investigate.router)
 app.include_router(reports.router)
 app.include_router(threat_analytics.router)
+app.include_router(compliance.router)
+app.include_router(soar.router)
 app.include_router(ws.router)
 
 

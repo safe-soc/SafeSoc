@@ -9,8 +9,13 @@
  *
  * A tool output may also carry a `truncated` boolean (SS-086) — true
  * whenever the tool's own size cap left out real matches. That's
- * surfaced as a compact "Partial results" badge on the toggle row
- * itself (visible even collapsed), not as just another data row.
+ * surfaced as a compact badge on the toggle row itself (visible even
+ * collapsed), not as just another data row — spelling out the actual
+ * total vs. shown counts (derived from the response's own `total`
+ * field and the length of whichever array it returned — never
+ * invented) rather than a bare "Partial results" label with no numbers,
+ * so the analyst can tell at a glance whether an AI answer next to it
+ * is grounded in the full result set or a sample of it.
  */
 
 import { useState } from 'react';
@@ -22,6 +27,27 @@ interface EvidencePanelProps {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** The length of the first array-shaped field in a tool result (alerts/recent_alerts/incidents/endpoints/...). */
+function findReturnedCount(fields: Record<string, unknown>): number | null {
+  for (const value of Object.values(fields)) {
+    if (Array.isArray(value)) return value.length;
+  }
+  return null;
+}
+
+function partialResultsLabel(fields: Record<string, unknown>): string {
+  const total = typeof fields.total === 'number' ? fields.total : null;
+  const returned = findReturnedCount(fields);
+
+  if (total !== null && returned !== null) {
+    return `${total.toLocaleString()} matching result${total === 1 ? '' : 's'}. Showing ${returned.toLocaleString()} for analysis.`;
+  }
+  if (returned !== null) {
+    return `Showing ${returned.toLocaleString()} result${returned === 1 ? '' : 's'} (partial).`;
+  }
+  return 'Partial results';
 }
 
 function formatScalar(value: unknown): string {
@@ -87,7 +113,7 @@ export default function EvidencePanel({ data }: EvidencePanelProps) {
         <span>Evidence</span>
         {isTruncated && (
           <span className="ml-auto shrink-0 rounded-full border border-amber-700/40 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-400">
-            Partial results
+            {partialResultsLabel(rest)}
           </span>
         )}
       </button>

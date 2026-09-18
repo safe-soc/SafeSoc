@@ -20,6 +20,7 @@ text-shaping library (Pango), which this module doesn't otherwise need.
 """
 
 import html
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -303,6 +304,19 @@ def _tenant_report_dir(tenant_id: uuid.UUID) -> Path:
     return Path(settings.REPORT_OUTPUT_DIR) / str(tenant_id)
 
 
+# Both report generators that write into a tenant's report directory
+# name their files with a trailing `%Y%m%dT%H%M%SZ` timestamp, but not
+# identically: this module's own generate_report() (the weekly digest,
+# SS-052) uses a bare "{timestamp}.pdf", while
+# services/investigation_report.py's generate_incident_report/
+# generate_endpoint_report (incident/endpoint-scoped reports) prefix it
+# with "investigation-{scope}-{slug}-". Matching only the trailing
+# timestamp — rather than requiring the whole stem to be one — lets
+# this listing recognize files from either generator without needing
+# to know their full naming scheme.
+_TIMESTAMP_SUFFIX_RE = re.compile(r"(\d{8}T\d{6}Z)$")
+
+
 def list_reports(tenant_id: uuid.UUID) -> list[ReportInfo]:
     """List a tenant's generated reports (SS-054), newest first. Empty if the tenant has none yet — not an error."""
     report_dir = _tenant_report_dir(tenant_id)
@@ -311,10 +325,13 @@ def list_reports(tenant_id: uuid.UUID) -> list[ReportInfo]:
 
     reports = []
     for path in report_dir.glob("*.pdf"):
-        try:
-            generated_at = datetime.strptime(path.stem, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
-        except ValueError:
+        match = _TIMESTAMP_SUFFIX_RE.search(path.stem)
+        if match is None:
             continue  # not one of our own generated filenames — skip rather than error
+        try:
+            generated_at = datetime.strptime(match.group(1), "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
         reports.append(ReportInfo(filename=path.name, generated_at=generated_at, size_bytes=path.stat().st_size))
 
     return sorted(reports, key=lambda r: r.generated_at, reverse=True)

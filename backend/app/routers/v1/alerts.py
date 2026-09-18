@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import CurrentUser, ensure_tenant_matches, get_current_user, require_role
 from app.core.enums import UserRole
-from app.db.opensearch import search_alerts
+from app.db.opensearch import get_alert_severity_summary, search_alerts
 from app.db.postgresql import get_db
 from app.models.alert_annotation import AlertAnnotation
 from app.schemas.alerts import AlertAnnotationResponse
@@ -79,6 +79,29 @@ async def get_alerts(
         alert["dismissed"] = annotation.dismissed if annotation else False
 
     return result
+
+
+@router.get("/alerts/summary")
+async def get_alerts_summary(
+    current_user: CurrentUser = Depends(get_current_user),
+    timerange_hours: int = Query(24, ge=1, le=720, description="Hours to look back"),
+    host_id: Optional[str] = Query(None, description="Scope the summary to a single host"),
+):
+    """
+    Severity breakdown for the same tenant+time-window population
+    GET /api/v1/alerts?timerange_hours=<n>&host_id=<id> pages through —
+    an aggregation (total count + per-severity counts), not a page of
+    documents, so it isn't capped by that endpoint's `size` limit. Use
+    this instead of deriving severity distribution from a single
+    fetched page of /api/v1/alerts results. `host_id` scopes it to one
+    endpoint (the endpoint detail page's own severity breakdown) exactly
+    like /api/v1/alerts' own host_id filter.
+    """
+    return await get_alert_severity_summary(
+        tenant_id=str(current_user.tenant_id),
+        timerange_hours=timerange_hours,
+        host_id=host_id,
+    )
 
 
 @router.post("/alerts/{alert_id}/acknowledge", response_model=AlertAnnotationResponse)

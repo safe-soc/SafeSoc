@@ -93,8 +93,8 @@ def _mock_realtime_publish(monkeypatch) -> AsyncMock:
 @pytest.fixture
 def make_auth_headers():
     """Factory returning an Authorization: Bearer <JWT> header dict for a real, valid token (SS-013/015)."""
-    def _make(tenant_id: Optional[uuid.UUID] = None, role: UserRole = UserRole.ANALYST) -> dict:
-        token = create_access_token(tenant_id or uuid.uuid4(), uuid.uuid4(), role)
+    def _make(tenant_id: Optional[uuid.UUID] = None, role: UserRole = UserRole.ANALYST, user_id: Optional[uuid.UUID] = None) -> dict:
+        token = create_access_token(tenant_id or uuid.uuid4(), user_id or uuid.uuid4(), role)
         return {"Authorization": f"Bearer {token}"}
     return _make
 

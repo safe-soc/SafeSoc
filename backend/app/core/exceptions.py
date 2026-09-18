@@ -99,6 +99,104 @@ class ReportNotFoundError(SafeSOCError):
         super().__init__(f"Report '{filename}' not found.", status_code=404)
 
 
+class InvestigationSessionNotFoundError(SafeSOCError):
+    """
+    Raised when an investigation session doesn't exist, or exists but
+    doesn't belong to the given (tenant-verified) incident — including
+    a real session_id that belongs to a different incident (same
+    tenant or not). A session_id alone is never sufficient to reach a
+    session; the incident_id it's requested under must also match.
+    """
+    def __init__(self, session_id):
+        super().__init__(f"Investigation session '{session_id}' not found.", status_code=404)
+
+
+class InvestigationFindingNotFoundError(SafeSOCError):
+    """Raised when a finding doesn't exist, or doesn't belong to the given (already-verified) session."""
+    def __init__(self, finding_id):
+        super().__init__(f"Investigation finding '{finding_id}' not found.", status_code=404)
+
+
+class InvestigationActionNotFoundError(SafeSOCError):
+    """Raised when an action doesn't exist, or doesn't belong to the given (already-verified) session."""
+    def __init__(self, action_id):
+        super().__init__(f"Investigation action '{action_id}' not found.", status_code=404)
+
+
+class ComplianceRequirementNotFoundError(SafeSOCError):
+    """Raised when a requirement id doesn't match any entry in core/compliance_mapping.py's static list."""
+    def __init__(self, requirement_id: str):
+        super().__init__(f"Compliance requirement '{requirement_id}' not found.", status_code=404)
+
+
+class SoarPlaybookNotFoundError(SafeSOCError):
+    """Raised when a playbook_id doesn't match any entry in core/soar_playbooks.py's static list."""
+    def __init__(self, playbook_id: str):
+        super().__init__(f"SOAR playbook '{playbook_id}' not found.", status_code=404)
+
+
+class SoarRunNotFoundError(SafeSOCError):
+    """
+    Raised when a SOAR playbook run doesn't exist, or exists but
+    doesn't belong to the given (already tenant-verified) incident —
+    including a real run_id that belongs to a different incident (same
+    tenant or not). A run_id alone is never sufficient to reach a run.
+    """
+    def __init__(self, run_id):
+        super().__init__(f"SOAR playbook run '{run_id}' not found.", status_code=404)
+
+
+class InvalidSoarRunTransitionError(SafeSOCError):
+    """Raised when a SoarPlaybookRun status transition isn't allowed by its state machine (services/soar.py)."""
+    def __init__(self, from_status, to_status):
+        super().__init__(
+            f"Cannot transition a SOAR playbook run from '{from_status.value}' to '{to_status.value}'.",
+            status_code=409,
+        )
+
+
+class InvalidSoarActionTransitionError(SafeSOCError):
+    """
+    Raised when a SoarActionExecution status transition isn't allowed
+    by its state machine (services/soar.py) — including an
+    APPROVAL_REQUIRED action attempting PENDING -> EXECUTING directly,
+    which the status graph alone wouldn't catch.
+    """
+    def __init__(self, from_status, to_status):
+        super().__init__(
+            f"Cannot transition a SOAR action execution from '{from_status.value}' to '{to_status.value}'.",
+            status_code=409,
+        )
+
+
+class SoarActionParameterError(SafeSOCError):
+    """Raised when a playbook step's resolved parameters fail validation against its action_type's parameter model (app/schemas/soar.py)."""
+    def __init__(self, action_type, detail: str):
+        super().__init__(f"Invalid parameters for SOAR action '{action_type.value}': {detail}", status_code=422)
+
+
+class SoarActionExecutionNotFoundError(SafeSOCError):
+    """Raised when a SoarActionExecution id doesn't exist — an internal consistency failure inside the dispatcher (services/soar_execution.py), not a normal caller-facing lookup."""
+    def __init__(self, action_id):
+        super().__init__(f"SOAR action execution '{action_id}' not found.", status_code=404)
+
+
+class SoarPolicyViolationError(SafeSOCError):
+    """
+    Raised when services/soar_execution.py's dispatcher re-checks
+    core/soar_policy.py::classify() immediately before executing an
+    action and finds it is not AUTOMATIC. This is the hard safety
+    backstop — it should never fire in normal operation (only
+    AUTOMATIC actions are ever queued), and firing indicates an
+    attempted or actual policy bypass, not routine control flow.
+    """
+    def __init__(self, action_type, autonomy_class):
+        super().__init__(
+            f"SOAR action '{action_type.value}' is classified '{autonomy_class.value}', not automatic — refusing to execute it without approval.",
+            status_code=403,
+        )
+
+
 async def safesoc_exception_handler(request: Request, exc: SafeSOCError):
     return JSONResponse(
         status_code=exc.status_code,

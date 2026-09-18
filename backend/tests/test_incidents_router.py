@@ -770,3 +770,36 @@ def test_get_narrative_falls_back_when_the_llm_fails(client, db_session, make_au
 
     assert response.status_code == 200
     assert response.json()["is_fallback"] is True
+
+
+# ── POST /{incident_id}/report ───────────────────────────────────
+
+def test_generate_report_requires_authentication(client, db_session):
+    response = client.post(f"/api/v1/incidents/{uuid.uuid4()}/report")
+    assert response.status_code == 401
+
+
+def test_generate_report_returns_the_saved_report_metadata(client, db_session, make_auth_headers, monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+
+    from app.routers.v1 import incidents as incidents_router
+
+    tenant_id = uuid.uuid4()
+    incident = _seeded_incident(tenant_id=tenant_id)
+    db_session.existing_incidents = [incident]
+
+    generated_at = datetime(2026, 8, 26, 17, 0, 0, tzinfo=timezone.utc)
+    report_path = tmp_path / f"investigation-incident-{str(incident.id)[:8]}-20260826T170000Z.pdf"
+    report_path.write_bytes(b"%PDF-1.7 fake")
+    mock_generate = AsyncMock(return_value=(report_path, generated_at))
+    monkeypatch.setattr(incidents_router, "generate_incident_report", mock_generate)
+
+    headers = make_auth_headers(tenant_id=tenant_id)
+    response = client.post(f"/api/v1/incidents/{incident.id}/report", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["filename"] == report_path.name
+    assert body["size_bytes"] == report_path.stat().st_size
+    assert body["download_url"] == f"/api/v1/reports/{report_path.name}"
+    mock_generate.assert_called_once_with(db_session, tenant_id, incident.id)

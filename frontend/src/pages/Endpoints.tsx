@@ -1,9 +1,9 @@
 /**
  * SafeSOC — Endpoint Risk Dashboard View (SS-060)
- * Backed by GET /api/v1/endpoints (SS-034). Each row drills down to
- * that endpoint's recent alerts by reusing the Alerts view (SS-059)
- * with its host filter pre-applied, rather than building a second
- * alert list.
+ * Backed by GET /api/v1/endpoints (SS-034). Each row drills down to a
+ * dedicated endpoint detail/investigation page (EndpointDetail.tsx),
+ * which itself links onward to the same host-filtered Alerts view
+ * (SS-059) this used to link to directly.
  *
  * GET /api/v1/endpoints has no host_os field — the small OS icon per
  * row is a best-effort lookup against recently-seen alerts for that
@@ -110,7 +110,7 @@ export default function Endpoints() {
         title="Endpoints"
         description={`Known hosts, sorted by risk score.${
           highRiskCount > 0 ? ` ${highRiskCount} at high or critical risk.` : ''
-        } Click a host for its recent alerts.`}
+        } Click a host to investigate it.`}
       />
 
       {error && <p className="mt-4 text-sm text-red-400">{error}</p>}
@@ -144,7 +144,7 @@ export default function Endpoints() {
                   <tr key={endpoint.id} className="border-t border-slate-800/70 transition-colors hover:bg-slate-900/50">
                     <td className="px-4 py-3">
                       <Link
-                        to={`/alerts?host_id=${encodeURIComponent(endpoint.host_id)}`}
+                        to={`/endpoints/${encodeURIComponent(endpoint.host_id)}`}
                         className="inline-flex items-center gap-2 font-mono text-slate-200 hover:text-blue-400 hover:underline"
                       >
                         <OsIcon os={osByHost.get(endpoint.host_id)} />

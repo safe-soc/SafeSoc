@@ -7,8 +7,9 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from app.core.enums import CorrelationPattern
+from app.core.enums import CorrelationPattern, SoarRunStatus
 from app.models.incident import Incident, IncidentStatus
+from app.models.soar import SoarPlaybookRun
 from app.services.correlation import DetectedChain
 from app.tasks.celery_app import celery_app
 from app.workers import correlation_worker
@@ -78,11 +79,12 @@ async def test_evaluate_correlation_async_creates_an_incident_and_logs_each_dete
     monkeypatch.setattr(correlation_worker, "get_alert_by_id", AsyncMock(return_value=doc))
     monkeypatch.setattr(correlation_worker, "add_event", AsyncMock())
     monkeypatch.setattr(correlation_worker, "evaluate_host", AsyncMock(return_value=[chain]))
-    monkeypatch.setattr(correlation_worker, "async_session_factory", lambda: _FakeSessionCM())
+    monkeypatch.setattr(correlation_worker, "worker_session_factory", lambda: _FakeSessionCM())
     mock_create_or_merge = AsyncMock(return_value=incident)
     monkeypatch.setattr(correlation_worker, "create_or_merge_incident", mock_create_or_merge)
     monkeypatch.setattr(correlation_worker, "notify_attack_chain", Mock())
     monkeypatch.setattr(correlation_worker, "publish_event", AsyncMock())
+    monkeypatch.setattr(correlation_worker.soar_service, "evaluate_triggers", AsyncMock(return_value=None))
 
     logged = []
     monkeypatch.setattr(correlation_worker.logger, "info", lambda msg, **kw: logged.append((msg, kw)))
@@ -123,11 +125,12 @@ async def test_evaluate_correlation_async_notifies_for_each_detected_chain(monke
     monkeypatch.setattr(correlation_worker, "get_alert_by_id", AsyncMock(return_value=doc))
     monkeypatch.setattr(correlation_worker, "add_event", AsyncMock())
     monkeypatch.setattr(correlation_worker, "evaluate_host", AsyncMock(return_value=[chain]))
-    monkeypatch.setattr(correlation_worker, "async_session_factory", lambda: _FakeSessionCM())
+    monkeypatch.setattr(correlation_worker, "worker_session_factory", lambda: _FakeSessionCM())
     monkeypatch.setattr(correlation_worker, "create_or_merge_incident", AsyncMock(return_value=incident))
     mock_notify = Mock()
     monkeypatch.setattr(correlation_worker, "notify_attack_chain", mock_notify)
     monkeypatch.setattr(correlation_worker, "publish_event", AsyncMock())
+    monkeypatch.setattr(correlation_worker.soar_service, "evaluate_triggers", AsyncMock(return_value=None))
 
     await correlation_worker._evaluate_correlation_async("abc-123")
 
@@ -158,11 +161,12 @@ async def test_evaluate_correlation_async_publishes_a_realtime_event_for_each_de
     monkeypatch.setattr(correlation_worker, "get_alert_by_id", AsyncMock(return_value=doc))
     monkeypatch.setattr(correlation_worker, "add_event", AsyncMock())
     monkeypatch.setattr(correlation_worker, "evaluate_host", AsyncMock(return_value=[chain]))
-    monkeypatch.setattr(correlation_worker, "async_session_factory", lambda: _FakeSessionCM())
+    monkeypatch.setattr(correlation_worker, "worker_session_factory", lambda: _FakeSessionCM())
     monkeypatch.setattr(correlation_worker, "create_or_merge_incident", AsyncMock(return_value=incident))
     monkeypatch.setattr(correlation_worker, "notify_attack_chain", Mock())
     mock_publish = AsyncMock()
     monkeypatch.setattr(correlation_worker, "publish_event", mock_publish)
+    monkeypatch.setattr(correlation_worker.soar_service, "evaluate_triggers", AsyncMock(return_value=None))
 
     await correlation_worker._evaluate_correlation_async("abc-123")
 
@@ -176,6 +180,70 @@ async def test_evaluate_correlation_async_publishes_a_realtime_event_for_each_de
             "confidence": 0.8,
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_evaluate_correlation_async_queues_automatic_soar_actions_when_a_playbook_triggers(monkeypatch):
+    """SOAR Phase 2: a detected chain that matches a playbook queues that playbook's AUTOMATIC actions via workers.soar_worker."""
+    tenant_id = uuid.uuid4()
+    doc = {
+        "alert_id": "abc-123", "tenant_id": str(tenant_id), "host_id": "DESKTOP-042",
+        "log_type": "authentication", "action": "failed_login", "severity": "low",
+    }
+    chain = DetectedChain(
+        pattern=CorrelationPattern.CREDENTIAL_BRUTE_FORCE, confidence=0.8,
+        alert_ids=("a1", "a2"), mitre_technique_ids=("T1110",), mitre_tactic="Credential Access",
+    )
+    incident = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1", "a2"])
+    run = SoarPlaybookRun(id=uuid.uuid4(), incident_id=incident.id, playbook_id="pb-credential-brute-force", status=SoarRunStatus.RUNNING)
+    action_id_1, action_id_2 = uuid.uuid4(), uuid.uuid4()
+
+    monkeypatch.setattr(correlation_worker, "get_alert_by_id", AsyncMock(return_value=doc))
+    monkeypatch.setattr(correlation_worker, "add_event", AsyncMock())
+    monkeypatch.setattr(correlation_worker, "evaluate_host", AsyncMock(return_value=[chain]))
+    monkeypatch.setattr(correlation_worker, "worker_session_factory", lambda: _FakeSessionCM())
+    monkeypatch.setattr(correlation_worker, "create_or_merge_incident", AsyncMock(return_value=incident))
+    monkeypatch.setattr(correlation_worker, "notify_attack_chain", Mock())
+    monkeypatch.setattr(correlation_worker, "publish_event", AsyncMock())
+    monkeypatch.setattr(correlation_worker.soar_service, "evaluate_triggers", AsyncMock(return_value=(run, [action_id_1, action_id_2])))
+    mock_queue = Mock()
+    monkeypatch.setattr(correlation_worker.execute_soar_action, "delay", mock_queue)
+
+    await correlation_worker._evaluate_correlation_async("abc-123")
+
+    correlation_worker.soar_service.evaluate_triggers.assert_called_once_with(
+        "fake-db-session", tenant_id, incident.id, chain.pattern, chain.confidence
+    )
+    assert mock_queue.call_args_list == [((str(action_id_1),),), ((str(action_id_2),),)]
+
+
+@pytest.mark.asyncio
+async def test_evaluate_correlation_async_queues_nothing_when_no_playbook_matches(monkeypatch):
+    tenant_id = uuid.uuid4()
+    doc = {
+        "alert_id": "abc-123", "tenant_id": str(tenant_id), "host_id": "DESKTOP-042",
+        "log_type": "authentication", "action": "failed_login", "severity": "low",
+    }
+    chain = DetectedChain(
+        pattern=CorrelationPattern.CREDENTIAL_BRUTE_FORCE, confidence=0.8,
+        alert_ids=("a1", "a2"), mitre_technique_ids=("T1110",), mitre_tactic="Credential Access",
+    )
+    incident = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1", "a2"])
+
+    monkeypatch.setattr(correlation_worker, "get_alert_by_id", AsyncMock(return_value=doc))
+    monkeypatch.setattr(correlation_worker, "add_event", AsyncMock())
+    monkeypatch.setattr(correlation_worker, "evaluate_host", AsyncMock(return_value=[chain]))
+    monkeypatch.setattr(correlation_worker, "worker_session_factory", lambda: _FakeSessionCM())
+    monkeypatch.setattr(correlation_worker, "create_or_merge_incident", AsyncMock(return_value=incident))
+    monkeypatch.setattr(correlation_worker, "notify_attack_chain", Mock())
+    monkeypatch.setattr(correlation_worker, "publish_event", AsyncMock())
+    monkeypatch.setattr(correlation_worker.soar_service, "evaluate_triggers", AsyncMock(return_value=None))
+    mock_queue = Mock()
+    monkeypatch.setattr(correlation_worker.execute_soar_action, "delay", mock_queue)
+
+    await correlation_worker._evaluate_correlation_async("abc-123")
+
+    mock_queue.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -214,7 +282,15 @@ def test_evaluate_correlation_runs_the_async_flow_via_asyncio_run(monkeypatch):
 # this, correlation tasks failed with "attached to a different loop".
 
 @pytest.mark.asyncio
-async def test_disposes_the_engine_before_and_after_detecting_a_chain(monkeypatch):
+async def test_uses_the_nullpool_worker_session_factory_when_a_chain_is_detected(monkeypatch):
+    """
+    Replaces three former dispose-ordering tests. The shared pooled
+    engine used to hand this task a connection created under a previous
+    task's event loop, which then hung on BEGIN and stranded the
+    Postgres backend; worker_session_factory (NullPool) makes that
+    impossible. See tests/test_worker_db_lifecycle.py for the
+    behavioural proof, and db/postgresql.py for the reasoning.
+    """
     tenant_id = uuid.uuid4()
     doc = {
         "alert_id": "abc-123",
@@ -231,61 +307,24 @@ async def test_disposes_the_engine_before_and_after_detecting_a_chain(monkeypatc
         mitre_technique_ids=("T1110",),
         mitre_tactic="Credential Access",
     )
-    incident = Incident(id=uuid.uuid4(), tenant_id=tenant_id, status=IncidentStatus.OPEN, alert_ids=["a1", "a2"])
-
     monkeypatch.setattr(correlation_worker, "get_alert_by_id", AsyncMock(return_value=doc))
     monkeypatch.setattr(correlation_worker, "add_event", AsyncMock())
     monkeypatch.setattr(correlation_worker, "evaluate_host", AsyncMock(return_value=[chain]))
-    monkeypatch.setattr(correlation_worker, "async_session_factory", lambda: _FakeSessionCM())
-    monkeypatch.setattr(correlation_worker, "create_or_merge_incident", AsyncMock(return_value=incident))
-    monkeypatch.setattr(correlation_worker, "notify_attack_chain", Mock())
+    monkeypatch.setattr(correlation_worker, "create_or_merge_incident", AsyncMock(return_value=Mock(id=uuid.uuid4())))
+    monkeypatch.setattr(correlation_worker, "notify_attack_chain", AsyncMock())
     monkeypatch.setattr(correlation_worker, "publish_event", AsyncMock())
-    mock_engine = AsyncMock()
-    monkeypatch.setattr(correlation_worker, "engine", mock_engine)
+    monkeypatch.setattr(correlation_worker.soar_service, "evaluate_triggers", AsyncMock(return_value=None))
+    used = []
+    monkeypatch.setattr(correlation_worker, "worker_session_factory", lambda: used.append(1) or _FakeSessionCM())
 
     await correlation_worker._evaluate_correlation_async("abc-123")
 
-    assert mock_engine.dispose.call_count == 2
+    assert used, "the task must obtain its session from the worker factory"
 
 
 @pytest.mark.asyncio
-async def test_disposes_the_engine_even_if_incident_creation_raises(monkeypatch):
-    tenant_id = uuid.uuid4()
-    doc = {
-        "alert_id": "abc-123",
-        "tenant_id": str(tenant_id),
-        "host_id": "DESKTOP-042",
-        "log_type": "authentication",
-        "action": "failed_login",
-        "severity": "low",
-    }
-    chain = DetectedChain(
-        pattern=CorrelationPattern.CREDENTIAL_BRUTE_FORCE,
-        confidence=0.8,
-        alert_ids=("a1", "a2"),
-        mitre_technique_ids=("T1110",),
-        mitre_tactic="Credential Access",
-    )
-
-    monkeypatch.setattr(correlation_worker, "get_alert_by_id", AsyncMock(return_value=doc))
-    monkeypatch.setattr(correlation_worker, "add_event", AsyncMock())
-    monkeypatch.setattr(correlation_worker, "evaluate_host", AsyncMock(return_value=[chain]))
-    monkeypatch.setattr(correlation_worker, "async_session_factory", lambda: _FakeSessionCM())
-    monkeypatch.setattr(
-        correlation_worker, "create_or_merge_incident", AsyncMock(side_effect=RuntimeError("postgres down"))
-    )
-    mock_engine = AsyncMock()
-    monkeypatch.setattr(correlation_worker, "engine", mock_engine)
-
-    with pytest.raises(RuntimeError):
-        await correlation_worker._evaluate_correlation_async("abc-123")
-
-    assert mock_engine.dispose.call_count == 2
-
-
-@pytest.mark.asyncio
-async def test_does_not_dispose_the_engine_when_no_chain_is_detected(monkeypatch):
-    """Correlation runs once per alert — unconditionally disposing when nothing was detected would be wasteful."""
+async def test_opens_no_database_session_when_no_chain_is_detected(monkeypatch):
+    """Correlation runs once per alert; most alerts detect nothing and must never touch Postgres."""
     doc = {
         "alert_id": "abc-123",
         "tenant_id": str(uuid.uuid4()),
@@ -297,9 +336,11 @@ async def test_does_not_dispose_the_engine_when_no_chain_is_detected(monkeypatch
     monkeypatch.setattr(correlation_worker, "get_alert_by_id", AsyncMock(return_value=doc))
     monkeypatch.setattr(correlation_worker, "add_event", AsyncMock())
     monkeypatch.setattr(correlation_worker, "evaluate_host", AsyncMock(return_value=[]))
-    mock_engine = AsyncMock()
-    monkeypatch.setattr(correlation_worker, "engine", mock_engine)
+    used = []
+    monkeypatch.setattr(correlation_worker, "worker_session_factory", lambda: used.append(1) or _FakeSessionCM())
 
     await correlation_worker._evaluate_correlation_async("abc-123")
 
-    mock_engine.dispose.assert_not_called()
+    assert not used, "no chain detected — no session should have been opened"
+
+

@@ -23,7 +23,7 @@ import LatestIncidentsWidget from '../components/dashboard/LatestIncidentsWidget
 import { useAuth } from '../hooks/useAuth';
 import { useRealtimeEvents, type RealtimeEvent } from '../hooks/useRealtimeEvents';
 import { api } from '../lib/api';
-import type { Alert, AlertSearchResponse, Endpoint, Incident, IncidentListResponse } from '../lib/types';
+import type { Alert, AlertSearchResponse, AlertSeveritySummary, Endpoint, Incident, IncidentListResponse } from '../lib/types';
 
 const WINDOW_HOURS = 168; // 7 days — see module docstring for why this window
 const WINDOW_DAYS = WINDOW_HOURS / 24;
@@ -42,6 +42,7 @@ function describeEvent(event: RealtimeEvent): string {
 interface DashboardData {
   totalAlerts: number;
   alerts: Alert[];
+  severitySummary: AlertSeveritySummary;
   openIncidentsCount: number;
   activeAttackChains: number;
   highRiskEndpoints: number;
@@ -63,12 +64,13 @@ export default function Dashboard() {
 
     Promise.all([
       api.get<AlertSearchResponse>('/api/v1/alerts', { params: { timerange_hours: WINDOW_HOURS, size: 500 } }),
+      api.get<AlertSeveritySummary>('/api/v1/alerts/summary', { params: { timerange_hours: WINDOW_HOURS } }),
       api.get<IncidentListResponse>('/api/v1/incidents', { params: { status: 'open', size: 500 } }),
       api.get<IncidentListResponse>('/api/v1/incidents', { params: { status: 'investigating', size: 500 } }),
       api.get<IncidentListResponse>('/api/v1/incidents', { params: { size: 5 } }),
       api.get<Endpoint[]>('/api/v1/endpoints'),
     ])
-      .then(([alertsRes, openRes, investigatingRes, latestRes, endpointsRes]) => {
+      .then(([alertsRes, severitySummaryRes, openRes, investigatingRes, latestRes, endpointsRes]) => {
         if (cancelled) return;
 
         const nonTerminal = [...openRes.data.incidents, ...investigatingRes.data.incidents];
@@ -80,6 +82,7 @@ export default function Dashboard() {
         setData({
           totalAlerts: alertsRes.data.total,
           alerts: alertsRes.data.alerts,
+          severitySummary: severitySummaryRes.data,
           openIncidentsCount: openRes.data.total,
           activeAttackChains,
           highRiskEndpoints,
@@ -149,7 +152,7 @@ export default function Dashboard() {
 
       <section className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <AlertsOverTimeChart alerts={data?.alerts ?? []} days={WINDOW_DAYS} />
-        <SeverityDistributionChart alerts={data?.alerts ?? []} />
+        <SeverityDistributionChart summary={data?.severitySummary ?? null} />
       </section>
 
       <section className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">

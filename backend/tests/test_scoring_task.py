@@ -28,7 +28,7 @@ async def test_recalculates_score_for_every_known_endpoint(monkeypatch):
     monkeypatch.setattr(scoring, "get_known_endpoints", AsyncMock(return_value=endpoints))
     mock_search_alerts = AsyncMock(return_value={"alerts": ["fake-alert"]})
     monkeypatch.setattr(scoring, "search_alerts", mock_search_alerts)
-    monkeypatch.setattr(scoring, "async_session_factory", lambda: _FakeSessionCM())
+    monkeypatch.setattr(scoring, "worker_session_factory", lambda: _FakeSessionCM())
     mock_recalculate = AsyncMock()
     monkeypatch.setattr(scoring, "recalculate_endpoint_score", mock_recalculate)
 
@@ -55,36 +55,25 @@ async def test_no_ops_when_there_are_no_known_endpoints(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_disposes_the_engine_before_and_after_a_successful_run(monkeypatch):
+async def test_uses_the_nullpool_worker_session_factory(monkeypatch):
     """
-    Regression test: the shared async engine's pooled connections are
-    bound to the event loop that created them, but each Celery
-    invocation of this task (and every other DB-touching task sharing
-    this worker process) runs in its own fresh asyncio.run() loop.
-    Disposing only at the end isn't enough — a *different* task type
-    could reuse the pool in between and re-poison it — so this must
-    dispose both before first use and after finishing (observed live:
-    disposing only in a trailing finally still failed on a later run).
+    Replaces the old dispose-before-and-after regression test. That
+    existed because the shared pooled engine handed this task
+    connections belonging to a previous task's (now closed) event loop.
+    The task now draws from worker_session_factory, whose NullPool
+    keeps nothing between checkouts, so there is no pool left to
+    dispose and no stale connection to inherit — see
+    tests/test_worker_db_lifecycle.py for the behavioural proof.
     """
-    monkeypatch.setattr(scoring, "get_known_endpoints", AsyncMock(return_value=[]))
-    mock_engine = AsyncMock()
-    monkeypatch.setattr(scoring, "engine", mock_engine)
+    monkeypatch.setattr(scoring, "get_known_endpoints", AsyncMock(return_value=[{"tenant_id": str(uuid.uuid4()), "host_id": "H1"}]))
+    monkeypatch.setattr(scoring, "search_alerts", AsyncMock(return_value={"alerts": []}))
+    monkeypatch.setattr(scoring, "recalculate_endpoint_score", AsyncMock())
+    used = []
+    monkeypatch.setattr(scoring, "worker_session_factory", lambda: used.append(1) or _FakeSessionCM())
 
     await scoring._recalculate_all_risk_scores_async()
 
-    assert mock_engine.dispose.call_count == 2
-
-
-@pytest.mark.asyncio
-async def test_disposes_the_engine_even_if_recalculation_raises(monkeypatch):
-    monkeypatch.setattr(scoring, "get_known_endpoints", AsyncMock(side_effect=RuntimeError("opensearch down")))
-    mock_engine = AsyncMock()
-    monkeypatch.setattr(scoring, "engine", mock_engine)
-
-    with pytest.raises(RuntimeError):
-        await scoring._recalculate_all_risk_scores_async()
-
-    assert mock_engine.dispose.call_count == 2
+    assert used, "the task must obtain its session from the worker factory"
 
 
 def test_recalculate_all_risk_scores_runs_the_async_flow_via_asyncio_run(monkeypatch):

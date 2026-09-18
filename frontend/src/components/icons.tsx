@@ -112,3 +112,44 @@ export const BotIcon = (props: IconProps) => (
     <path d="M9 13.5h.01M15 13.5h.01" />
   </svg>
 );
+
+export const UsersIcon = (props: IconProps) => (
+  <svg {...base(props)}>
+    <circle cx="9" cy="8" r="3.2" />
+    <path d="M3.5 20c0-3 2.5-5.5 5.5-5.5s5.5 2.5 5.5 5.5" />
+    <path d="M15.5 5.5c1.4.4 2.4 1.7 2.4 3.2 0 1.5-1 2.8-2.4 3.2" />
+    <path d="M17.5 14.7c2 .6 3.5 2.5 3.5 4.8" />
+  </svg>
+);
+
+export const LayersIcon = (props: IconProps) => (
+  <svg {...base(props)}>
+    <path d="M12 3 3 8l9 5 9-5-9-5z" />
+    <path d="M3 13l9 5 9-5" />
+  </svg>
+);
+
+export const ComplianceIcon = (props: IconProps) => (
+  <svg {...base(props)}>
+    <path d="M12 3.5 5 6v6c0 4.2 2.8 6.9 7 8.5 4.2-1.6 7-4.3 7-8.5V6l-7-2.5z" />
+    <path d="m9 12 2 2 4-4.2" />
+  </svg>
+);
+
+export const SoarIcon = (props: IconProps) => (
+  <svg {...base(props)}>
+    <path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z" />
+  </svg>
+);
+
+export const CheckIcon = (props: IconProps) => (
+  <svg {...base(props)} strokeWidth={2}>
+    <path d="M5 12.5 9.5 17 19 7" />
+  </svg>
+);
+
+export const XIcon = (props: IconProps) => (
+  <svg {...base(props)} strokeWidth={2}>
+    <path d="M6 6l12 12M18 6 6 18" />
+  </svg>
+);

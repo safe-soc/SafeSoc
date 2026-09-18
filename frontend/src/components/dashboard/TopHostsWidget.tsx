@@ -30,7 +30,7 @@ export default function TopHostsWidget({ alerts }: { alerts: Alert[] }) {
             <li key={hostId}>
               <div className="mb-1 flex items-center justify-between text-sm">
                 <Link
-                  to={`/alerts?host_id=${encodeURIComponent(hostId)}`}
+                  to={`/endpoints/${encodeURIComponent(hostId)}`}
                   className="font-mono text-slate-200 hover:text-blue-400 hover:underline"
                 >
                   {hostId}

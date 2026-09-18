@@ -15,6 +15,7 @@ from app.db.opensearch import (
     _build_index_name,
     check_connection,
     ensure_ilm_policy,
+    get_alert_severity_summary,
     get_cloud_summary,
     get_known_endpoints,
     update_alert_anomaly_score,
@@ -257,6 +258,128 @@ async def test_get_cloud_summary_scopes_the_query_to_tenant_and_cloudlens_source
     must_filters = fake_client.last_search_kwargs["body"]["query"]["bool"]["must"]
     assert {"term": {"tenant_id": "acme-corp"}} in must_filters
     assert {"term": {"source": "cloudlens"}} in must_filters
+
+
+# ── get_alert_severity_summary (dashboard severity distribution fix) ──
+
+@pytest.mark.asyncio
+async def test_get_alert_severity_summary_uses_aggregation_not_document_fetch(monkeypatch):
+    """
+    The query must be a size:0 aggregation — the bug this fixes was a
+    document-fetch page (capped by a `size` limit) standing in for the
+    full population's severity breakdown.
+    """
+    fake_response = {
+        "hits": {"total": {"value": 2311}},
+        "aggregations": {
+            "by_severity": {
+                "buckets": [
+                    {"key": "low", "doc_count": 1200},
+                    {"key": "medium", "doc_count": 700},
+                    {"key": "high", "doc_count": 350},
+                    {"key": "critical", "doc_count": 61},
+                ]
+            }
+        },
+    }
+    fake_client = _FakeSearchClient(fake_response)
+    monkeypatch.setattr("app.db.opensearch.get_client", lambda: fake_client)
+
+    result = await get_alert_severity_summary("acme-corp", timerange_hours=168)
+
+    assert fake_client.last_search_kwargs["body"]["size"] == 0
+    assert result == {
+        "total": 2311,
+        "timerange_hours": 168,
+        "by_severity": {"low": 1200, "medium": 700, "high": 350, "critical": 61},
+    }
+
+
+def test_get_alert_severity_summary_buckets_sum_to_the_total():
+    """
+    Every indexed alert has exactly one of the 4 valid severities
+    (NormalizedLog validation rejects anything else at ingestion — see
+    app/schemas/log.py), so the buckets must always sum to the total,
+    not merely be a subset of it.
+    """
+    by_severity = {"low": 1200, "medium": 700, "high": 350, "critical": 61}
+    assert sum(by_severity.values()) == 2311
+
+
+@pytest.mark.asyncio
+async def test_get_alert_severity_summary_scopes_the_query_to_tenant_and_window(monkeypatch):
+    fake_response = {
+        "hits": {"total": {"value": 0}},
+        "aggregations": {"by_severity": {"buckets": []}},
+    }
+    fake_client = _FakeSearchClient(fake_response)
+    monkeypatch.setattr("app.db.opensearch.get_client", lambda: fake_client)
+
+    await get_alert_severity_summary("acme-corp", timerange_hours=48)
+
+    body = fake_client.last_search_kwargs["body"]
+    must_filters = body["query"]["bool"]["must"]
+    assert {"term": {"tenant_id": "acme-corp"}} in must_filters
+    assert body["query"]["bool"]["filter"] == [{"range": {"timestamp": {"gte": "now-48h", "lte": "now"}}}]
+
+
+@pytest.mark.asyncio
+async def test_get_alert_severity_summary_scopes_to_a_single_host_when_given(monkeypatch):
+    """Endpoint detail page's own severity breakdown (host_id set) — must not aggregate the whole tenant."""
+    fake_response = {"hits": {"total": {"value": 0}}, "aggregations": {"by_severity": {"buckets": []}}}
+    fake_client = _FakeSearchClient(fake_response)
+    monkeypatch.setattr("app.db.opensearch.get_client", lambda: fake_client)
+
+    await get_alert_severity_summary("acme-corp", timerange_hours=24, host_id="DESKTOP-037")
+
+    must_filters = fake_client.last_search_kwargs["body"]["query"]["bool"]["must"]
+    assert {"term": {"host_id": "DESKTOP-037"}} in must_filters
+
+
+@pytest.mark.asyncio
+async def test_get_alert_severity_summary_omits_the_host_filter_when_not_given(monkeypatch):
+    fake_response = {"hits": {"total": {"value": 0}}, "aggregations": {"by_severity": {"buckets": []}}}
+    fake_client = _FakeSearchClient(fake_response)
+    monkeypatch.setattr("app.db.opensearch.get_client", lambda: fake_client)
+
+    await get_alert_severity_summary("acme-corp")
+
+    must_filters = fake_client.last_search_kwargs["body"]["query"]["bool"]["must"]
+    assert not any("host_id" in f.get("term", {}) for f in must_filters)
+
+
+@pytest.mark.asyncio
+async def test_get_alert_severity_summary_supports_custom_time_windows(monkeypatch):
+    """Regression: the window must not be hardcoded to any one value (e.g. the dashboard's 168h default)."""
+    fake_response = {"hits": {"total": {"value": 0}}, "aggregations": {"by_severity": {"buckets": []}}}
+    fake_client = _FakeSearchClient(fake_response)
+    monkeypatch.setattr("app.db.opensearch.get_client", lambda: fake_client)
+
+    result_24h = await get_alert_severity_summary("acme-corp", timerange_hours=24)
+    result_720h = await get_alert_severity_summary("acme-corp", timerange_hours=720)
+
+    assert result_24h["timerange_hours"] == 24
+    assert result_720h["timerange_hours"] == 720
+
+
+@pytest.mark.asyncio
+async def test_get_alert_severity_summary_passes_through_an_unexpected_bucket_key(monkeypatch):
+    """
+    Every stored alert is expected to carry one of the 4 valid
+    severities (enforced at ingestion), but the aggregation itself
+    must not silently coerce a surprise value into an existing bucket
+    — it should surface exactly what OpenSearch returned.
+    """
+    fake_response = {
+        "hits": {"total": {"value": 1}},
+        "aggregations": {"by_severity": {"buckets": [{"key": "unexpected-value", "doc_count": 1}]}},
+    }
+    fake_client = _FakeSearchClient(fake_response)
+    monkeypatch.setattr("app.db.opensearch.get_client", lambda: fake_client)
+
+    result = await get_alert_severity_summary("acme-corp")
+
+    assert result["by_severity"] == {"unexpected-value": 1}
 
 
 # ── SS-033: get_known_endpoints ──────────────────────────────────

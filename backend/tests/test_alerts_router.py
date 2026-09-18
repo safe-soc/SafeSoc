@@ -116,6 +116,87 @@ def test_get_alerts_merges_existing_annotation_state(client, db_session, make_au
     assert response.json()["alerts"][0]["acknowledged"] is True
 
 
+# ── GET /api/v1/alerts/summary ────────────────────────────────────────
+
+def test_get_alerts_summary_requires_authentication(client, db_session):
+    response = client.get("/api/v1/alerts/summary")
+    assert response.status_code == 401
+
+
+def test_get_alerts_summary_returns_the_aggregation_result(client, db_session, make_auth_headers, monkeypatch):
+    monkeypatch.setattr(
+        "app.routers.v1.alerts.get_alert_severity_summary",
+        AsyncMock(
+            return_value={
+                "total": 2311,
+                "timerange_hours": 168,
+                "by_severity": {"low": 1200, "medium": 700, "high": 350, "critical": 61},
+            }
+        ),
+    )
+    headers = make_auth_headers(role=UserRole.VIEWER)
+
+    response = client.get("/api/v1/alerts/summary", params={"timerange_hours": 168}, headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 2311
+    assert sum(body["by_severity"].values()) == body["total"]
+
+
+def test_get_alerts_summary_scopes_the_query_to_the_authenticated_tenant(
+    client, db_session, make_auth_headers, monkeypatch
+):
+    """RBAC/tenant isolation: the summary is derived from the JWT's tenant_id, never a caller-suppliable one."""
+    tenant_id = uuid.uuid4()
+    captured = {}
+
+    async def fake_summary(tenant_id, timerange_hours=24, host_id=None):
+        captured["tenant_id"] = tenant_id
+        captured["timerange_hours"] = timerange_hours
+        return {"total": 0, "timerange_hours": timerange_hours, "by_severity": {}}
+
+    monkeypatch.setattr("app.routers.v1.alerts.get_alert_severity_summary", fake_summary)
+    headers = make_auth_headers(tenant_id=tenant_id, role=UserRole.VIEWER)
+
+    response = client.get("/api/v1/alerts/summary", headers=headers)
+
+    assert response.status_code == 200
+    assert captured["tenant_id"] == str(tenant_id)
+
+
+def test_get_alerts_summary_supports_a_custom_time_window(client, db_session, make_auth_headers, monkeypatch):
+    captured = {}
+
+    async def fake_summary(tenant_id, timerange_hours=24, host_id=None):
+        captured["timerange_hours"] = timerange_hours
+        return {"total": 0, "timerange_hours": timerange_hours, "by_severity": {}}
+
+    monkeypatch.setattr("app.routers.v1.alerts.get_alert_severity_summary", fake_summary)
+    headers = make_auth_headers(role=UserRole.VIEWER)
+
+    response = client.get("/api/v1/alerts/summary", params={"timerange_hours": 72}, headers=headers)
+
+    assert response.status_code == 200
+    assert captured["timerange_hours"] == 72
+
+
+def test_get_alerts_summary_passes_the_host_id_query_param_through(client, db_session, make_auth_headers, monkeypatch):
+    captured = {}
+
+    async def fake_summary(tenant_id, timerange_hours=24, host_id=None):
+        captured["host_id"] = host_id
+        return {"total": 0, "timerange_hours": timerange_hours, "by_severity": {}}
+
+    monkeypatch.setattr("app.routers.v1.alerts.get_alert_severity_summary", fake_summary)
+    headers = make_auth_headers(role=UserRole.VIEWER)
+
+    response = client.get("/api/v1/alerts/summary", params={"host_id": "DESKTOP-037"}, headers=headers)
+
+    assert response.status_code == 200
+    assert captured["host_id"] == "DESKTOP-037"
+
+
 # ── POST /api/v1/alerts/{alert_id}/acknowledge ───────────────────────
 
 def test_acknowledge_requires_authentication(client, db_session):

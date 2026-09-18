@@ -58,11 +58,36 @@ async def _get_or_fetch(db, indicator, provider, fetch_fn) -> Optional[TIResult]
     fails and a cache row exists at all, even expired; if there's
     truly nothing cached, returns None (no-op for this provider) —
     an external API outage never raises past this point.
+
+    The provider call is made with NO database transaction open. The
+    cache read above opens one implicitly, and leaving it open across
+    the HTTP request pinned a Postgres backend `idle in transaction`
+    for the whole of the provider's latency — measured at 13-23s under
+    load, against providers that are slow or unreachable precisely when
+    the system is busiest. Committing first ends that transaction and
+    releases the connection; _write_cache then opens a short new one
+    only if there is something to persist.
+
+    The commit is deliberate and matches what this module already did:
+    _write_cache has always committed the caller's session on this same
+    cache-miss path. Ending the transaction earlier keeps that
+    behaviour and only moves the boundary — a rollback here would
+    instead DISCARD any caller work in flight, which would be a real
+    change. The cache-hit path below returns before this point and is
+    left exactly as it was: it makes no HTTP call, so it has no
+    boundary to fix.
     """
     cached_row = await _get_cached(db, indicator, provider)
     now = datetime.now(timezone.utc)
     if cached_row is not None and cached_row.expires_at > now:
         return TIResult(**cached_row.result)
+
+    # Read what the fallback needs off the ORM row before ending the
+    # transaction it was loaded in, so nothing has to touch the
+    # database again once the connection is released.
+    stale_result = dict(cached_row.result) if cached_row is not None else None
+
+    await db.commit()
 
     try:
         result = await fetch_fn()
@@ -71,8 +96,8 @@ async def _get_or_fetch(db, indicator, provider, fetch_fn) -> Optional[TIResult]
             "TI provider lookup failed, falling back",
             provider=provider.value, indicator=indicator, error=str(e),
         )
-        if cached_row is not None:
-            return TIResult(**cached_row.result)
+        if stale_result is not None:
+            return TIResult(**stale_result)
         return None
 
     await _write_cache(db, indicator, provider, result)
@@ -108,6 +133,25 @@ async def _get_ip_result(db: AsyncSession, ip: str) -> TIResult:
 async def _get_hash_result(db: AsyncSession, file_hash: str) -> TIResult:
     vt = await _get_or_fetch(db, file_hash, TIProvider.VIRUSTOTAL, lambda: virustotal.lookup_hash(file_hash))
     return _merge(file_hash=file_hash, vt=vt, abuse=None)
+
+
+async def enrich_indicator(db: AsyncSession, indicator: str) -> TIResult:
+    """
+    On-demand reputation lookup for a bare IP indicator (SS-118, SOAR
+    Phase 2's ENRICH_INDICATOR action) — the same cache-before-call
+    path enrich_log() already uses per-alert, reused here for a
+    standalone indicator rather than duplicating the provider-lookup
+    orchestration. Domain indicators aren't looked up (VirusTotal/
+    AbuseIPDB clients here are IP/hash-oriented) — a non-IP indicator
+    returns an empty (all-None) TIResult rather than raising.
+    """
+    import ipaddress
+
+    try:
+        ipaddress.ip_address(indicator)
+    except ValueError:
+        return TIResult()
+    return await _get_ip_result(db, indicator)
 
 
 async def enrich_log(db: AsyncSession, log: NormalizedLog) -> NormalizedLog:

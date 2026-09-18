@@ -65,6 +65,21 @@ def test_generate_caps_output_tokens_at_the_configured_limit(monkeypatch):
     assert mock_post.call_args.kwargs["json"]["options"]["num_predict"] == 120
 
 
+def test_generate_accepts_an_explicit_max_output_tokens_override(monkeypatch):
+    """
+    Callers with a different latency budget than the interactive chat's
+    (e.g. services/incident_narrative.py) pass their own token cap
+    instead of sharing INVESTIGATION_LLM_MAX_OUTPUT_TOKENS.
+    """
+    mock_post = Mock(return_value=_fake_response("ok"))
+    monkeypatch.setattr(ollama.requests, "post", mock_post)
+    monkeypatch.setattr(settings, "INVESTIGATION_LLM_MAX_OUTPUT_TOKENS", 120)
+
+    ollama.generate("anything", max_output_tokens=350)
+
+    assert mock_post.call_args.kwargs["json"]["options"]["num_predict"] == 350
+
+
 def test_connection_failure_raises_typed_exception_not_requests_exception(monkeypatch):
     def _raise(*args, **kwargs):
         raise requests.exceptions.ConnectionError("connection refused")

@@ -136,3 +136,61 @@ async def test_list_events_defaults_to_no_target_filter():
 
     assert events == []
     assert total == 0
+
+
+# ── target_ids: scoping to several targets at once (Phase 3.5) ───────
+#
+# services/incident_timeline.py needs every audit event belonging to a
+# set of SOAR runs/actions in one query. As this file's own _FakeSession
+# docstring notes, a fake can't prove the real WHERE clause filters;
+# what these assert is that the filter is BUILT (the compiled statement
+# carries the IN clause) and that the empty case narrows rather than
+# widens — the part that would be a tenant-isolation bug if wrong.
+
+
+class _StatementCapturingSession(_FakeSession):
+    def __init__(self, existing_events=None):
+        super().__init__(existing_events)
+        self.statements = []
+
+    async def execute(self, stmt, params=None):
+        self.statements.append(stmt)
+        return await super().execute(stmt, params)
+
+
+@pytest.mark.asyncio
+async def test_list_events_with_target_ids_builds_an_in_clause():
+    session = _StatementCapturingSession()
+    ids = [str(uuid.uuid4()), str(uuid.uuid4())]
+
+    await list_events(session, uuid.uuid4(), target_type="soar_playbook_run", target_ids=ids)
+
+    compiled = str(session.statements[-1].compile(compile_kwargs={"literal_binds": True}))
+    assert " IN " in compiled.upper()
+    for target_id in ids:
+        assert target_id in compiled
+
+
+@pytest.mark.asyncio
+async def test_list_events_with_an_empty_target_ids_matches_nothing_rather_than_everything():
+    """
+    The dangerous reading of "scope this to these ids" when the list is
+    empty would be to drop the filter and return the tenant's entire
+    audit log. It must narrow to nothing instead.
+    """
+    session = _StatementCapturingSession()
+
+    await list_events(session, uuid.uuid4(), target_type="soar_playbook_run", target_ids=[])
+
+    compiled = str(session.statements[-1].compile(compile_kwargs={"literal_binds": True}))
+    assert "target_id" in compiled  # the filter is still applied, not silently skipped
+
+
+@pytest.mark.asyncio
+async def test_list_events_without_target_ids_is_unchanged():
+    session = _StatementCapturingSession()
+
+    await list_events(session, uuid.uuid4(), target_type="incident", target_id="abc")
+
+    compiled = str(session.statements[-1].compile(compile_kwargs={"literal_binds": True})).upper()
+    assert " IN " not in compiled

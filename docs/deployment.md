@@ -72,6 +72,14 @@ python injector/injector.py --scenario brute_force
 
 `injector.py` logs in automatically (see `README.md`'s quickstart for the `--tenant-id`/`--email`/`--password`/`--no-auth` options).
 
+For a fully populated presentation-ready environment (dozens of endpoints/users, a realistic severity distribution, several coherent multi-alert incidents, and a software/vulnerability inventory) instead of `demo.py`'s smaller quick-start set, use the deterministic simulation generator — see `README.md`'s "Full SOC Simulation" section:
+
+```bash
+python injector/simulate.py --reset --seed   # clean slate, then populate everything
+python injector/simulate.py --seed           # populate only (idempotent, safe to re-run)
+python injector/simulate.py --reset          # wipe this simulation's data only
+```
+
 **Port overrides:** if `9200` or `8000` are already in use on your machine (e.g. by another OpenSearch/Wazuh setup), override the host-side ports without editing the compose file:
 
 ```bash

@@ -299,6 +299,51 @@ def test_list_reports_skips_files_not_matching_the_naming_convention(monkeypatch
     assert reporting.list_reports(tenant_id) == []
 
 
+def test_list_reports_recognizes_investigation_report_filenames(monkeypatch, tmp_path):
+    """
+    Regression test: services/investigation_report.py's
+    generate_incident_report/generate_endpoint_report save into the
+    same tenant directory this function scans, but prefix their
+    filenames ("investigation-incident-{id8}-{timestamp}.pdf",
+    "investigation-endpoint-{host}-{timestamp}.pdf") instead of a bare
+    timestamp. A previous version of this function required the whole
+    filename stem to be exactly a timestamp, so every investigation
+    report was silently invisible to GET /api/v1/reports even though
+    it had genuinely been generated and was independently downloadable
+    by exact filename via get_report_path.
+    """
+    tenant_id = uuid.uuid4()
+    monkeypatch.setattr(reporting.settings, "REPORT_OUTPUT_DIR", str(tmp_path))
+    tenant_dir = tmp_path / str(tenant_id)
+    _touch_report(tenant_dir, "investigation-incident-4526a49b-20260827T145209Z.pdf")
+    _touch_report(tenant_dir, "investigation-endpoint-DEMO-CRITICAL-01-20260826T171805Z.pdf")
+
+    reports = reporting.list_reports(tenant_id)
+
+    assert {r.filename for r in reports} == {
+        "investigation-incident-4526a49b-20260827T145209Z.pdf",
+        "investigation-endpoint-DEMO-CRITICAL-01-20260826T171805Z.pdf",
+    }
+    newest = next(r for r in reports if r.filename.startswith("investigation-incident"))
+    assert newest.generated_at == datetime(2026, 8, 27, 14, 52, 9, tzinfo=timezone.utc)
+
+
+def test_list_reports_mixes_both_generators_newest_first(monkeypatch, tmp_path):
+    """Both report generators write into the same tenant directory — the listing must merge and sort them together, not just one family."""
+    tenant_id = uuid.uuid4()
+    monkeypatch.setattr(reporting.settings, "REPORT_OUTPUT_DIR", str(tmp_path))
+    tenant_dir = tmp_path / str(tenant_id)
+    _touch_report(tenant_dir, "20260101T060000Z.pdf")  # weekly digest (SS-052)
+    _touch_report(tenant_dir, "investigation-incident-abcd1234-20260201T060000Z.pdf")  # investigation report
+
+    reports = reporting.list_reports(tenant_id)
+
+    assert [r.filename for r in reports] == [
+        "investigation-incident-abcd1234-20260201T060000Z.pdf",
+        "20260101T060000Z.pdf",
+    ]
+
+
 def test_get_report_path_resolves_an_existing_report(monkeypatch, tmp_path):
     tenant_id = uuid.uuid4()
     monkeypatch.setattr(reporting.settings, "REPORT_OUTPUT_DIR", str(tmp_path))

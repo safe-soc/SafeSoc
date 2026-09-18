@@ -13,7 +13,7 @@ import asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.postgresql import async_session_factory, engine
+from app.db.postgresql import worker_session_factory
 from app.models.tenant import Tenant
 from app.services.reporting import generate_report
 from app.tasks.celery_app import celery_app
@@ -34,27 +34,22 @@ def generate_all_tenant_reports() -> None:
 
 
 async def _generate_all_tenant_reports_async() -> None:
-    # Same reliability fix as tasks/scoring.py's own worker-shared-engine
-    # handling (see its comment for the full explanation): dispose both
-    # before first use and after finishing, since this Celery worker
-    # process's asyncpg connection pool is shared across every task type
-    # it runs, and can be left poisoned by any of them between runs.
-    await engine.dispose()
-    try:
-        async with async_session_factory() as db:
-            tenants = await _list_tenants(db)
+    # worker_session_factory (NullPool), like every other Celery task —
+    # see db/postgresql.py. Nothing is left pooled for a later task's
+    # event loop to inherit, so the dispose-before-and-after handling
+    # this used to need is gone.
+    async with worker_session_factory() as db:
+        tenants = await _list_tenants(db)
 
-            generated = 0
-            for tenant in tenants:
-                try:
-                    await generate_report(db, tenant.id)
-                    generated += 1
-                except Exception as e:
-                    logger.error(
-                        "Failed to generate scheduled report for tenant",
-                        tenant_id=str(tenant.id), error=str(e),
-                    )
+        generated = 0
+        for tenant in tenants:
+            try:
+                await generate_report(db, tenant.id)
+                generated += 1
+            except Exception as e:
+                logger.error(
+                    "Failed to generate scheduled report for tenant",
+                    tenant_id=str(tenant.id), error=str(e),
+                )
 
-        logger.info("Generated scheduled tenant reports", tenant_count=len(tenants), generated=generated)
-    finally:
-        await engine.dispose()
+    logger.info("Generated scheduled tenant reports", tenant_count=len(tenants), generated=generated)

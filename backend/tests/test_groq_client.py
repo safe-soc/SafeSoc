@@ -50,6 +50,17 @@ def test_generate_caps_output_tokens_at_the_configured_limit(monkeypatch):
     assert mock_post.call_args.kwargs["json"]["max_tokens"] == 120
 
 
+def test_generate_accepts_an_explicit_max_output_tokens_override(monkeypatch):
+    """Same override contract as clients/ollama.py's generate() — see that test for why."""
+    mock_post = Mock(return_value=_fake_response("ok"))
+    monkeypatch.setattr(groq.requests, "post", mock_post)
+    monkeypatch.setattr(groq.settings, "INVESTIGATION_LLM_MAX_OUTPUT_TOKENS", 120)
+
+    groq.generate("anything", max_output_tokens=350)
+
+    assert mock_post.call_args.kwargs["json"]["max_tokens"] == 350
+
+
 def test_connection_failure_raises_typed_exception_not_requests_exception(monkeypatch):
     def _raise(*args, **kwargs):
         raise requests.exceptions.ConnectionError("connection refused")

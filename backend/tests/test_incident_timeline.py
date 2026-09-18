@@ -105,6 +105,191 @@ async def test_interleaves_alerts_audit_events_and_notes_by_real_timestamp(monke
     assert entries[0].timestamp < entries[1].timestamp < entries[2].timestamp
 
 
+# ── SOAR lifecycle events on the timeline (Phase 3.5) ───────────────
+#
+# SOAR audit rows are written against the run/action they describe
+# (target_type "soar_playbook_run" / "soar_action_execution"), never
+# against the incident — so the timeline resolves this incident's own
+# run/action ids and scopes the audit query to those. These cover that
+# the events arrive, that they're scoped, and that the near-
+# simultaneous pairs don't read as duplicates.
+
+
+def _soar_event(tenant_id, action: str, target_type: str, target_id, minute: int, details=None) -> AuditLog:
+    return AuditLog(
+        id=uuid.uuid4(), tenant_id=tenant_id, actor_user_id=None, action=action,
+        target_type=target_type, target_id=str(target_id), details=details or {},
+        created_at=datetime(2026, 8, 1, 10, minute, tzinfo=timezone.utc),
+    )
+
+
+def _mock_soar_sources(monkeypatch, *, run_ids, action_ids, incident_events=(), run_events=(), action_events=()):
+    """Mocks the timeline's three audit reads separately, keyed on the target_type each one asks for."""
+    monkeypatch.setattr("app.services.incident_timeline.get_alerts_by_ids", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        "app.services.incident_timeline.list_incident_audit_target_ids",
+        AsyncMock(return_value=(run_ids, action_ids)),
+    )
+    seen_calls: list[dict] = []
+
+    async def fake_list_events(db, tenant_id, **kwargs):
+        seen_calls.append(kwargs)
+        by_type = {
+            "incident": list(incident_events),
+            "soar_playbook_run": list(run_events),
+            "soar_action_execution": list(action_events),
+        }
+        return by_type.get(kwargs.get("target_type"), []), 0
+
+    monkeypatch.setattr("app.services.incident_timeline.list_events", fake_list_events)
+    return seen_calls
+
+
+@pytest.mark.asyncio
+async def test_soar_lifecycle_events_appear_on_the_incident_timeline(monkeypatch):
+    tenant_id = uuid.uuid4()
+    incident = _incident(tenant_id=tenant_id)
+    session = _FakeSession(existing_incidents=[incident])
+    run_id, action_id = uuid.uuid4(), uuid.uuid4()
+    _mock_soar_sources(
+        monkeypatch,
+        run_ids=[str(run_id)],
+        action_ids=[str(action_id)],
+        run_events=[
+            _soar_event(tenant_id, "soar.playbook.triggered", "soar_playbook_run", run_id, 0, {"playbook_id": "pb-x"}),
+            _soar_event(tenant_id, "soar.action.approved", "soar_playbook_run", run_id, 3, {"action_type": "isolate_endpoint"}),
+        ],
+        action_events=[
+            _soar_event(tenant_id, "soar.action.started", "soar_action_execution", action_id, 4),
+            _soar_event(tenant_id, "soar.action.succeeded", "soar_action_execution", action_id, 5),
+            _soar_event(tenant_id, "soar.action.verified", "soar_action_execution", action_id, 6),
+        ],
+    )
+
+    entries = await get_incident_timeline(session, tenant_id, incident.id)
+
+    actions = [e.data["action"] for e in entries]
+    assert actions == [
+        "soar.playbook.triggered",
+        "soar.action.approved",
+        "soar.action.started",
+        "soar.action.succeeded",
+        "soar.action.verified",
+    ]
+    assert all(e.type == "audit" for e in entries)
+
+
+@pytest.mark.asyncio
+async def test_soar_events_are_scoped_to_this_incidents_own_runs_and_actions(monkeypatch):
+    """
+    The isolation property: the audit query is narrowed to the run/
+    action ids resolved from THIS incident, so another incident's (or
+    another tenant's) SOAR events can't be pulled into this timeline.
+    """
+    tenant_id = uuid.uuid4()
+    incident = _incident(tenant_id=tenant_id)
+    session = _FakeSession(existing_incidents=[incident])
+    run_ids = [str(uuid.uuid4())]
+    action_ids = [str(uuid.uuid4()), str(uuid.uuid4())]
+    seen_calls = _mock_soar_sources(monkeypatch, run_ids=run_ids, action_ids=action_ids)
+
+    await get_incident_timeline(session, tenant_id, incident.id)
+
+    run_call = next(c for c in seen_calls if c.get("target_type") == "soar_playbook_run")
+    action_call = next(c for c in seen_calls if c.get("target_type") == "soar_action_execution")
+    assert run_call["target_ids"] == run_ids
+    assert action_call["target_ids"] == action_ids
+    # The incident-scoped read is untouched — still a single target_id, never widened.
+    incident_call = next(c for c in seen_calls if c.get("target_type") == "incident")
+    assert incident_call["target_id"] == str(incident.id)
+    assert "target_ids" not in incident_call
+
+
+@pytest.mark.asyncio
+async def test_near_simultaneous_soar_pairs_are_not_shown_twice(monkeypatch):
+    """
+    soar.playbook_run.created and soar.playbook.triggered describe one
+    moment, as do soar.action.queued and soar.action.started. Only one
+    of each reaches the narrative, so the timeline doesn't stutter.
+    """
+    tenant_id = uuid.uuid4()
+    incident = _incident(tenant_id=tenant_id)
+    session = _FakeSession(existing_incidents=[incident])
+    run_id, action_id = uuid.uuid4(), uuid.uuid4()
+    _mock_soar_sources(
+        monkeypatch,
+        run_ids=[str(run_id)],
+        action_ids=[str(action_id)],
+        run_events=[
+            _soar_event(tenant_id, "soar.playbook_run.created", "soar_playbook_run", run_id, 0),
+            _soar_event(tenant_id, "soar.playbook.triggered", "soar_playbook_run", run_id, 0),
+            _soar_event(tenant_id, "soar.action.queued", "soar_playbook_run", run_id, 1),
+        ],
+        action_events=[_soar_event(tenant_id, "soar.action.started", "soar_action_execution", action_id, 1)],
+    )
+
+    entries = await get_incident_timeline(session, tenant_id, incident.id)
+
+    assert [e.data["action"] for e in entries] == ["soar.playbook.triggered", "soar.action.started"]
+
+
+@pytest.mark.asyncio
+async def test_a_skipped_action_is_surfaced_so_the_omission_is_visible(monkeypatch):
+    """Phase 3.5's whole point: an action that never ran says so, in the place an analyst reads."""
+    tenant_id = uuid.uuid4()
+    incident = _incident(tenant_id=tenant_id)
+    session = _FakeSession(existing_incidents=[incident])
+    run_id = uuid.uuid4()
+    _mock_soar_sources(
+        monkeypatch,
+        run_ids=[str(run_id)],
+        action_ids=[],
+        run_events=[
+            _soar_event(
+                tenant_id, "soar.action.skipped", "soar_playbook_run", run_id, 1,
+                {"action_type": "enrich_indicator", "reason": "required_evidence_unavailable", "detail": "primary_ip"},
+            )
+        ],
+    )
+
+    entries = await get_incident_timeline(session, tenant_id, incident.id)
+
+    assert len(entries) == 1
+    assert entries[0].data["action"] == "soar.action.skipped"
+    assert entries[0].data["details"]["reason"] == "required_evidence_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_an_incident_with_no_soar_activity_issues_no_soar_audit_queries(monkeypatch):
+    tenant_id = uuid.uuid4()
+    incident = _incident(tenant_id=tenant_id)
+    session = _FakeSession(existing_incidents=[incident])
+    seen_calls = _mock_soar_sources(monkeypatch, run_ids=[], action_ids=[])
+
+    entries = await get_incident_timeline(session, tenant_id, incident.id)
+
+    assert entries == []
+    assert [c.get("target_type") for c in seen_calls] == ["incident"]
+
+
+@pytest.mark.asyncio
+async def test_a_soar_read_failure_still_returns_the_rest_of_the_timeline(monkeypatch):
+    """SOAR is one contributor to this narrative, not a prerequisite for it."""
+    tenant_id = uuid.uuid4()
+    incident = _incident(tenant_id=tenant_id)
+    session = _FakeSession(existing_incidents=[incident])
+    incident_event = _soar_event(tenant_id, "incident.created", "incident", incident.id, 0)
+    _mock_soar_sources(monkeypatch, run_ids=[], action_ids=[], incident_events=[incident_event])
+    monkeypatch.setattr(
+        "app.services.incident_timeline.list_incident_audit_target_ids",
+        AsyncMock(side_effect=RuntimeError("soar tables unavailable")),
+    )
+
+    entries = await get_incident_timeline(session, tenant_id, incident.id)
+
+    assert [e.data["action"] for e in entries] == ["incident.created"]
+
+
 @pytest.mark.asyncio
 async def test_audit_entry_data_carries_action_actor_and_details(monkeypatch):
     tenant_id = uuid.uuid4()

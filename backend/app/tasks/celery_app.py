@@ -23,6 +23,7 @@ celery_app = Celery(
         "app.tasks.reporting",
         "app.workers.correlation_worker",
         "app.workers.notification_worker",
+        "app.workers.soar_worker",
     ],
 )
 

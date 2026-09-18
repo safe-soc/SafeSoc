@@ -162,6 +162,55 @@ class Settings(BaseSettings):
     # 10.12s on this hardware).
     INVESTIGATION_LLM_MAX_OUTPUT_TOKENS: int = 120
 
+    # POST /api/v1/incidents/{id}/narrative (SS-109/110) has its own,
+    # more generous timeout rather than reusing
+    # INVESTIGATION_LLM_TIMEOUT_SECONDS unchanged, as originally assumed
+    # ("a call of the same shape/cost" — services/incident_narrative.py).
+    # Measured directly against this project's local Ollama (llama3.2:3b):
+    # a cold call (model not already resident in memory — the common
+    # case after Ollama's default ~5-minute idle unload, or after a
+    # different model was served in between) took 13.7s end-to-end,
+    # already past the 10s budget tuned for the interactive investigate
+    # chat's own SRS target; a warm call completed in ~3s. This is a
+    # one-shot "click to summarize" action, not a live chat turn, so a
+    # longer worst-case wait is an acceptable trade for not silently
+    # discarding a genuinely-available AI summary in favor of the
+    # (correct, but less specific) deterministic fallback on every cold
+    # start.
+    INCIDENT_NARRATIVE_LLM_TIMEOUT_SECONDS: int = 25
+
+    # The narrative endpoint previously reused
+    # INVESTIGATION_LLM_MAX_OUTPUT_TOKENS too (both clients.ollama.py's
+    # num_predict and clients.groq.py's max_tokens were hardcoded to
+    # that one setting) — fine for interactive chat's short, single-
+    # fact answers, but it cut the attack-chain narrative off mid-
+    # sentence on any incident with more than a couple of events, since
+    # that prompt explicitly asks for sequence + hosts/users +
+    # techniques + evidence + known/unknowns in one answer (see
+    # services/incident_narrative.py's _TASK_INSTRUCTIONS). This is a
+    # separate, larger budget for that one call site — both
+    # clients.ollama.generate()/clients.groq.generate() now take an
+    # explicit max_output_tokens argument instead of reading
+    # INVESTIGATION_LLM_MAX_OUTPUT_TOKENS directly, so each caller
+    # supplies its own. Not "unbounded": this endpoint keeps its own
+    # generous 25s timeout above (not the 10s interactive-chat budget),
+    # so a larger token cap doesn't reintroduce the latency problem
+    # INVESTIGATION_LLM_MAX_OUTPUT_TOKENS itself was added to prevent.
+    INCIDENT_NARRATIVE_LLM_MAX_OUTPUT_TOKENS: int = 350
+
+    # Investigation Sessions (persistent, incident-scoped Q&A —
+    # services/investigation_session.py) get their own timeout/token
+    # budget rather than reusing INCIDENT_NARRATIVE_LLM_* — deliberately
+    # NOT shared, even though both currently start from the same
+    # measured-safe values (25s / 350 tokens, see that setting's own
+    # comment above for the underlying measurement), so this call site
+    # can be tuned independently later (e.g. once its prompt grows
+    # confirmed-findings/open-questions/prior-turns context beyond what
+    # the one-shot narrative prompt carries) without touching the
+    # narrative endpoint's already-validated budget.
+    INVESTIGATION_SESSION_LLM_TIMEOUT_SECONDS: int = 25
+    INVESTIGATION_SESSION_LLM_MAX_OUTPUT_TOKENS: int = 350
+
     # ──────────────────────────────────────────────
     # Correlation Engine
     # ──────────────────────────────────────────────
@@ -209,7 +258,12 @@ class Settings(BaseSettings):
     # ──────────────────────────────────────────────
     # CORS
     # ──────────────────────────────────────────────
-    ALLOWED_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:5173"]
+    ALLOWED_ORIGINS: list[str] = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:5175",
+    "http://localhost:5176",]
 
     # ──────────────────────────────────────────────
     # CloudLens Integration

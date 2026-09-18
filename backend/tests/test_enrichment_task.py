@@ -57,7 +57,7 @@ async def test_enrich_alert_async_fetches_and_enriches_the_alert(monkeypatch):
     monkeypatch.setattr(enrichment_task, "get_alert_by_id", AsyncMock(return_value=_DOC))
     mock_enrich_log = AsyncMock()
     monkeypatch.setattr(enrichment_task, "enrich_log", mock_enrich_log)
-    monkeypatch.setattr(enrichment_task, "async_session_factory", lambda: _FakeSessionCM())
+    monkeypatch.setattr(enrichment_task, "worker_session_factory", lambda: _FakeSessionCM())
 
     await enrichment_task._enrich_alert_async("abc-123")
 
@@ -85,7 +85,7 @@ async def test_enrich_alert_async_no_ops_when_alert_not_found(monkeypatch):
 async def test_enrich_alert_async_persists_a_real_anomaly_score(monkeypatch):
     monkeypatch.setattr(enrichment_task, "get_alert_by_id", AsyncMock(return_value=_DOC))
     monkeypatch.setattr(enrichment_task, "enrich_log", AsyncMock())
-    monkeypatch.setattr(enrichment_task, "async_session_factory", lambda: _FakeSessionCM())
+    monkeypatch.setattr(enrichment_task, "worker_session_factory", lambda: _FakeSessionCM())
     mock_score_alert = AsyncMock(return_value=AnomalyResult(score=0.91, is_anomalous=True))
     monkeypatch.setattr(enrichment_task, "score_alert", mock_score_alert)
     mock_update = AsyncMock()
@@ -104,7 +104,7 @@ async def test_enrich_alert_async_does_not_persist_when_no_model_is_trained(monk
     """score_alert() returning None (no trained model yet) is the existing, documented degrade-gracefully case."""
     monkeypatch.setattr(enrichment_task, "get_alert_by_id", AsyncMock(return_value=_DOC))
     monkeypatch.setattr(enrichment_task, "enrich_log", AsyncMock())
-    monkeypatch.setattr(enrichment_task, "async_session_factory", lambda: _FakeSessionCM())
+    monkeypatch.setattr(enrichment_task, "worker_session_factory", lambda: _FakeSessionCM())
     monkeypatch.setattr(enrichment_task, "score_alert", AsyncMock(return_value=None))
     mock_update = AsyncMock()
     monkeypatch.setattr(enrichment_task, "update_alert_anomaly_score", mock_update)
@@ -120,7 +120,7 @@ async def test_enrich_alert_async_survives_an_anomaly_scoring_failure(monkeypatc
     monkeypatch.setattr(enrichment_task, "get_alert_by_id", AsyncMock(return_value=_DOC))
     mock_enrich_log = AsyncMock()
     monkeypatch.setattr(enrichment_task, "enrich_log", mock_enrich_log)
-    monkeypatch.setattr(enrichment_task, "async_session_factory", lambda: _FakeSessionCM())
+    monkeypatch.setattr(enrichment_task, "worker_session_factory", lambda: _FakeSessionCM())
     monkeypatch.setattr(enrichment_task, "score_alert", AsyncMock(side_effect=RuntimeError("redis unreachable")))
     mock_update = AsyncMock()
     monkeypatch.setattr(enrichment_task, "update_alert_anomaly_score", mock_update)
@@ -137,7 +137,7 @@ async def test_enrich_alert_async_scores_anomaly_per_tenant(monkeypatch):
     other_doc = {**_DOC, "alert_id": "xyz-999", "tenant_id": "other-tenant", "host_id": "H2"}
     monkeypatch.setattr(enrichment_task, "get_alert_by_id", AsyncMock(return_value=other_doc))
     monkeypatch.setattr(enrichment_task, "enrich_log", AsyncMock())
-    monkeypatch.setattr(enrichment_task, "async_session_factory", lambda: _FakeSessionCM())
+    monkeypatch.setattr(enrichment_task, "worker_session_factory", lambda: _FakeSessionCM())
     mock_score_alert = AsyncMock(return_value=None)
     monkeypatch.setattr(enrichment_task, "score_alert", mock_score_alert)
 

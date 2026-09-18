@@ -34,6 +34,7 @@ from app.schemas.incidents import (
     IncidentTimelineResponse,
     IncidentTransitionRequest,
 )
+from app.schemas.reports import InvestigationReportResponse
 from app.services.incident_evidence import IncidentEvidence, get_incident_evidence
 from app.services.incident_graph import IncidentGraph, get_incident_graph
 from app.services.incident_narrative import IncidentNarrativeResponse, get_incident_narrative
@@ -50,6 +51,7 @@ from app.services.incidents import (
     set_tags,
     transition_incident,
 )
+from app.services.investigation_report import generate_incident_report
 
 router = APIRouter(prefix="/api/v1/incidents", tags=["incidents"])
 
@@ -268,3 +270,28 @@ async def get_narrative(
         db, current_user.tenant_id, incident_id, actor_user_id=current_user.user_id
     )
     return IncidentNarrativeResponse(incident_id=incident_id, narrative=narrative, is_fallback=is_fallback, data=data)
+
+
+@router.post("/{incident_id}/report", response_model=InvestigationReportResponse)
+async def generate_report(
+    incident_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Generate a ~10-15 page PDF security investigation report scoped to
+    this incident (metadata, timeline, attack chain, MITRE mapping,
+    evidence, AI findings, recommendations — see
+    services/investigation_report.py). Every figure is drawn from the
+    same existing services this incident's own detail page reads, so
+    the report can never disagree with what the app already shows.
+    Download it via the returned download_url, which is the existing
+    GET /api/v1/reports/{filename} route (SS-054) — unmodified.
+    """
+    path, generated_at = await generate_incident_report(db, current_user.tenant_id, incident_id)
+    return InvestigationReportResponse(
+        filename=path.name,
+        generated_at=generated_at,
+        size_bytes=path.stat().st_size,
+        download_url=f"/api/v1/reports/{path.name}",
+    )

@@ -52,6 +52,17 @@ export interface AlertSearchResponse {
   alerts: Alert[];
 }
 
+// GET /api/v1/alerts/summary — severity breakdown for the SAME
+// tenant+time-window population GET /api/v1/alerts pages through, via
+// an aggregation rather than a page of documents, so it isn't capped
+// by that endpoint's `size` limit. Only severities with at least one
+// matching alert appear as keys.
+export interface AlertSeveritySummary {
+  total: number;
+  timerange_hours: number;
+  by_severity: Partial<Record<Severity, number>>;
+}
+
 export type IncidentStatus = 'open' | 'investigating' | 'resolved' | 'false_positive';
 
 // Mirrors backend/app/services/incidents.py's _ALLOWED_TRANSITIONS
@@ -152,9 +163,67 @@ export interface CategoryTrend {
   change_pct: number | null;
 }
 
+export interface ThreatAnalyticsKPIs {
+  total_incidents: number;
+  open_incidents: number;
+  critical_high_incidents: number;
+  // Incidents whose severity couldn't be resolved from their linked
+  // alerts (e.g. pruned by OpenSearch retention) — excluded from
+  // critical_high_incidents/severity_breakdown rather than guessed.
+  incidents_with_unknown_severity: number;
+  affected_endpoints: number;
+  affected_users: number;
+  detection_categories: number;
+}
+
+export interface DailyIncidentCount {
+  date: string; // YYYY-MM-DD, UTC
+  count: number;
+}
+
+export interface StatusCount {
+  status: IncidentStatus;
+  count: number;
+}
+
+export interface SeverityCount {
+  severity: Severity;
+  count: number;
+}
+
+export interface MitreTechniqueCount {
+  technique_id: string;
+  // null when no alert carrying this technique also carried a tactic string.
+  tactic: string | null;
+  incident_count: number;
+  // Capped, real ids/hosts only — never a fabricated "N more" placeholder.
+  related_incident_ids: string[];
+  affected_endpoints: string[];
+}
+
+export interface AffectedAsset {
+  host_id: string;
+  incident_count: number;
+  // null when this host has no Endpoint row yet (never scored).
+  highest_risk: Severity | null;
+  // null when none of this host's incidents in-window had a category
+  // (e.g. all manually created).
+  dominant_category: string | null;
+}
+
 export interface ThreatAnalyticsResponse {
   window_days: number;
   trends: CategoryTrend[];
+  // false when the ENTIRE previous window had no detected activity at
+  // all (e.g. a freshly seeded dataset) — show an explicit "no
+  // previous-period data" state rather than implying 0%/no change.
+  has_previous_period_data: boolean;
+  kpis: ThreatAnalyticsKPIs;
+  daily_trend: DailyIncidentCount[];
+  status_breakdown: StatusCount[];
+  severity_breakdown: SeverityCount[];
+  mitre_techniques: MitreTechniqueCount[];
+  affected_assets: AffectedAsset[];
 }
 
 // GET /api/v1/incidents/{id}/evidence (SS-100/101) — distinct entities
@@ -236,4 +305,274 @@ export interface Endpoint {
   risk_score: number;
   risk_level: Severity;
   updated_at: string;
+}
+
+// GET /api/v1/endpoints/{host_id}/software — demo-simulation software/
+// vulnerability inventory. `is_synthetic: false` means `id` is a real,
+// publicly-documented CVE genuinely known to affect this exact
+// software+version; `true` means a clearly-labeled demo-only finding
+// (id formatted "DEMO-VULN-####"), never a real vulnerability database entry.
+export type SoftwareCategory = 'operating_system' | 'browser' | 'productivity' | 'runtime' | 'remote_admin' | 'security' | 'other';
+
+export interface Vulnerability {
+  id: string;
+  severity: Severity;
+  title: string;
+  is_synthetic: boolean;
+}
+
+export interface EndpointSoftware {
+  id: string;
+  host_id: string;
+  name: string;
+  version: string;
+  category: SoftwareCategory;
+  vulnerabilities: Vulnerability[];
+  updated_at: string;
+}
+
+// POST /api/v1/incidents/{id}/report, POST /api/v1/endpoints/{host_id}/report
+// — generates a PDF investigation report; download_url is the existing
+// GET /api/v1/reports/{filename} route (SS-054), unchanged.
+export interface InvestigationReportResponse {
+  filename: string;
+  generated_at: string;
+  size_bytes: number;
+  download_url: string;
+}
+
+// Persistent, incident-scoped Investigation Sessions
+// (/api/v1/incidents/{id}/investigation/...). Distinct from the
+// general Investigate page's session_id (ephemeral, Redis-backed,
+// 10-minute TTL) — these survive a page refresh or a return days later.
+export type FindingCategory = 'confirmed' | 'hypothesis' | 'open_question';
+export type FindingOrigin = 'analyst' | 'ai_suggested';
+export type InvestigationActionStatus = 'open' | 'in_progress' | 'completed';
+
+export interface InvestigationSessionSummary {
+  id: string;
+  incident_id: string;
+  created_by_user_id: string;
+  created_at: string;
+}
+
+export interface InvestigationTurn {
+  id: string;
+  asked_by_user_id: string;
+  question: string;
+  answer: string;
+  is_fallback: boolean;
+  created_at: string;
+}
+
+export interface InvestigationFinding {
+  id: string;
+  text: string;
+  category: FindingCategory;
+  origin: FindingOrigin;
+  created_by_user_id: string | null;
+  confirmed_by_user_id: string | null;
+  confirmed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InvestigationAction {
+  id: string;
+  description: string;
+  status: InvestigationActionStatus;
+  created_by_user_id: string;
+  completed_by_user_id: string | null;
+  completed_at: string | null;
+  created_at: string;
+}
+
+export interface InvestigationNote {
+  id: string;
+  author_user_id: string;
+  body: string;
+  created_at: string;
+}
+
+// The live "KNOWN" list — always freshly retrieved, never a stored snapshot.
+export interface InvestigationEvidenceSummary {
+  hosts: string[];
+  users: string[];
+  mitre_techniques: string[];
+  alert_count: number;
+}
+
+export interface InvestigationSessionDetail {
+  id: string;
+  incident_id: string;
+  created_by_user_id: string;
+  created_at: string;
+  evidence: InvestigationEvidenceSummary;
+  turns: InvestigationTurn[];
+  findings: InvestigationFinding[];
+  actions: InvestigationAction[];
+  notes: InvestigationNote[];
+}
+
+export interface AskQuestionResponse {
+  turn: InvestigationTurn;
+}
+
+// GET /api/v1/compliance/requirements, GET /api/v1/compliance/requirements/{id}
+// — Indian regulatory compliance evidence mapping (DPDP Act 2023, CERT-In
+// Directions 28.04.2022). Every status is computed live from existing
+// SafeSOC evidence sources; NONE of these values is ever a legal-
+// compliance determination — see docs/compliance.md. The frontend must
+// only ever render the four approved phrasings (COMPLIANCE_STATUS_LABELS
+// below) — never "compliant"/"non-compliant" in any form.
+export type ComplianceStatus = 'evidence_available' | 'partially_supported' | 'gap' | 'not_assessable';
+
+export type ComplianceFramework = 'dpdp_act_2023' | 'cert_in_directions_2022' | 'dpiit';
+
+export interface ComplianceRequirementSummary {
+  id: string;
+  framework: ComplianceFramework;
+  title: string;
+  reference: string;
+  status: ComplianceStatus;
+  evidence_summary: string;
+  evidence_count: number;
+  last_evaluated: string;
+}
+
+export interface ComplianceFrameworkSummary {
+  framework: ComplianceFramework;
+  title: string;
+  total_requirements: number;
+  evidence_available: number;
+  partially_supported: number;
+  gaps: number;
+  not_assessable: number;
+}
+
+export interface CompliancePostureResponse {
+  requirements_assessed: number;
+  evidence_available: number;
+  partially_supported: number;
+  gaps: number;
+  not_assessable: number;
+  frameworks: ComplianceFrameworkSummary[];
+  requirements: ComplianceRequirementSummary[];
+}
+
+export interface RelatedIncidentRef {
+  id: string;
+  status: IncidentStatus;
+  category: string | null;
+  created_at: string;
+}
+
+export interface RelatedInvestigationRef {
+  session_id: string;
+  incident_id: string;
+  created_at: string;
+}
+
+// SOAR (Security Orchestration, Automation and Response) — GET
+// /api/v1/soar/runs, GET /api/v1/incidents/{id}/soar/runs[/{run_id}],
+// POST .../actions/{action_id}/approve|reject. Every action here runs
+// only against SafeSOC's own simulated adapters — see the Simulation
+// Mode banner on the /soar page; nothing here ever reaches real
+// external infrastructure.
+export type SoarActionType =
+  | 'collect_additional_evidence'
+  | 'create_investigation_action'
+  | 'enrich_indicator'
+  | 'add_incident_note'
+  | 'increase_incident_priority'
+  | 'isolate_endpoint'
+  | 'disable_account'
+  | 'block_indicator'
+  | 'terminate_process'
+  | 'revoke_credentials';
+
+export type AutonomyClass = 'automatic' | 'approval_required';
+
+export type SoarRunStatus = 'pending' | 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled';
+
+export type SoarActionStatus = 'pending' | 'awaiting_approval' | 'approved' | 'rejected' | 'executing' | 'succeeded' | 'failed';
+
+export type SoarTriggerSource = 'auto_trigger' | 'manual' | 'ai_recommended';
+
+export type RecommendationSource = 'analyst' | 'ai_suggested' | 'playbook_auto';
+
+export type SoarVerificationStatus = 'not_verified' | 'verified' | 'verification_failed';
+
+export interface SoarActionExecution {
+  id: string;
+  action_type: SoarActionType;
+  parameters: Record<string, unknown>;
+  autonomy_class: AutonomyClass;
+  recommended_by: RecommendationSource;
+  status: SoarActionStatus;
+  approved_by_user_id: string | null;
+  approved_at: string | null;
+  rejected_by_user_id: string | null;
+  rejected_at: string | null;
+  decision_reason: string | null;
+  executed_at: string | null;
+  result: Record<string, unknown> | null;
+  verification_status: SoarVerificationStatus;
+  verified_at: string | null;
+  created_at: string;
+}
+
+export interface SoarPlaybookRunSummary {
+  id: string;
+  incident_id: string;
+  playbook_id: string;
+  triggered_by: SoarTriggerSource;
+  status: SoarRunStatus;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+}
+
+export interface SoarPlaybookRunDetail extends SoarPlaybookRunSummary {
+  actions: SoarActionExecution[];
+}
+
+export interface ApprovalDecisionRequest {
+  reason?: string;
+}
+
+// GET /api/v1/soar/playbooks — the static playbook catalog, same for every tenant.
+export interface PlaybookStepResponse {
+  action_type: SoarActionType;
+  parameter_field: string;
+  static_parameters: Record<string, unknown>;
+}
+
+export interface PlaybookResponse {
+  id: string;
+  title: string;
+  trigger_pattern: string;
+  trigger_min_confidence: number;
+  steps: PlaybookStepResponse[];
+}
+
+export interface ComplianceRequirementDetail {
+  id: string;
+  framework: ComplianceFramework;
+  title: string;
+  reference: string;
+  authoritative_source: string;
+  requirement_summary: string;
+  what_safesoc_can_observe: string;
+  what_safesoc_cannot_verify: string;
+  recommended_action: string;
+  status: ComplianceStatus;
+  evidence_summary: string;
+  evidence_count: number;
+  // Requirement-specific structured numbers (e.g. {"audit_events": 12}
+  // or {"configured_retention_days": 90, "required_retention_days": 180}).
+  metrics: Record<string, number>;
+  last_evaluated: string;
+  related_incidents: RelatedIncidentRef[];
+  related_investigations: RelatedInvestigationRef[];
 }

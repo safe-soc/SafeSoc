@@ -13,6 +13,9 @@
 
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import GenerateReportButton from '../components/GenerateReportButton';
+import IncidentInvestigationPanel from '../components/IncidentInvestigationPanel';
+import SoarResponsePanel from '../components/SoarResponsePanel';
 import Layout from '../components/Layout';
 import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
@@ -21,6 +24,7 @@ import MitreBadge from '../components/MitreBadge';
 import IncidentTimeline from '../components/IncidentTimeline';
 import EvidenceExplorer from '../components/EvidenceExplorer';
 import AttackChainGraph from '../components/AttackChainGraph';
+import AttackChainGraphView from '../components/AttackChainGraphView';
 import Spinner from '../components/Spinner';
 import { api } from '../lib/api';
 import { fetchAlertLookup, type AlertLookup } from '../lib/alertLookup';
@@ -249,11 +253,12 @@ export default function IncidentDetail() {
             </>
           }
           actions={
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
               {incident.confidence != null && (
                 <span className="text-xs text-slate-500">{Math.round(incident.confidence * 100)}% confidence</span>
               )}
               <StatusBadge status={incident.status} />
+              <GenerateReportButton scope="incident" id={incident.id} />
             </div>
           }
         />
@@ -282,7 +287,16 @@ export default function IncidentDetail() {
           </div>
         ) : narrative ? (
           <div className="mt-3">
-            <p className="text-sm text-slate-200">{narrative.narrative}</p>
+            {narrative.is_fallback ? (
+              <span className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-800/80 px-2 py-0.5 text-[11px] text-slate-400">
+                Deterministic summary
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 rounded-full border border-blue-700/40 bg-blue-500/10 px-2 py-0.5 text-[11px] text-blue-300">
+                AI-generated summary
+              </span>
+            )}
+            <p className="mt-2 text-sm text-slate-200">{narrative.narrative}</p>
             {narrative.is_fallback && (
               <p className="mt-2 text-xs text-slate-500">
                 The AI summarizer was unavailable — this is a deterministic summary of the same data.
@@ -293,6 +307,9 @@ export default function IncidentDetail() {
           <p className="mt-3 text-sm text-slate-500">Generate an AI-written summary of this incident's attack chain.</p>
         )}
       </section>
+
+      {/* Investigation session — persistent, incident-scoped Q&A/findings/actions/notes */}
+      {incidentId && <IncidentInvestigationPanel incidentId={incidentId} />}
 
       {/* Lifecycle */}
       <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
@@ -353,6 +370,9 @@ export default function IncidentDetail() {
           )}
         </div>
       </section>
+
+      {/* SOAR response — playbook runs, action execution timeline, human approval */}
+      {incidentId && <SoarResponsePanel incidentId={incidentId} />}
 
       {/* Tags */}
       <section className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
@@ -415,7 +435,17 @@ export default function IncidentDetail() {
       {/* Attack-chain graph */}
       <section className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
         <h2 className="text-sm font-semibold text-slate-200">Attack Chain</h2>
-        <div className="mt-3">{graph && <AttackChainGraph graph={graph} />}</div>
+        <div className="mt-3">{graph && <AttackChainGraphView graph={graph} />}</div>
+        {graph && graph.edges.length > 0 && (
+          <details className="mt-3 group">
+            <summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-300">
+              Show as timeline ({graph.edges.length} connection{graph.edges.length === 1 ? '' : 's'})
+            </summary>
+            <div className="mt-3">
+              <AttackChainGraph graph={graph} />
+            </div>
+          </details>
+        )}
       </section>
 
       {/* Linked alerts */}

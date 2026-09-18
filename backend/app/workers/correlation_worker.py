@@ -5,19 +5,29 @@ log is accepted by POST /api/v1/ingest, so attack chains are detected
 within seconds of ingestion (SRS §3.3), not on a delay. Each detected
 chain above the confidence threshold is turned into exactly one
 incident (SS-031), deduplicated rather than created per re-detection.
+
+SOAR Phase 2: right after create_or_merge_incident, also evaluates the
+static playbook catalog against the same detected chain
+(services.soar.evaluate_triggers) and queues any AUTOMATIC actions it
+creates for execution (workers.soar_worker) — the integration point
+the SOAR architecture calls for, alongside the pre-existing
+notify_attack_chain/publish_event calls, not a parallel incident-
+creation path.
 """
 
 import asyncio
 import uuid
 
 from app.db.opensearch import get_alert_by_id
-from app.db.postgresql import async_session_factory, engine
+from app.db.postgresql import worker_session_factory
+from app.services import soar as soar_service
 from app.services.correlation import add_event, evaluate_host
 from app.services.incidents import create_or_merge_incident
 from app.services.notifications import notify_attack_chain
 from app.services.realtime import publish_event
 from app.tasks.celery_app import celery_app
 from app.utils.logger import get_logger
+from app.workers.soar_worker import execute_soar_action
 
 logger = get_logger(__name__)
 
@@ -53,50 +63,87 @@ async def _evaluate_correlation_async(alert_id: str) -> None:
     if not chains:
         return
 
-    # Same worker-shared-engine reliability requirement as tasks/scoring.py
-    # and tasks/reporting.py (see scoring.py's own comment for the full
-    # explanation): dispose both before first use and after finishing,
-    # since this Celery worker process's asyncpg connection pool is
-    # shared across every task type it runs and can be left poisoned by
-    # any of them between invocations — observed live under a realistic
-    # burst of concurrent ingestion (SS-065's demo mode): correlation
-    # tasks failed with "attached to a different loop" until this was
-    # added. Scoped to just this Postgres-touching block, not the whole
-    # function, since correlation runs once per *alert* — unlike
-    # scoring/reporting's fixed schedule, unconditionally disposing on
-    # every invocation (most of which detect no chain and never touch
-    # Postgres at all) would be wasteful.
-    await engine.dispose()
-    try:
-        async with async_session_factory() as db:
-            for chain in chains:
-                incident = await create_or_merge_incident(db, uuid.UUID(tenant_id), host_id, chain)
-                logger.info(
-                    "Correlation chain detected",
-                    tenant_id=tenant_id,
-                    host_id=host_id,
-                    pattern=chain.pattern.value,
-                    confidence=round(chain.confidence, 2),
-                    alert_ids=list(chain.alert_ids),
-                    mitre_technique_ids=list(chain.mitre_technique_ids),
-                    mitre_tactic=chain.mitre_tactic,
-                    incident_id=str(incident.id),
+    # Every AUTOMATIC SOAR action id queued below is collected here and
+    # only ever .delay()'d AFTER this task's session has committed and
+    # closed — never while it is still open. A queued execute_soar_action
+    # task can start within milliseconds on a different Celery prefork
+    # subprocess, and it reads the run and actions this session is still
+    # writing; queuing early raced that write (observed live as an
+    # AWAITING_APPROVAL transition that never persisted).
+    #
+    # The session comes from worker_session_factory (NullPool) — see
+    # db/postgresql.py. Connections no longer outlive the event loop that
+    # opened them, which is what the dispose-before-and-after handling
+    # here used to be working around.
+    queued_action_ids: list[uuid.UUID] = []
+
+    async with worker_session_factory() as db:
+        for chain in chains:
+            incident = await create_or_merge_incident(db, uuid.UUID(tenant_id), host_id, chain)
+            logger.info(
+                "Correlation chain detected",
+                tenant_id=tenant_id,
+                host_id=host_id,
+                pattern=chain.pattern.value,
+                confidence=round(chain.confidence, 2),
+                alert_ids=list(chain.alert_ids),
+                mitre_technique_ids=list(chain.mitre_technique_ids),
+                mitre_tactic=chain.mitre_tactic,
+                incident_id=str(incident.id),
+            )
+            # Real-time Telegram notification (SS-056) — a no-op if
+            # TELEGRAM_BOT_TOKEN/CHAT_ID aren't configured (SS-055),
+            # same as the critical-alert path below never blocks anything.
+            notify_attack_chain(host_id, chain, incident.id)
+            # Live dashboard push (SS-063) — the frontend's open dashboard
+            # updates without a manual refresh (AC).
+            await publish_event(
+                tenant_id,
+                "chain_detected",
+                {
+                    "incident_id": str(incident.id),
+                    "host_id": host_id,
+                    "pattern": chain.pattern.value,
+                    "confidence": round(chain.confidence, 2),
+                },
+            )
+            # SOAR Phase 2: match this detected pattern against the
+            # static playbook catalog and queue any AUTOMATIC actions
+            # it produces. evaluate_triggers is itself idempotent per
+            # (incident, playbook) — a re-detection of the same
+            # evolving chain that merges into this same incident
+            # again will not create a second run.
+            # Phase 3.5: SOAR is a RESPONSE layer bolted onto the
+            # detection pipeline — it must never be able to take
+            # detection down with it. evaluate_triggers already
+            # handles the expected degradations itself (incomplete
+            # evidence, unvalidatable parameters) without raising;
+            # this guard exists for everything else, so an
+            # unforeseen SOAR fault can't cost us the remaining
+            # chains in this batch, their notifications, or their
+            # dashboard pushes. The rollback matters: without it a
+            # failed statement leaves this session unusable and the
+            # next chain's create_or_merge_incident would fail too.
+            try:
+                trigger_result = await soar_service.evaluate_triggers(
+                    db, uuid.UUID(tenant_id), incident.id, chain.pattern, chain.confidence
                 )
-                # Real-time Telegram notification (SS-056) — a no-op if
-                # TELEGRAM_BOT_TOKEN/CHAT_ID aren't configured (SS-055),
-                # same as the critical-alert path below never blocks anything.
-                notify_attack_chain(host_id, chain, incident.id)
-                # Live dashboard push (SS-063) — the frontend's open dashboard
-                # updates without a manual refresh (AC).
-                await publish_event(
-                    tenant_id,
-                    "chain_detected",
-                    {
-                        "incident_id": str(incident.id),
-                        "host_id": host_id,
-                        "pattern": chain.pattern.value,
-                        "confidence": round(chain.confidence, 2),
-                    },
+                if trigger_result is not None:
+                    run, automatic_action_ids = trigger_result
+                    queued_action_ids.extend(automatic_action_ids)
+                    logger.info(
+                        "SOAR playbook triggered", incident_id=str(incident.id), playbook_id=run.playbook_id,
+                        run_id=str(run.id), run_status=run.status.value, queued_actions=len(automatic_action_ids),
+                    )
+            except Exception as e:
+                await db.rollback()
+                logger.error(
+                    "SOAR trigger evaluation failed — correlation continues",
+                    tenant_id=tenant_id, incident_id=str(incident.id), pattern=chain.pattern.value,
+                    error_type=type(e).__name__, error=str(e),
                 )
-    finally:
-        await engine.dispose()
+    # Deferred to here — see the comment above queued_action_ids: this
+    # task's own DB session is fully closed before any queued action is
+    # allowed to start.
+    for action_id in queued_action_ids:
+        execute_soar_action.delay(str(action_id))

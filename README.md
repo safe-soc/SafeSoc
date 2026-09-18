@@ -234,6 +234,18 @@ python injector/injector.py --scenario brute_force
 
 `injector.py` logs in automatically (defaulting to the demo tenant above); pass `--tenant-id`/`--email`/`--password` to target a different user, or `--no-auth` to send the legacy unauthenticated payload shape against a backend with auth disabled. Run `python injector/injector.py --help` for the full option list.
 
+### Full SOC Simulation (Presentation Demo Data)
+
+For a whole populated environment — dozens of endpoints/users, realistic severity distribution, multiple coherent attack chains with real incidents, and a software/vulnerability inventory — rather than `demo.py`'s smaller quick-start dataset, use the deterministic simulation generator:
+
+```bash
+python injector/simulate.py --reset --seed   # clean slate, then populate everything
+python injector/simulate.py --seed           # populate only (default action, safe to re-run)
+python injector/simulate.py --reset          # wipe this simulation's data only
+```
+
+Same seeded RNG every run (`SIMULATION_SEED` in `injector/simulate.py`) — the same hosts, users, scenario placements, and severity/vulnerability distribution every time, though absolute timestamps are anchored to "now" so re-running on a different day won't byte-for-byte match. Prints the same demo tenant login as `demo.py` above. **All data it generates is 100% synthetic** — see the module docstring at the top of `injector/simulate.py` for the full disclosure (real CVE ids used are genuine, publicly-documented vulnerabilities attached to intentionally old software versions for realism, never a claim that they were found on a real machine).
+
 ### Example: ingest a log directly
 
 ```bash

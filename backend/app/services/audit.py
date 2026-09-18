@@ -53,6 +53,7 @@ async def list_events(
     tenant_id: uuid.UUID,
     target_type: Optional[str] = None,
     target_id: Optional[str] = None,
+    target_ids: Optional[list[str]] = None,
     page: int = 1,
     size: int = 50,
 ) -> tuple[list[AuditLog], int]:
@@ -60,12 +61,23 @@ async def list_events(
     List a tenant's audit events, optionally scoped to one target
     entity, newest first — mirrors services/incidents.py:list_incidents's
     pagination pattern exactly.
+
+    `target_ids` scopes to SEVERAL targets of the same target_type in
+    one query, for callers holding a set of related ids rather than a
+    single one (services/incident_timeline.py, gathering the SOAR runs
+    and action executions belonging to one incident). An empty list
+    matches nothing, which is the honest reading of "scope this to
+    these targets" when there are none — never silently widened to
+    "every target in the tenant". Combining it with `target_id` narrows
+    to the intersection; callers pass one or the other.
     """
     filters = [AuditLog.tenant_id == tenant_id]
     if target_type is not None:
         filters.append(AuditLog.target_type == target_type)
     if target_id is not None:
         filters.append(AuditLog.target_id == target_id)
+    if target_ids is not None:
+        filters.append(AuditLog.target_id.in_(target_ids))
 
     count_result = await db.execute(select(func.count()).select_from(AuditLog).where(*filters))
     total = count_result.scalar_one()

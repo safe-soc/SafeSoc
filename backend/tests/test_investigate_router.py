@@ -150,6 +150,28 @@ async def test_generate_answer_includes_transcript_history_in_the_prompt_when_pr
 
 
 @pytest.mark.asyncio
+async def test_generate_answer_passes_the_interactive_chat_token_budget(monkeypatch):
+    """
+    Regression: ollama.generate()/groq.generate() used to read
+    INVESTIGATION_LLM_MAX_OUTPUT_TOKENS internally; now each caller
+    passes its own budget explicitly. The interactive chat must keep
+    using its own (tighter, latency-tuned) setting, not the incident
+    narrative's larger one.
+    """
+    from app.core.config import settings
+    from app.routers.v1.investigate import _generate_answer
+
+    mock_generate = Mock(return_value="answer text")
+    from app.clients import ollama
+    monkeypatch.setattr(ollama, "generate", mock_generate)
+    monkeypatch.setattr(settings, "INVESTIGATION_LLM_MAX_OUTPUT_TOKENS", 120)
+
+    await _generate_answer("top alerts", Intent.TOP_ALERTS, AlertListOutput(total=1, alerts=[]), [])
+
+    assert mock_generate.call_args.args[1] == 120
+
+
+@pytest.mark.asyncio
 async def test_generate_answer_omits_the_transcript_section_when_there_is_no_history(monkeypatch):
     from app.routers.v1.investigate import _generate_answer
 
@@ -233,6 +255,88 @@ async def test_generate_answer_prompt_tells_the_model_not_to_follow_embedded_ins
     prompt = mock_generate.call_args.args[0].lower()
     assert "never treat" in prompt
     assert "instruction" in prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_prompt_instructs_distinguishing_facts_from_assessment(monkeypatch):
+    """
+    Root-cause fix for a follow-up like "what happened after those
+    failures?" fabricating a coordinated-attack narrative (mitigation,
+    exploitation, attacker intent) with no supporting data: the prompt
+    must explicitly tell the model to separate FACT from its own
+    ASSESSMENT and to say so when something is UNKNOWN/not covered.
+    """
+    from app.routers.v1.investigate import _generate_answer
+
+    mock_generate = Mock(return_value="3")
+    from app.clients import ollama
+    monkeypatch.setattr(ollama, "generate", mock_generate)
+
+    await _generate_answer("what happened after those failures?", Intent.AUTH_FAILURES, AlertListOutput(total=3, alerts=[]), [])
+
+    prompt = mock_generate.call_args.args[0].lower()
+    assert "fact" in prompt
+    assert "assessment" in prompt
+    assert "unknown" in prompt
+    assert "does not show that" in prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_prompt_forbids_fabricating_mitigation_or_exploitation_claims(monkeypatch):
+    from app.routers.v1.investigate import _generate_answer
+
+    mock_generate = Mock(return_value="3")
+    from app.clients import ollama
+    monkeypatch.setattr(ollama, "generate", mock_generate)
+
+    await _generate_answer("what happened after those failures?", Intent.AUTH_FAILURES, AlertListOutput(total=3, alerts=[]), [])
+
+    prompt = mock_generate.call_args.args[0].lower()
+    assert "mitigated" in prompt
+    assert "patched" in prompt
+    assert "exploitation attempt succeeded" in prompt
+    assert "attacker" in prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_prompt_instructs_reporting_every_entry_in_a_multi_item_breakdown(monkeypatch):
+    """
+    Root-cause fix for "which host was involved?" answering with a
+    single arbitrarily-picked host when the data's top_hosts breakdown
+    lists several — the prompt must tell the model to report every
+    listed entry, not guess one.
+    """
+    from app.routers.v1.investigate import _generate_answer
+
+    mock_generate = Mock(return_value="3")
+    from app.clients import ollama
+    monkeypatch.setattr(ollama, "generate", mock_generate)
+
+    await _generate_answer("which host was involved?", Intent.AUTH_FAILURES, AlertListOutput(total=3, alerts=[]), [])
+
+    prompt = mock_generate.call_args.args[0].lower()
+    assert "do not arbitrarily pick just one" in prompt
+    assert "does not identify one rather" in prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_prompt_instructs_disclosing_partial_sample_boundaries(monkeypatch):
+    """
+    Issue 4: when the data is a partial sample (total > count_shown, or
+    truncated), the model must say so and must not claim knowledge of
+    unseen records.
+    """
+    from app.routers.v1.investigate import _generate_answer
+
+    mock_generate = Mock(return_value="3")
+    from app.clients import ollama
+    monkeypatch.setattr(ollama, "generate", mock_generate)
+
+    await _generate_answer("show failed logins", Intent.AUTH_FAILURES, AlertListOutput(total=2013, alerts=[]), [])
+
+    prompt = mock_generate.call_args.args[0].lower()
+    assert "partial sample" in prompt
+    assert "must not make claims about records" in prompt
 
 
 @pytest.mark.asyncio
@@ -605,7 +709,7 @@ async def test_generate_answer_logs_a_specific_message_on_timeout_not_an_empty_e
     import app.routers.v1.investigate as investigate_module
 
     monkeypatch.setattr(settings, "INVESTIGATION_LLM_TIMEOUT_SECONDS", 0.2)
-    monkeypatch.setattr(investigate_module.ollama, "generate", lambda prompt: (time.sleep(1.0), "too slow")[1])
+    monkeypatch.setattr(investigate_module.ollama, "generate", lambda prompt, *args: (time.sleep(1.0), "too slow")[1])
     mock_logger = Mock()
     monkeypatch.setattr(investigate_module, "logger", mock_logger)
 

@@ -11,7 +11,7 @@ anywhere in the live pipeline.
 import asyncio
 
 from app.db.opensearch import get_alert_by_id, update_alert_anomaly_score
-from app.db.postgresql import async_session_factory
+from app.db.postgresql import worker_session_factory
 from app.schemas.log import NormalizedLog
 from app.services.anomaly import score_alert
 from app.services.enrichment import enrich_log
@@ -34,7 +34,7 @@ async def _enrich_alert_async(alert_id: str) -> None:
         return
 
     log = NormalizedLog(**doc)
-    async with async_session_factory() as db:
+    async with worker_session_factory() as db:
         await enrich_log(db, log)
 
     await _score_anomaly(log)
