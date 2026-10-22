@@ -16,11 +16,17 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
-    env_file=".env",
-    env_file_encoding="utf-8",
-    case_sensitive=False,
-    extra="ignore",
-)
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+        # A blank value in .env means "use the default", not "use an
+        # empty string" — .env.example ships several of those
+        # deliberately (ANOMALY_MODEL_PATH=, REPORT_OUTPUT_DIR=). Now
+        # that docker-compose loads .env into the containers, without
+        # this those blanks would override real defaults with "".
+        env_ignore_empty=True,
+    )
 
     # ──────────────────────────────────────────────
     # Application
@@ -131,7 +137,21 @@ class Settings(BaseSettings):
     # was ruled out on quality grounds, not just latency.
     OLLAMA_MODEL: str = "llama3.2:3b"
     GROQ_API_KEY: str = ""
-    GROQ_MODEL: str = "mixtral-8x7b-32768"
+    # Groq retires hosted models on a published schedule, and a request
+    # for a retired id is a hard error, not a fallback: mixtral-8x7b-32768
+    # was shut down on 2025-03-20, and llama-3.3-70b-versatile /
+    # llama-3.1-8b-instant on 2026-08-16. openai/gpt-oss-120b is Groq's
+    # own listed replacement (openai/gpt-oss-20b is the smaller sibling).
+    GROQ_MODEL: str = "openai/gpt-oss-120b"
+    # gpt-oss are REASONING models: they spend tokens thinking before
+    # answering, and that spend comes out of the same completion budget
+    # as the answer. "low" keeps the thinking short, and the headroom is
+    # added to the caller's max_output_tokens so a small answer budget
+    # (120 tokens for a chat turn) isn't consumed entirely by reasoning,
+    # which returns an empty completion. Both are only used for gpt-oss
+    # models — see clients/groq.py::build_payload.
+    GROQ_REASONING_EFFORT: str = "low"       # low | medium | high
+    GROQ_REASONING_TOKEN_HEADROOM: int = 512
 
     @property
     def ollama_url(self) -> str:

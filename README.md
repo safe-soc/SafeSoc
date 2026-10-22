@@ -271,7 +271,7 @@ curl -X POST http://localhost:8000/api/v1/ingest \
 
 ## AI Investigation Assistant
 
-`POST /api/v1/investigate` answers plain-English questions about a tenant's security data — "show failed logins," "highest risk endpoint," "active incidents," "attack chain summary," and more — across 8 supported intents. A query is classified, routed to the matching MCP tool (which wraps an existing service — alert search, risk scoring, incident listing, etc., not a separate data path), and answered by a local (Ollama) or cloud (Groq) LLM, configurable via `LLM_PROVIDER`. Follow-up questions carry conversation context forward automatically (Redis-backed session state), so "what about yesterday?" resolves against what was already discussed.
+`POST /api/v1/investigate` answers plain-English questions about a tenant's security data — "show failed logins," "highest risk endpoint," "active incidents," "attack chain summary," and more — across 8 supported intents. A query is classified, routed to the matching MCP tool (which wraps an existing service — alert search, risk scoring, incident listing, etc., not a separate data path), and answered by a local (Ollama) or cloud (Groq) LLM. Set `LLM_PROVIDER` — plus `GROQ_API_KEY` for the cloud path — in the **root `.env`**: `docker compose` loads that file into the `backend`, `worker` and `beat` containers, so all three use the same provider and model. With no provider configured or reachable, answers fall back to templated text instead of failing. Follow-up questions carry conversation context forward automatically (Redis-backed session state), so "what about yesterday?" resolves against what was already discussed.
 
 Try it from the dashboard's **Investigate** tab, or directly:
 

@@ -53,17 +53,30 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    # The root .env configures all three app services identically — LLM
+    # provider/model, TI provider keys (VT_API_KEY, ABUSEIPDB_API_KEY),
+    # GROQ_API_KEY and TELEGRAM_* all come from there, so backend,
+    # worker and beat can never disagree about which model is in use.
+    # Compose otherwise reads .env only for ${} substitution, never into
+    # the containers. required: false keeps a checkout with no .env
+    # starting on code defaults.
+    env_file:
+      - path: .env
+        required: false
+    extra_hosts:
+      # Lets OLLAMA_HOST=host.docker.internal resolve on Linux too, where
+      # Docker doesn't provide it by default.
+      - "host.docker.internal:host-gateway"
     environment:
+      # Container hostnames only: these MUST override .env's localhost
+      # values, and anything listed here wins over env_file.
       - OPENSEARCH_HOST=opensearch
       - OPENSEARCH_PORT=9200
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - LLM_PROVIDER=ollama
       - OLLAMA_HOST=host.docker.internal
-      - OLLAMA_PORT=11434
-      - OLLAMA_MODEL=llama3.2:3b
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:
@@ -82,17 +95,30 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     command: celery -A app.tasks.celery_app worker --loglevel=info
+    # The root .env configures all three app services identically — LLM
+    # provider/model, TI provider keys (VT_API_KEY, ABUSEIPDB_API_KEY),
+    # GROQ_API_KEY and TELEGRAM_* all come from there, so backend,
+    # worker and beat can never disagree about which model is in use.
+    # Compose otherwise reads .env only for ${} substitution, never into
+    # the containers. required: false keeps a checkout with no .env
+    # starting on code defaults.
+    env_file:
+      - path: .env
+        required: false
+    extra_hosts:
+      # Lets OLLAMA_HOST=host.docker.internal resolve on Linux too, where
+      # Docker doesn't provide it by default.
+      - "host.docker.internal:host-gateway"
     environment:
+      # Container hostnames only: these MUST override .env's localhost
+      # values, and anything listed here wins over env_file.
       - OPENSEARCH_HOST=opensearch
       - OPENSEARCH_PORT=9200
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - LLM_PROVIDER=ollama
       - OLLAMA_HOST=host.docker.internal
-      - OLLAMA_PORT=11434
-      - OLLAMA_MODEL=mistral:7b
     volumes:
       - ./backend:/app
     depends_on:
@@ -109,17 +135,30 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     command: celery -A app.tasks.celery_app beat --loglevel=info
+    # The root .env configures all three app services identically — LLM
+    # provider/model, TI provider keys (VT_API_KEY, ABUSEIPDB_API_KEY),
+    # GROQ_API_KEY and TELEGRAM_* all come from there, so backend,
+    # worker and beat can never disagree about which model is in use.
+    # Compose otherwise reads .env only for ${} substitution, never into
+    # the containers. required: false keeps a checkout with no .env
+    # starting on code defaults.
+    env_file:
+      - path: .env
+        required: false
+    extra_hosts:
+      # Lets OLLAMA_HOST=host.docker.internal resolve on Linux too, where
+      # Docker doesn't provide it by default.
+      - "host.docker.internal:host-gateway"
     environment:
+      # Container hostnames only: these MUST override .env's localhost
+      # values, and anything listed here wins over env_file.
       - OPENSEARCH_HOST=opensearch
       - OPENSEARCH_PORT=9200
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - LLM_PROVIDER=ollama
       - OLLAMA_HOST=host.docker.internal
-      - OLLAMA_PORT=11434
-      - OLLAMA_MODEL=llama3.2:3b
     volumes:
       - ./backend:/app
     depends_on:
