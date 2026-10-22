@@ -325,6 +325,79 @@ def test_evidence_summary_alert_count_counts_only_alert_timeline_entries():
     assert summary["alert_count"] == 3
 
 
+# ── Answer format + prompt event filtering ───────────────────────────
+
+def test_session_prompt_instructs_the_short_answer_format():
+    data = _evidence_data()
+
+    prompt = svc._build_session_prompt(data, [], [], "What happened?")
+
+    assert "Answer the question directly in 1-3 sentences FIRST" in prompt
+    assert "at most 5 supporting bullets" in prompt
+    assert "under about 120 words" in prompt
+    assert "No headings" in prompt
+
+
+def test_session_prompt_allows_a_table_only_for_a_real_comparison():
+    prompt = svc._build_session_prompt(_evidence_data(), [], [], "Which hosts?")
+
+    assert "ONLY when comparing 3 or more items across 2 or more columns" in prompt
+    assert "maximum 6" in prompt
+
+
+def test_session_prompt_drops_the_shouting_fact_banners_but_keeps_the_rule():
+    prompt = svc._build_session_prompt(_evidence_data(), [], [], "What happened?")
+
+    # The old instruction ("Distinguish FACTS ... from ASSESSMENT ...
+    # and UNKNOWN") is gone; the format block names those words only to
+    # forbid them as banner labels.
+    assert "Distinguish FACTS" not in prompt
+    assert "No banner labels like FACT, ASSESSMENT or UNKNOWN" in prompt
+    assert "never present your own interpretation as fact" in prompt.lower()
+    assert "Likely..." in prompt
+
+
+def test_session_prompt_says_what_safesoc_cannot_do_from_chat():
+    prompt = svc._build_session_prompt(_evidence_data(), [], [], "Check this IP in VirusTotal")
+
+    assert "VirusTotal" in prompt
+    assert "Evidence panel" in prompt
+
+
+def test_session_prompt_excludes_soar_and_platform_audit_noise():
+    """Shares incident_narrative._prompt_data, so the same filtering applies to the incident chat."""
+    from app.mcp.tools import TimelineEventSummary
+
+    data = _evidence_data(events=[
+        TimelineEventSummary(type="alert", timestamp="2026-08-26T09:12:04Z", data={"host_id": "H1", "description": "Failed login"}),
+        TimelineEventSummary(type="audit", timestamp="2026-08-26T09:16:50Z", data={"action": "soar.action.succeeded", "details": {}}),
+        TimelineEventSummary(type="audit", timestamp="2026-08-26T09:18:30Z", data={"action": "incident.narrative_generated", "details": {}}),
+        TimelineEventSummary(type="audit", timestamp="2026-08-26T09:19:00Z", data={"action": "incident.status_transitioned", "details": {"to_status": "resolved"}}),
+    ])
+
+    prompt = svc._build_session_prompt(data, [], [], "What happened?")
+
+    assert "soar.action.succeeded" not in prompt
+    assert "incident.narrative_generated" not in prompt
+    assert "Failed login" in prompt
+    assert "STATUS — incident moved to resolved" in prompt
+    assert "Automated response: 1 action(s) (1 succeeded)" in prompt
+
+
+def test_the_session_grounding_check_accepts_the_automated_response_counts():
+    """The grounding check reads the same filtered prompt text the model saw."""
+    from app.mcp.tools import TimelineEventSummary
+
+    data = _evidence_data(events=[
+        TimelineEventSummary(type="alert", timestamp="2026-08-26T09:12:04Z", data={"host_id": "H1"}),
+        TimelineEventSummary(type="audit", timestamp="2026-08-26T09:16:50Z", data={"action": "soar.action.succeeded", "details": {}}),
+        TimelineEventSummary(type="audit", timestamp="2026-08-26T09:17:00Z", data={"action": "soar.action.skipped", "details": {}}),
+    ])
+    grounding_text = svc._prompt_data(data)
+
+    assert svc._answer_appears_grounded("The automated response ran 2 actions: 1 succeeded, 1 skipped.", grounding_text) is True
+
+
 # ── ask_question (grounded answer + fallback) ────────────────────────
 
 @pytest.mark.asyncio

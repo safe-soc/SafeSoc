@@ -181,7 +181,14 @@ class Settings(BaseSettings):
     # it. 120 was the largest value that stayed reliably under budget
     # across repeated real-data measurements (180 measured as high as
     # 10.12s on this hardware).
-    INVESTIGATION_LLM_MAX_OUTPUT_TOKENS: int = 120
+    # Raised 120 -> 200 alongside the fixed answer format (B2): the
+    # format asks for 1-3 sentences plus up to 5 short bullets, under
+    # ~120 words, which does not fit in 120 tokens — answers were being
+    # cut off mid-sentence. Still well inside the 10s budget above: the
+    # 180-token measurement below was taken against a 100-alert raw-JSON
+    # prompt, which _describe_tool_result has since replaced with a far
+    # smaller readable briefing.
+    INVESTIGATION_LLM_MAX_OUTPUT_TOKENS: int = 200
 
     # POST /api/v1/incidents/{id}/narrative (SS-109/110) has its own,
     # more generous timeout rather than reusing
@@ -217,7 +224,11 @@ class Settings(BaseSettings):
     # generous 25s timeout above (not the 10s interactive-chat budget),
     # so a larger token cap doesn't reintroduce the latency problem
     # INVESTIGATION_LLM_MAX_OUTPUT_TOKENS itself was added to prevent.
-    INCIDENT_NARRATIVE_LLM_MAX_OUTPUT_TOKENS: int = 350
+    # Raised 350 -> 450 alongside the fixed four-section markdown format
+    # (B1): ~180 words of prose plus four headings and bullet markers
+    # lands close enough to 350 that a slightly long summary was losing
+    # its last section. The 25s timeout above still bounds the call.
+    INCIDENT_NARRATIVE_LLM_MAX_OUTPUT_TOKENS: int = 450
 
     # Investigation Sessions (persistent, incident-scoped Q&A —
     # services/investigation_session.py) get their own timeout/token

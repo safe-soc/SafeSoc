@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import Spinner from './Spinner';
 import { BotIcon } from './icons';
+import { MarkdownAnswer } from './MarkdownAnswer';
 import { api } from '../lib/api';
 import { formatDateTime, formatRelativeTime } from '../lib/format';
 import type {
@@ -313,7 +314,7 @@ export default function IncidentInvestigationPanel({ incidentId }: { incidentId:
                       <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-blue-500/15 text-blue-300">
                         <BotIcon className="h-3 w-3" />
                       </span>
-                      <p className="whitespace-pre-wrap text-sm text-slate-300">{turn.answer}</p>
+                      <MarkdownAnswer className="min-w-0 flex-1">{turn.answer}</MarkdownAnswer>
                     </div>
                     <div className="mt-1.5 flex items-center gap-2 pl-7">
                       {turn.is_fallback && (
