@@ -155,9 +155,29 @@ async def _execute_enrich_indicator(db: AsyncSession, tenant_id: uuid.UUID, inci
     try:
         ipaddress.ip_address(indicator)
     except ValueError:
-        return {"success": True, "message": f"[SafeSOC] Indicator '{indicator}' is not an IP — no enrichment provider available for it.", "indicator": indicator, "is_malicious": None}
+        return {"success": True, "skipped": True, "message": f"[SafeSOC] Skipped — indicator '{indicator}' is not an IP, so no enrichment provider is available for it.", "indicator": indicator, "is_malicious": None}
 
     ti_result = await enrichment_service.enrich_indicator(db, indicator)
+    if not ti_result.vt_total and not ti_result.abuse_confidence:
+        # services/enrichment.py yields an empty TIResult when no
+        # provider key is configured, or when every provider is
+        # unreachable with nothing cached. Reporting that as a verified
+        # success claimed an enrichment that never happened — the panel
+        # read "succeeded / Verified" for an IP the Evidence panel
+        # still showed as "Not checked" (no ti_cache row was written,
+        # which is exactly what that panel reads).
+        #
+        # Falsy, not `is None`: schemas/log.py::TIResult defaults these
+        # counters to 0 and _merge() always returns a fully-populated
+        # model, so an `is None` test here would never fire.
+        return {
+            "success": True,
+            "skipped": True,
+            "indicator": indicator,
+            "is_malicious": None,
+            "message": f"[SafeSOC] Skipped — no threat-intel provider returned data for '{indicator}' (check VT_API_KEY / ABUSEIPDB_API_KEY).",
+        }
+
     return {
         "success": True,
         "message": f"[SafeSOC] Enriched indicator '{indicator}' via threat-intel providers.",
@@ -355,6 +375,20 @@ async def execute_action(db: AsyncSession, action_id: uuid.UUID) -> SoarActionEx
         transition_action_status(action, SoarActionStatus.FAILED)
         await db.commit()
         await _emit(db, tenant_id, "soar.action.failed", "soar_action_failed", action, incident, {"result": result_dict})
+        await _maybe_complete_run(db, run)
+        return action
+
+    if result_dict.get("skipped"):
+        # The action itself ran fine but had nothing to act on (e.g. no
+        # threat-intel provider returned data), so there is no effect to
+        # verify. SUCCEEDED with NOT_VERIFIED — never the automatic
+        # _INTERNAL_VERIFIED below, which would assert a confirmed
+        # effect that doesn't exist. No "soar.action.verified" is
+        # emitted, because nothing was verified.
+        action.verification_status = SoarVerificationStatus.NOT_VERIFIED
+        transition_action_status(action, SoarActionStatus.SUCCEEDED)
+        await db.commit()
+        await _emit(db, tenant_id, "soar.action.succeeded", "soar_action_succeeded", action, incident, {"result": result_dict})
         await _maybe_complete_run(db, run)
         return action
 

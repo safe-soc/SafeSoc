@@ -379,8 +379,13 @@ def test_the_soar_enrich_action_holds_no_transaction_across_the_provider():
 
 
 @requires_postgres
-def test_the_soar_enrich_action_still_succeeds_when_the_provider_is_down():
-    """Existing semantics: a provider outage is not an action failure — it yields a verdict-free success."""
+def test_the_soar_enrich_action_reports_skipped_when_the_provider_is_down():
+    """
+    A provider outage is still not an action failure — but it is now
+    reported as a SKIP rather than a verdict-free success: with no
+    provider data there is no verdict to report and no effect to
+    verify, so is_malicious is None instead of a misleading False.
+    """
     from app.services.soar_execution import _execute_enrich_indicator
 
     indicator = _indicator()
@@ -404,7 +409,9 @@ def test_the_soar_enrich_action_still_succeeds_when_the_provider_is_down():
 
     assert probe.in_transaction_during_call is False
     assert result["success"] is True
-    assert result["is_malicious"] is False
+    assert result["skipped"] is True
+    assert result["is_malicious"] is None
+    assert result["message"].startswith("[SafeSOC] Skipped")
 
 
 def test_the_soar_enrich_action_rejects_a_missing_indicator():
