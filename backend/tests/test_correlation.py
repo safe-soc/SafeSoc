@@ -203,7 +203,9 @@ def test_successful_compromise_triggers_on_brute_force_then_success():
     assert chain is not None
     assert chain.pattern == CorrelationPattern.SUCCESSFUL_COMPROMISE
     assert "a-success" in chain.alert_ids
-    assert chain.mitre_technique_ids == ("T1078",)
+    # The detector requires failed logons BEFORE the success, so the
+    # brute force (T1110) is detected evidence alongside T1078.
+    assert chain.mitre_technique_ids == ("T1110", "T1078")
 
 
 def test_successful_compromise_does_not_trigger_on_a_lone_successful_login():
@@ -253,7 +255,9 @@ def test_privilege_escalation_triggers_after_login_with_high_severity():
     assert chain is not None
     assert chain.pattern == CorrelationPattern.PRIVILEGE_ESCALATION
     assert chain.confidence >= settings.CORRELATION_CONFIDENCE_THRESHOLD
-    assert chain.mitre_technique_ids == ("T1068",)
+    # T1548 (Abuse Elevation Control Mechanism), not T1068 — nothing in
+    # a login-then-privilege-change signal indicates an exploit.
+    assert chain.mitre_technique_ids == ("T1548",)
 
 
 def test_privilege_escalation_does_not_trigger_on_low_severity_change():

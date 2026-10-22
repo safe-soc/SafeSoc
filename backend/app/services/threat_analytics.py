@@ -36,7 +36,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.enums import CorrelationPattern, IncidentStatus, LogSource, RiskLevel, Severity
-from app.core.mitre_mapping import get_mitre_technique
+from app.core.mitre_mapping import get_mitre_technique, split_technique_ids
 from app.db.opensearch import get_alerts_by_ids
 from app.models.endpoint import Endpoint
 from app.models.incident import Incident
@@ -171,14 +171,11 @@ async def _endpoints_by_host(db: AsyncSession, tenant_id: uuid.UUID, host_ids: l
 
 
 def _technique_ids(alert: dict) -> list[str]:
+    # Shared with every other incident view via core/mitre_mapping.py —
     # adapters/wazuh.py comma-joins multiple MITRE technique ids into
-    # one string ("T1110, T1078"); the correlation engine and synthetic
-    # injector only ever set one. Splitting handles both without
-    # assuming either shape.
-    raw = alert.get("mitre_technique")
-    if not raw:
-        return []
-    return [technique.strip() for technique in raw.split(",") if technique.strip()]
+    # one string ("T1110, T1078"), while the correlation engine and
+    # synthetic injector only ever set one.
+    return split_technique_ids(alert.get("mitre_technique"))
 
 
 @dataclass(frozen=True)

@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from app.core.enums import CorrelationPattern
 from app.schemas.incidents import TimelineEntry
 from app.services import investigation_report as ir
 from app.services.incident_graph import GraphEdge
@@ -97,6 +98,50 @@ def test_mitre_rows_deduplicates_by_technique_and_host():
     rows = ir._mitre_rows(alerts)
     assert len(rows) == 2
     assert {r.affected_host for r in rows} == {"HOST-A", "HOST-B"}
+
+
+def test_mitre_rows_splits_a_comma_joined_technique_value_into_separate_rows():
+    """adapters/wazuh.py stores several ids in one string — each is its own technique, not one row."""
+    rows = ir._mitre_rows([_alert(mitre_technique="T1110.001, T1021.004", host_id="HOST-A")])
+
+    assert [r.technique_id for r in rows] == ["T1021.004", "T1110.001"]
+    assert {r.affected_host for r in rows} == {"HOST-A"}
+
+
+def test_mitre_rows_adds_a_row_for_the_incident_categorys_mapped_techniques():
+    """The pattern-level source: a synthetic incident whose alerts carry no MITRE still reports its category's techniques."""
+    alerts = [_alert(mitre_technique=None, host_id="HOST-B"), _alert(mitre_technique=None, host_id="HOST-A")]
+
+    rows = ir._mitre_rows(alerts, CorrelationPattern.SUCCESSFUL_COMPROMISE)
+
+    assert [r.technique_id for r in rows] == ["T1078", "T1110"]
+    assert all(r.tactic == "Initial Access" for r in rows)
+    assert all(r.evidence_description == "Detected correlation pattern: successful compromise" for r in rows)
+    assert all(r.affected_host == "HOST-A, HOST-B" for r in rows)
+    assert all(r.related_alert == "—" for r in rows)
+
+
+def test_mitre_rows_does_not_duplicate_a_category_technique_the_alerts_already_cover():
+    rows = ir._mitre_rows(
+        [_alert(mitre_technique="T1110", host_id="HOST-A")], CorrelationPattern.CREDENTIAL_BRUTE_FORCE
+    )
+
+    assert [r.technique_id for r in rows] == ["T1110"]
+    assert rows[0].related_alert != "—"
+
+
+def test_behavior_findings_match_privilege_escalation_on_either_mapped_technique():
+    """T1548 replaced T1068 in the pattern mapping, and both must still be recognized here."""
+    for technique in ("T1068", "T1548"):
+        findings = ir._behavior_findings([_alert(action="permission_change", mitre_technique=technique)])
+        assert "Privilege escalation" in {f.category for f in findings}, technique
+
+
+def test_behavior_findings_match_lateral_movement_on_a_sub_technique():
+    """A comma-joined sub-technique (T1021.004) belongs to its parent T1021."""
+    findings = ir._behavior_findings([_alert(action="remote_login", mitre_technique="T1110.001, T1021.004")])
+
+    assert "Lateral movement" in {f.category for f in findings}
 
 
 # ── _network_rows ──────────────────────────────────────────────────
