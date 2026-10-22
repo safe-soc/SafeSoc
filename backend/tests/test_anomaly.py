@@ -178,8 +178,9 @@ def test_load_model_caches_across_calls(monkeypatch, tmp_path):
 async def test_score_alert_pulls_the_hosts_window_and_scores_it(monkeypatch):
     captured = {}
 
-    async def fake_get_events(tenant_id, host_id, window_minutes, *, now=None):
+    async def fake_get_events(tenant_id, host_id, window_minutes, *, now=None, allow_future_skew=True):
         captured["args"] = (tenant_id, host_id, window_minutes, now)
+        captured["allow_future_skew"] = allow_future_skew
         return [{"action": "failed_login"}]
 
     monkeypatch.setattr(anomaly, "get_events", fake_get_events)
@@ -193,6 +194,9 @@ async def test_score_alert_pulls_the_hosts_window_and_scores_it(monkeypatch):
     assert captured["args"][1] == "DESKTOP-042"
     assert captured["args"][2] == 60
     assert captured["args"][3] == timestamp.timestamp()
+    # The window must describe what led UP TO the scored alert — the
+    # correlation window's clock-skew allowance would reach past it.
+    assert captured["allow_future_skew"] is False
 
 
 @pytest.mark.asyncio
@@ -280,8 +284,8 @@ def test_detect_network_volume_spike_is_none_when_both_windows_are_silent():
 async def test_check_network_volume_spike_queries_two_non_overlapping_windows(monkeypatch):
     calls = []
 
-    async def fake_get_events(tenant_id, host_id, window_minutes, *, now=None):
-        calls.append((window_minutes, now))
+    async def fake_get_events(tenant_id, host_id, window_minutes, *, now=None, allow_future_skew=True):
+        calls.append((window_minutes, now, allow_future_skew))
         return _network_events(20) if window_minutes == anomaly.RECENT_WINDOW_MINUTES else _network_events(6)
 
     monkeypatch.setattr(anomaly, "get_events", fake_get_events)
@@ -295,3 +299,8 @@ async def test_check_network_volume_spike_queries_two_non_overlapping_windows(mo
     baseline_call = next(c for c in calls if c[0] == anomaly.BASELINE_WINDOW_MINUTES)
     assert recent_call[1] == now
     assert baseline_call[1] == now - (anomaly.RECENT_WINDOW_MINUTES * 60)  # non-overlapping with the recent window
+    # A clock-skew allowance on either ceiling would stretch the
+    # baseline window over the recent one, counting the same events on
+    # both sides of the z-score.
+    assert recent_call[2] is False
+    assert baseline_call[2] is False

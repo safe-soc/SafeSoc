@@ -16,7 +16,9 @@ creation path.
 """
 
 import asyncio
+import time
 import uuid
+from datetime import datetime
 
 from app.db.opensearch import get_alert_by_id
 from app.db.postgresql import worker_session_factory
@@ -30,6 +32,36 @@ from app.utils.logger import get_logger
 from app.workers.soar_worker import execute_soar_action
 
 logger = get_logger(__name__)
+
+
+def _event_timestamp(doc: dict, alert_id: str) -> float:
+    """
+    The alert's own event time as unix seconds, for the correlation
+    window's sorted-set score.
+
+    Processing time is NOT usable here: queue_post_ingest_tasks queues
+    one Celery task per accepted alert and they run concurrently, so
+    task-completion order has nothing to do with event order — the
+    order-sensitive detectors (privilege escalation, successful
+    compromise, recon->exploitation, lateral movement) were effectively
+    coin-tossing on a two-event chain. See docs/decisions.md ADR-011.
+
+    Falls back to now if the field is missing or unparseable, which
+    degrades to the old behavior for that one event rather than dropping
+    it from correlation entirely. Parsing mirrors
+    services/incident_timeline.py::_parse_alert_timestamp.
+    """
+    raw = doc.get("timestamp")
+    if isinstance(raw, str):
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            pass
+    logger.warning(
+        "Alert has no parseable timestamp — correlating it at processing time instead",
+        alert_id=alert_id, timestamp=raw,
+    )
+    return time.time()
 
 
 @celery_app.task(name="app.workers.correlation_worker.evaluate_correlation")
@@ -57,6 +89,7 @@ async def _evaluate_correlation_async(alert_id: str) -> None:
             "severity": doc.get("severity"),
             "destination_ip": doc.get("destination_ip"),
         },
+        timestamp=_event_timestamp(doc, alert_id),
     )
 
     chains = await evaluate_host(tenant_id, host_id)

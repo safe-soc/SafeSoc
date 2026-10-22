@@ -217,6 +217,12 @@ class Settings(BaseSettings):
     # ──────────────────────────────────────────────
     CORRELATION_WINDOW_TTL: int = 3600      # 1 hour (seconds)
     CORRELATION_CONFIDENCE_THRESHOLD: float = 0.6
+    # Correlation windows are scored by EVENT time (see docs/decisions.md
+    # ADR-011), so an endpoint whose clock runs slightly fast produces
+    # events timestamped marginally in the future. They're still real
+    # events, so the window's upper bound allows this much skew rather
+    # than dropping them.
+    CORRELATION_CLOCK_SKEW_SECONDS: int = 300   # 5 minutes
 
     # ──────────────────────────────────────────────
     # Risk Scoring
