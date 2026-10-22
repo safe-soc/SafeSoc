@@ -13,6 +13,7 @@ import EvidencePanel from '../components/EvidencePanel';
 import Layout from '../components/Layout';
 import PageHeader from '../components/PageHeader';
 import { BotIcon, SendIcon } from '../components/icons';
+import { MarkdownAnswer } from '../components/MarkdownAnswer';
 import { api } from '../lib/api';
 import { titleCase } from '../lib/format';
 import type { InvestigateResponse } from '../lib/types';
@@ -119,15 +120,17 @@ export default function Investigate() {
                     {message.role === 'user' ? 'You' : <BotIcon className="h-4 w-4" />}
                   </span>
                   <div className={`flex max-w-[75%] flex-col gap-1 ${message.role === 'user' ? 'items-end' : 'items-start'}`}>
-                    <div
-                      className={`whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed ${
-                        message.role === 'user'
-                          ? 'rounded-tr-sm bg-blue-600 text-white'
-                          : 'rounded-tl-sm bg-slate-800 text-slate-100'
-                      }`}
-                    >
-                      {message.text}
-                    </div>
+                    {/* The analyst's own question stays plain text — only an
+                        assistant answer is rendered as markdown. */}
+                    {message.role === 'user' ? (
+                      <div className="whitespace-pre-wrap rounded-2xl rounded-tr-sm bg-blue-600 px-3.5 py-2.5 text-sm leading-relaxed text-white">
+                        {message.text}
+                      </div>
+                    ) : (
+                      <MarkdownAnswer className="rounded-2xl rounded-tl-sm bg-slate-800 px-3.5 py-2.5 text-slate-100">
+                        {message.text}
+                      </MarkdownAnswer>
+                    )}
                     {message.intent && message.intent !== 'unknown' && (
                       <span className="px-1 text-xs text-slate-500">{titleCase(message.intent)}</span>
                     )}

@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.enums import Intent, IncidentStatus, RiskLevel
+from app.core.mitre_mapping import incident_technique_ids
 from app.db.opensearch import search_alerts
 from app.models.endpoint import Endpoint
 from app.models.incident import Incident
@@ -256,12 +257,14 @@ async def incident_narrative_data(
     timeline = await get_incident_timeline(db, tenant_id, params.incident_id)
     evidence = await get_incident_evidence(db, tenant_id, params.incident_id)
 
-    mitre_techniques = sorted(
-        {
-            entry.data.get("mitre_technique")
-            for entry in timeline
-            if entry.type == "alert" and entry.data.get("mitre_technique")
-        }
+    # Both MITRE sources, not just the alert-level one: synthetic
+    # alerts carry no mitre_technique at all, which left every view
+    # built on this tool (AI narrative, investigation session, the
+    # "Known evidence" box) reporting no techniques for an incident
+    # Threat Analytics showed techniques for.
+    mitre_techniques = incident_technique_ids(
+        (entry.data.get("mitre_technique") for entry in timeline if entry.type == "alert"),
+        incident.category,
     )
 
     return IncidentNarrativeDataOutput(

@@ -239,7 +239,9 @@ async def test_generate_answer_wraps_the_tool_data_in_untrusted_data_markers(mon
     # in the prompt, to explain the convention — rindex finds the real data block).
     start = prompt.rindex(_DATA_FENCE_START)
     end = prompt.rindex(_DATA_FENCE_END)
-    assert '"total":3' in prompt[start:end]
+    # The fenced block is a readable briefing now, not a JSON dump —
+    # the tool's real count still has to be inside it.
+    assert "Matching alerts: 3" in prompt[start:end]
 
 
 @pytest.mark.asyncio
@@ -258,13 +260,16 @@ async def test_generate_answer_prompt_tells_the_model_not_to_follow_embedded_ins
 
 
 @pytest.mark.asyncio
-async def test_generate_answer_prompt_instructs_distinguishing_facts_from_assessment(monkeypatch):
+async def test_generate_answer_prompt_instructs_never_presenting_interpretation_as_fact(monkeypatch):
     """
     Root-cause fix for a follow-up like "what happened after those
     failures?" fabricating a coordinated-attack narrative (mitigation,
     exploitation, attacker intent) with no supporting data: the prompt
-    must explicitly tell the model to separate FACT from its own
-    ASSESSMENT and to say so when something is UNKNOWN/not covered.
+    must tell the model never to present its own interpretation as
+    fact, and to say plainly when the data doesn't cover something.
+    The rule is unchanged; the FACTS / ASSESSMENT / UNKNOWN banner
+    labels it used to demand were dropped — they rendered as shouting
+    headings in the UI.
     """
     from app.routers.v1.investigate import _generate_answer
 
@@ -302,9 +307,10 @@ async def test_generate_answer_prompt_forbids_fabricating_mitigation_or_exploita
 async def test_generate_answer_prompt_instructs_reporting_every_entry_in_a_multi_item_breakdown(monkeypatch):
     """
     Root-cause fix for "which host was involved?" answering with a
-    single arbitrarily-picked host when the data's top_hosts breakdown
-    lists several — the prompt must tell the model to report every
-    listed entry, not guess one.
+    single arbitrarily-picked host when the data lists several with
+    counts — the prompt must tell the model to report every listed
+    one, not guess. (The rule no longer names the internal breakdown
+    key: the model was quoting those names back at the analyst.)
     """
     from app.routers.v1.investigate import _generate_answer
 
@@ -316,15 +322,17 @@ async def test_generate_answer_prompt_instructs_reporting_every_entry_in_a_multi
 
     prompt = mock_generate.call_args.args[0].lower()
     assert "do not arbitrarily pick just one" in prompt
-    assert "does not identify one rather" in prompt
+    assert "say so rather than guessing" in prompt
 
 
 @pytest.mark.asyncio
-async def test_generate_answer_prompt_instructs_disclosing_partial_sample_boundaries(monkeypatch):
+async def test_generate_answer_prompt_instructs_not_overstating_the_records_shown(monkeypatch):
     """
-    Issue 4: when the data is a partial sample (total > count_shown, or
-    truncated), the model must say so and must not claim knowledge of
-    unseen records.
+    Issue 4, kept but reworded: the model must answer counts with the
+    stated total and must never imply the example records are the
+    complete set. The old wording ("partial sample", "truncated flag")
+    taught it to discuss the prompt's own sampling, which it then did
+    out loud in the UI.
     """
     from app.routers.v1.investigate import _generate_answer
 
@@ -335,8 +343,10 @@ async def test_generate_answer_prompt_instructs_disclosing_partial_sample_bounda
     await _generate_answer("show failed logins", Intent.AUTH_FAILURES, AlertListOutput(total=2013, alerts=[]), [])
 
     prompt = mock_generate.call_args.args[0].lower()
-    assert "partial sample" in prompt
-    assert "must not make claims about records" in prompt
+    assert "answer counts with the stated total" in prompt
+    assert "never claim or imply that the example records listed are the complete set" in prompt
+    # The real total must still reach the model.
+    assert "matching alerts: 2013" in prompt
 
 
 @pytest.mark.asyncio
@@ -446,31 +456,32 @@ def _make_alert(i, host="DESKTOP-042", user="john.doe", severity="high"):
     }
 
 
-def test_summarize_alert_list_for_prompt_computes_correct_top_counts():
-    from app.routers.v1.investigate import _summarize_alert_list_for_prompt
+def test_describe_alert_list_computes_correct_top_counts():
+    """Same guarantee the old dict-shaped summarizer carried: the aggregate counts are what let the model answer "which host is most affected" correctly."""
+    from app.routers.v1.investigate import _describe_alert_list
 
     alerts = (
         [_make_alert(i, host="HOST-A", user="alice") for i in range(3)]
         + [_make_alert(i, host="HOST-B", user="bob") for i in range(3, 5)]
     )
 
-    summary = _summarize_alert_list_for_prompt(alerts)
+    briefing = _describe_alert_list(alerts, total=5)
 
-    assert summary["count_shown"] == 5
-    assert summary["top_hosts"] == {"HOST-A": 3, "HOST-B": 2}
-    assert summary["top_users"] == {"alice": 3, "bob": 2}
-    assert len(summary["sample"]) == 5  # under the 8-item sample limit, nothing dropped
+    assert "Matching alerts: 5" in briefing
+    assert "Most affected endpoints: HOST-A (3), HOST-B (2)" in briefing
+    assert "Most affected users: alice (3), bob (2)" in briefing
 
 
-def test_summarize_alert_list_for_prompt_caps_the_sample_size():
-    from app.routers.v1.investigate import _PROMPT_SAMPLE_ALERT_LIMIT, _summarize_alert_list_for_prompt
+def test_describe_alert_list_caps_the_example_count():
+    from app.routers.v1.investigate import _PROMPT_SAMPLE_ALERT_LIMIT, _describe_alert_list
 
     alerts = [_make_alert(i) for i in range(50)]
 
-    summary = _summarize_alert_list_for_prompt(alerts)
+    briefing = _describe_alert_list(alerts, total=50)
 
-    assert summary["count_shown"] == 50
-    assert len(summary["sample"]) == _PROMPT_SAMPLE_ALERT_LIMIT
+    assert "Matching alerts: 50" in briefing
+    example_lines = [line for line in briefing.splitlines() if line[:1].isdigit()]
+    assert len(example_lines) == _PROMPT_SAMPLE_ALERT_LIMIT
 
 
 def test_prompt_data_summarizes_a_large_alerts_list():
@@ -478,19 +489,19 @@ def test_prompt_data_summarizes_a_large_alerts_list():
 
     result = AlertListOutput(total=100, alerts=[_make_alert(i) for i in range(100)], truncated=True)
 
-    prompt_json = _prompt_data(result)
+    prompt_text = _prompt_data(result)
 
-    assert len(prompt_json) < len(result.model_dump_json()) / 4  # substantially smaller than the raw dump
-    assert '"top_hosts"' in prompt_json
-    assert '"count_shown":100' in prompt_json
+    assert len(prompt_text) < len(result.model_dump_json()) / 4  # substantially smaller than the raw dump
+    assert "Most affected endpoints: DESKTOP-042 (100)" in prompt_text
+    assert "Matching alerts: 100" in prompt_text
 
 
-def test_prompt_data_leaves_an_empty_alerts_list_untouched():
+def test_prompt_data_states_the_count_for_an_empty_alerts_list():
     from app.routers.v1.investigate import _prompt_data
 
     result = AlertListOutput(total=0, alerts=[], truncated=False)
 
-    assert _prompt_data(result) == result.model_dump_json()
+    assert _prompt_data(result) == "Matching alerts: 0"
 
 
 def test_prompt_data_summarizes_recent_alerts_on_endpoint_snapshot():
@@ -501,18 +512,99 @@ def test_prompt_data_summarizes_recent_alerts_on_endpoint_snapshot():
         recent_alert_count=20, recent_alerts=[_make_alert(i) for i in range(20)], truncated=True,
     )
 
-    prompt_json = _prompt_data(result)
+    prompt_text = _prompt_data(result)
 
-    assert '"top_hosts"' in prompt_json
-    assert '"risk_score":80' in prompt_json  # untouched fields still pass through
+    assert "Most affected endpoints: DESKTOP-042 (20)" in prompt_text
+    assert "Risk score: 80" in prompt_text  # other fields still reach the model, as readable labels
 
 
-def test_prompt_data_passes_through_tools_without_an_alert_list():
+def test_prompt_data_renders_tools_without_an_alert_list_as_labeled_text():
     from app.routers.v1.investigate import _prompt_data
 
     result = RiskyEndpointsOutput(endpoints=[{"host_id": "H1", "risk_score": 90}], truncated=False)
 
-    assert _prompt_data(result) == result.model_dump_json()
+    prompt_text = _prompt_data(result)
+
+    assert "Endpoints:" in prompt_text
+    assert "H1" in prompt_text and "90" in prompt_text
+
+
+# ── Answer format + no internal key names in the prompt ──────────────
+
+def test_prompt_data_contains_no_internal_key_names():
+    """
+    The reported symptom: the answer quoted "count_shown": 20 and
+    "truncated": false straight back at the analyst. Those keys no
+    longer exist in what the model sees.
+    """
+    from app.routers.v1.investigate import _prompt_data
+
+    result = AlertListOutput(total=40, alerts=[_make_alert(i) for i in range(20)], truncated=True)
+
+    prompt_text = _prompt_data(result)
+
+    for internal_key in ("count_shown", "truncated", "top_hosts", "top_users", "severity_breakdown",
+                         "sample", "alert_id", "tenant_id", "host_id", '":'):
+        assert internal_key not in prompt_text, f"{internal_key} leaked into the prompt"
+
+
+def test_prompt_data_is_not_json():
+    from app.routers.v1.investigate import _prompt_data
+
+    result = AlertListOutput(total=3, alerts=[_make_alert(i) for i in range(3)], truncated=False)
+
+    prompt_text = _prompt_data(result)
+
+    assert not prompt_text.startswith("{")
+    assert "Matching alerts: 3" in prompt_text
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_prompt_instructs_the_short_answer_format(monkeypatch):
+    from app.routers.v1.investigate import _generate_answer
+
+    mock_generate = Mock(return_value="ok")
+    from app.clients import ollama
+    monkeypatch.setattr(ollama, "generate", mock_generate)
+
+    await _generate_answer("show failed logins", Intent.AUTH_FAILURES, AlertListOutput(total=3, alerts=[]), [])
+
+    prompt = mock_generate.call_args.args[0]
+    assert "Answer the question directly in 1-3 sentences FIRST" in prompt
+    assert "under about 120 words" in prompt
+    assert "No headings" in prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_prompt_tells_the_model_not_to_repeat_the_evidence_table(monkeypatch):
+    """The Investigate page renders the raw alerts in a table right below the answer — re-listing them in prose is duplication."""
+    from app.routers.v1.investigate import _generate_answer
+
+    mock_generate = Mock(return_value="ok")
+    from app.clients import ollama
+    monkeypatch.setattr(ollama, "generate", mock_generate)
+
+    await _generate_answer("show failed logins", Intent.AUTH_FAILURES, AlertListOutput(total=3, alerts=[]), [])
+
+    prompt = mock_generate.call_args.args[0]
+    assert "Lead with the answer itself" in prompt
+    assert "do not repeat" in prompt
+    assert "evidence table" in prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_prompt_forbids_quoting_field_names_or_identifiers(monkeypatch):
+    from app.routers.v1.investigate import _generate_answer
+
+    mock_generate = Mock(return_value="ok")
+    from app.clients import ollama
+    monkeypatch.setattr(ollama, "generate", mock_generate)
+
+    await _generate_answer("show failed logins", Intent.AUTH_FAILURES, AlertListOutput(total=3, alerts=[]), [])
+
+    prompt = mock_generate.call_args.args[0].lower()
+    assert "never mention field names, keys, identifiers" in prompt
+    assert "never print a uuid or a tenant identifier" in prompt
 
 
 def test_answer_appears_grounded_recognizes_summarized_aggregate_counts():

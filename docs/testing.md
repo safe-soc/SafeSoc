@@ -93,7 +93,9 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml up -d backend
 docker compose -f docker-compose.yml -f docker-compose.test.yml exec backend pytest -q
 ```
 
-All 788 tests collect and pass inside the container with the overlay applied — identical to the local/CI result. Return the backend container to its normal state afterward with a plain `docker compose up -d backend` (no `-f docker-compose.test.yml`). See the comments in `docker-compose.test.yml` for why the mounts land at the container's root rather than nested under `/app` (a Docker Desktop/Windows bind-mount-nesting quirk was ruled out live before settling on that design).
+The suite is also hermetic with respect to configuration: `docker-compose.yml` now loads the root `.env` into the backend container, so `docker compose exec backend pytest` would otherwise inherit the developer's real settings (`LLM_PROVIDER=groq` plus live provider keys made 31 tests fail in Docker while passing locally). `backend/tests/conftest.py`'s autouse `_pinned_settings` fixture pins `LLM_PROVIDER`, `GROQ_API_KEY`, `VT_API_KEY`, `ABUSEIPDB_API_KEY` and `TELEGRAM_*` to their code defaults for every test (a test that needs a specific value still sets it itself and wins), and `_no_outbound_http` blocks `requests` at the transport adapter so no test can reach Groq, VirusTotal, AbuseIPDB, Telegram or Ollama for real — no `-e` overrides are needed on the command line.
+
+All tests collect and pass inside the container with the overlay applied — identical to the local/CI result, except `test_benchmark_runner.py`, which `importorskip`s the repository-root `benchmarks/` package that this overlay does not mount and therefore reports as a single skip. Return the backend container to its normal state afterward with a plain `docker compose up -d backend` (no `-f docker-compose.test.yml`). See the comments in `docker-compose.test.yml` for why the mounts land at the container's root rather than nested under `/app` (a Docker Desktop/Windows bind-mount-nesting quirk was ruled out live before settling on that design).
 
 ## 8. Summary
 

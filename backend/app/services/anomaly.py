@@ -148,7 +148,11 @@ async def score_alert(
     vector against the trained model (SS-050). None if no model has
     been trained yet.
     """
-    events = await get_events(tenant_id, host_id, window_minutes, now=timestamp.timestamp())
+    # allow_future_skew=False: `now` here is the scored alert's own
+    # event time, so the feature vector must describe the window LEADING
+    # UP TO it — letting the query reach past it would mix in events
+    # that happened after the alert being scored.
+    events = await get_events(tenant_id, host_id, window_minutes, now=timestamp.timestamp(), allow_future_skew=False)
     features = extract_features(events, timestamp)
     return score_features(features)
 
@@ -222,9 +226,14 @@ async def check_network_volume_spike(
     volume spike (SS-051) between them.
     """
     now = now if now is not None else time.time()
-    recent_events = await get_events(tenant_id, host_id, recent_window_minutes, now=now)
+    # allow_future_skew=False on both: these two windows are required to
+    # be non-overlapping (the baseline's expected rate is what the recent
+    # count is compared against), and a skew allowance on the baseline's
+    # ceiling would extend it straight over the recent window, counting
+    # the same events on both sides of the z-score.
+    recent_events = await get_events(tenant_id, host_id, recent_window_minutes, now=now, allow_future_skew=False)
     baseline_events = await get_events(
-        tenant_id, host_id, baseline_window_minutes, now=now - (recent_window_minutes * 60)
+        tenant_id, host_id, baseline_window_minutes, now=now - (recent_window_minutes * 60), allow_future_skew=False
     )
     return detect_network_volume_spike(
         baseline_events,

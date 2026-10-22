@@ -378,9 +378,132 @@ def test_the_soar_enrich_action_holds_no_transaction_across_the_provider():
     assert result["indicator"] == indicator
 
 
+# ── "Was this indicator actually checked?" (ti_cache, not verdict values) ──
+# The SOAR enrich action reports a skip when no provider ever answered
+# for an indicator. That question can only be answered by the presence
+# of a ti_cache row — a genuinely clean verdict carries all-zero
+# counters, which is indistinguishable by value from "nothing
+# answered". These tests pin that distinction against a real database,
+# using the same definition incident_evidence.py::_ti_verdicts uses for
+# the Evidence panel's "Not checked".
+
 @requires_postgres
-def test_the_soar_enrich_action_still_succeeds_when_the_provider_is_down():
-    """Existing semantics: a provider outage is not an action failure — it yields a verdict-free success."""
+def test_an_abuseipdb_only_clean_ip_is_enriched_not_skipped():
+    """Only AbuseIPDB configured, IP never reported: confidence 0, vt_total 0 — but it WAS checked."""
+    from app.services.soar_execution import _execute_enrich_indicator
+
+    indicator = _indicator()
+
+    async def scenario():
+        async with worker_session_factory() as db:
+            await _clear(db, indicator)
+            enrichment.virustotal.lookup_ip = _ProviderProbe(db, error=VirusTotalError("no API key configured"))
+            enrichment.abuseipdb.lookup_ip = _ProviderProbe(db, result=TIResult(source_ip=indicator, abuse_confidence=0, abuse_total_reports=0, is_malicious=False))
+            try:
+                result = await _execute_enrich_indicator(db, uuid.uuid4(), uuid.uuid4(), {"indicator": indicator})
+                cached = await db.execute(select(TICache).where(TICache.indicator == indicator))
+                providers = {row.provider for row in cached.scalars().all()}
+            finally:
+                import importlib
+                importlib.reload(enrichment.virustotal)
+                importlib.reload(enrichment.abuseipdb)
+            await _clear(db, indicator)
+            return result, providers
+
+    result, providers = asyncio.run(scenario())
+
+    assert TIProvider.ABUSEIPDB in providers, "AbuseIPDB's clean verdict must have been cached"
+    assert "skipped" not in result, "a cached clean verdict is a real check, not a skip"
+    assert result["success"] is True
+    assert result["is_malicious"] is False
+
+
+@requires_postgres
+def test_an_ip_no_provider_answered_for_is_skipped():
+    """Both providers down, nothing cached — no ti_cache row, so nothing was checked."""
+    from app.services.soar_execution import _execute_enrich_indicator
+
+    indicator = _indicator()
+
+    async def scenario():
+        async with worker_session_factory() as db:
+            await _clear(db, indicator)
+            enrichment.virustotal.lookup_ip = _ProviderProbe(db, error=VirusTotalError("401 Client Error: Unauthorized"))
+            enrichment.abuseipdb.lookup_ip = _ProviderProbe(db, error=AbuseIPDBError("401 Client Error: Unauthorized"))
+            try:
+                result = await _execute_enrich_indicator(db, uuid.uuid4(), uuid.uuid4(), {"indicator": indicator})
+                has_data = await enrichment.has_ti_data(db, indicator)
+            finally:
+                import importlib
+                importlib.reload(enrichment.virustotal)
+                importlib.reload(enrichment.abuseipdb)
+            await _clear(db, indicator)
+            return result, has_data
+
+    result, has_data = asyncio.run(scenario())
+
+    assert has_data is False
+    assert result["skipped"] is True
+    assert result["is_malicious"] is None
+    assert result["message"].startswith("[SafeSOC] Skipped")
+
+
+@requires_postgres
+def test_a_stale_cache_row_counts_as_checked_and_is_not_skipped():
+    """
+    Both providers down but a stale row exists: _get_or_fetch falls back
+    to it (SRS 3.4), and the Evidence panel shows its verdict rather
+    than "Not checked" — so the action must not report a skip either.
+    """
+    from app.services.soar_execution import _execute_enrich_indicator
+
+    indicator = _indicator()
+
+    async def scenario():
+        async with worker_session_factory() as db:
+            await _clear(db, indicator)
+            await _seed_cache(db, indicator, TIProvider.VIRUSTOTAL, expired=True, is_malicious=True)
+            enrichment.virustotal.lookup_ip = _ProviderProbe(db, error=VirusTotalError("503 Service Unavailable"))
+            enrichment.abuseipdb.lookup_ip = _ProviderProbe(db, error=AbuseIPDBError("503 Service Unavailable"))
+            try:
+                result = await _execute_enrich_indicator(db, uuid.uuid4(), uuid.uuid4(), {"indicator": indicator})
+                has_data = await enrichment.has_ti_data(db, indicator)
+            finally:
+                import importlib
+                importlib.reload(enrichment.virustotal)
+                importlib.reload(enrichment.abuseipdb)
+            await _clear(db, indicator)
+            return result, has_data
+
+    result, has_data = asyncio.run(scenario())
+
+    assert has_data is True, "an expired row still means a provider checked this indicator"
+    assert "skipped" not in result
+    assert result["is_malicious"] is True, "the stale verdict must reach the action result"
+
+
+@requires_postgres
+def test_has_ti_data_is_false_for_an_indicator_no_provider_has_ever_seen():
+    from app.services.enrichment import has_ti_data
+
+    indicator = _indicator()
+
+    async def scenario():
+        async with worker_session_factory() as db:
+            await _clear(db, indicator)
+            return await has_ti_data(db, indicator)
+
+    assert asyncio.run(scenario()) is False
+
+
+@requires_postgres
+def test_the_soar_enrich_action_reports_skipped_when_the_provider_is_down():
+    """
+    A provider outage is still not an action failure — but it is now
+    reported as a SKIP rather than a verdict-free success: with no
+    provider data there is no verdict to report and no effect to
+    verify, so is_malicious is None instead of a misleading False.
+    """
     from app.services.soar_execution import _execute_enrich_indicator
 
     indicator = _indicator()
@@ -404,7 +527,9 @@ def test_the_soar_enrich_action_still_succeeds_when_the_provider_is_down():
 
     assert probe.in_transaction_during_call is False
     assert result["success"] is True
-    assert result["is_malicious"] is False
+    assert result["skipped"] is True
+    assert result["is_malicious"] is None
+    assert result["message"].startswith("[SafeSOC] Skipped")
 
 
 def test_the_soar_enrich_action_rejects_a_missing_indicator():

@@ -34,15 +34,25 @@ async def add_event(
     """
     Record an event in host_id's sliding window for tenant_id.
 
-    `timestamp` (unix seconds) is the sorted-set score; defaults to now,
-    but callers (tests) may backdate it directly instead of manipulating
-    the real clock. The window key's Redis TTL is (re)set to
-    CORRELATION_WINDOW_TTL on every write, so an idle host's window is
-    cleaned up automatically once nothing has touched it for that long.
+    `timestamp` (unix seconds) is the sorted-set score and should be the
+    EVENT's own time, not the time it happened to be processed — the
+    order-sensitive detectors below read the window oldest-first, and
+    concurrent Celery tasks do not finish in event order (see
+    docs/decisions.md ADR-011). It defaults to now for callers with no
+    better clock, and tests may backdate it directly instead of
+    manipulating the real clock.
+
+    The score is also copied into the stored member as "timestamp":
+    Redis breaks ties between equal scores by comparing member strings,
+    so without it two events recorded for the same instant would be
+    ordered by the accident of their JSON text. The window key's Redis
+    TTL is (re)set to CORRELATION_WINDOW_TTL on every write, so an idle
+    host's window is cleaned up automatically once nothing has touched
+    it for that long.
     """
     ts = timestamp if timestamp is not None else time.time()
     key = _window_key(tenant_id, host_id)
-    member = json.dumps(event, sort_keys=True)
+    member = json.dumps({**event, "timestamp": ts}, sort_keys=True)
 
     client = get_client()
     await client.zadd(key, {member: ts})
@@ -55,6 +65,7 @@ async def get_events(
     window_minutes: int,
     *,
     now: Optional[float] = None,
+    allow_future_skew: bool = True,
 ) -> list[dict[str, Any]]:
     """
     Return host_id's events (tenant-scoped) from the last window_minutes,
@@ -63,15 +74,35 @@ async def get_events(
     "old entries don't come back" is deterministic and testable without
     waiting on real time.
 
+    Scores are event times (see add_event), which has two consequences:
+
+      * The ceiling is `now` + CORRELATION_CLOCK_SKEW_SECONDS, so an
+        endpoint whose clock runs slightly fast still gets correlated
+        instead of having its events silently skipped.
+      * An event whose own timestamp is already older than
+        window_minutes is NOT correlated, however recently it arrived.
+        That is intended: the window means "what happened on this host
+        in the last N minutes", so a late-arriving or deliberately
+        backdated log (injector/demo.py seeds weeks of history) must not
+        resurrect an attack chain out of events that are, in event time,
+        long past.
+
+    `allow_future_skew=False` pins the ceiling to exactly `now` — for
+    callers that treat `now` as a historical point rather than "live",
+    where reaching past it would pull in events the caller means to
+    exclude (services/anomaly.py's non-overlapping baseline/recent
+    windows).
+
     `now` (unix seconds) is injectable for tests; defaults to the real
     current time.
     """
     now = now if now is not None else time.time()
     floor = now - (window_minutes * 60)
+    ceiling = now + settings.CORRELATION_CLOCK_SKEW_SECONDS if allow_future_skew else now
     key = _window_key(tenant_id, host_id)
 
     client = get_client()
-    members = await client.zrangebyscore(key, floor, now)
+    members = await client.zrangebyscore(key, floor, ceiling)
     return [json.loads(member) for member in members]
 
 

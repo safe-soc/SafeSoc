@@ -49,7 +49,10 @@ async def test_added_event_is_returned_by_get_events(fake_redis):
 
     events = await correlation.get_events("acme-corp", "DESKTOP-042", window_minutes=5, now=now)
 
-    assert events == [{"action": "failed_login"}]
+    # add_event copies the score into the member so equal-score events
+    # have a deterministic order (Redis would otherwise fall back to
+    # comparing the JSON text).
+    assert events == [{"action": "failed_login", "timestamp": now}]
 
 
 @pytest.mark.asyncio
@@ -72,7 +75,7 @@ async def test_get_events_is_scoped_per_host(fake_redis):
 
     events = await correlation.get_events("acme-corp", "HOST-A", window_minutes=5, now=now)
 
-    assert events == [{"host": "a"}]
+    assert [e["host"] for e in events] == ["a"]
 
 
 @pytest.mark.asyncio
@@ -84,7 +87,7 @@ async def test_get_events_is_scoped_per_tenant(fake_redis):
 
     events = await correlation.get_events("tenant-a", "DESKTOP-042", window_minutes=5, now=now)
 
-    assert events == [{"tenant": "a"}]
+    assert [e["tenant"] for e in events] == ["a"]
 
 
 # ── SS-027: old entries don't come back — time-manipulated, no real wait ──
@@ -108,7 +111,7 @@ async def test_get_events_includes_events_at_the_exact_window_boundary(fake_redi
 
     events = await correlation.get_events("acme-corp", "DESKTOP-042", window_minutes=60, now=now)
 
-    assert events == [{"boundary": True}]
+    assert [e["boundary"] for e in events] == [True]
 
 
 @pytest.mark.asyncio
@@ -117,7 +120,162 @@ async def test_get_events_defaults_to_the_current_time_when_now_is_omitted(fake_
 
     events = await correlation.get_events("acme-corp", "DESKTOP-042", window_minutes=5)
 
-    assert events == [{"recent": True}]
+    assert [e["recent"] for e in events] == [True]
+
+
+def _event(alert_id, log_type, action, severity="low", user="john.doe", destination_ip=None):
+    return {
+        "alert_id": alert_id,
+        "log_type": log_type,
+        "action": action,
+        "severity": severity,
+        "user": user,
+        "destination_ip": destination_ip,
+    }
+
+
+# ── Event-time ordering (ADR-011) ──────────────────────────────
+#
+# queue_post_ingest_tasks queues one Celery task per accepted alert and
+# they run concurrently, so a window scored at PROCESSING time can hold
+# the events of an attack chain in any order. Every test below adds
+# events in the WRONG processing order with the RIGHT event timestamps,
+# and asserts the order-sensitive detectors still fire — the
+# privilege_escalation scenario's "alerts but no incident" bug.
+
+@pytest.mark.asyncio
+async def test_privilege_escalation_is_detected_when_the_events_are_processed_out_of_order(fake_redis):
+    now = 1_700_000_000.0
+    # Processed privilege-change first (the task that finished first)…
+    await correlation.add_event(
+        "acme-corp", "DESKTOP-042",
+        _event("a2", "privilege", "permission_change", severity="critical"),
+        timestamp=now - 30,
+    )
+    # …but it HAPPENED after the login.
+    await correlation.add_event(
+        "acme-corp", "DESKTOP-042",
+        _event("a1", "authentication", "login_success"),
+        timestamp=now - 60,
+    )
+
+    chains = await correlation.evaluate_host("acme-corp", "DESKTOP-042", now=now)
+
+    patterns = {chain.pattern for chain in chains}
+    assert CorrelationPattern.PRIVILEGE_ESCALATION in patterns
+    chain = next(c for c in chains if c.pattern == CorrelationPattern.PRIVILEGE_ESCALATION)
+    assert chain.alert_ids == ("a1", "a2")  # login first, in event order
+
+
+@pytest.mark.asyncio
+async def test_successful_compromise_is_detected_when_the_success_is_processed_first(fake_redis):
+    now = 1_700_000_000.0
+    await correlation.add_event(
+        "acme-corp", "DESKTOP-042", _event("a-success", "authentication", "login_success"), timestamp=now - 10,
+    )
+    for i in range(correlation.BRUTE_FORCE_MIN_ATTEMPTS):
+        await correlation.add_event(
+            "acme-corp", "DESKTOP-042",
+            _event(f"a{i}", "authentication", "failed_login"),
+            timestamp=now - 60 + i,  # all earlier than the success
+        )
+
+    chains = await correlation.evaluate_host("acme-corp", "DESKTOP-042", now=now)
+
+    patterns = {chain.pattern for chain in chains}
+    assert CorrelationPattern.SUCCESSFUL_COMPROMISE in patterns
+    chain = next(c for c in chains if c.pattern == CorrelationPattern.SUCCESSFUL_COMPROMISE)
+    assert chain.alert_ids[-1] == "a-success"  # the success is last, after its failures
+
+
+@pytest.mark.asyncio
+async def test_privilege_escalation_is_not_detected_when_the_privilege_change_came_first(fake_redis):
+    """The ordering still MATTERS — this isn't order-insensitivity, it's correct ordering."""
+    now = 1_700_000_000.0
+    await correlation.add_event(
+        "acme-corp", "DESKTOP-042",
+        _event("a1", "privilege", "permission_change", severity="critical"),
+        timestamp=now - 60,
+    )
+    await correlation.add_event(
+        "acme-corp", "DESKTOP-042", _event("a2", "authentication", "login_success"), timestamp=now - 30,
+    )
+
+    chains = await correlation.evaluate_host("acme-corp", "DESKTOP-042", now=now)
+
+    assert CorrelationPattern.PRIVILEGE_ESCALATION not in {chain.pattern for chain in chains}
+
+
+@pytest.mark.asyncio
+async def test_an_event_whose_own_timestamp_predates_the_window_is_excluded(fake_redis):
+    """
+    A late-arriving (or deliberately backdated — injector/demo.py seeds
+    weeks of history) log is not correlated, however recently it was
+    processed. Intended: the window is "what happened in the last N
+    minutes", in event time.
+    """
+    now = 1_700_000_000.0
+    await correlation.add_event(
+        "acme-corp", "DESKTOP-042", _event("old", "authentication", "login_success"), timestamp=now - (3 * 3600),
+    )
+    await correlation.add_event(
+        "acme-corp", "DESKTOP-042",
+        _event("new", "privilege", "permission_change", severity="critical"),
+        timestamp=now - 30,
+    )
+
+    events = await correlation.get_events("acme-corp", "DESKTOP-042", window_minutes=60, now=now)
+    chains = await correlation.evaluate_host("acme-corp", "DESKTOP-042", now=now)
+
+    assert [e["alert_id"] for e in events] == ["new"]
+    assert CorrelationPattern.PRIVILEGE_ESCALATION not in {chain.pattern for chain in chains}
+
+
+@pytest.mark.asyncio
+async def test_a_slightly_future_event_within_the_clock_skew_allowance_is_included(fake_redis):
+    """An endpoint with a slightly fast clock still gets correlated, not silently skipped."""
+    now = 1_700_000_000.0
+    skewed = now + settings.CORRELATION_CLOCK_SKEW_SECONDS - 1
+    await correlation.add_event("acme-corp", "DESKTOP-042", {"fast_clock": True}, timestamp=skewed)
+
+    events = await correlation.get_events("acme-corp", "DESKTOP-042", window_minutes=60, now=now)
+
+    assert [e["fast_clock"] for e in events] == [True]
+
+
+@pytest.mark.asyncio
+async def test_an_event_beyond_the_clock_skew_allowance_is_excluded(fake_redis):
+    now = 1_700_000_000.0
+    way_ahead = now + settings.CORRELATION_CLOCK_SKEW_SECONDS + 60
+    await correlation.add_event("acme-corp", "DESKTOP-042", {"far_future": True}, timestamp=way_ahead)
+
+    events = await correlation.get_events("acme-corp", "DESKTOP-042", window_minutes=60, now=now)
+
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_allow_future_skew_false_pins_the_ceiling_to_now(fake_redis):
+    """services/anomaly.py's historical windows must not reach past their own `now`."""
+    now = 1_700_000_000.0
+    await correlation.add_event("acme-corp", "DESKTOP-042", {"slightly_ahead": True}, timestamp=now + 30)
+
+    events = await correlation.get_events(
+        "acme-corp", "DESKTOP-042", window_minutes=60, now=now, allow_future_skew=False
+    )
+
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_add_event_stores_the_event_time_in_the_member(fake_redis):
+    """Ties between equal scores are ordered by member string in Redis — the stored timestamp makes that deterministic."""
+    now = 1_700_000_000.0
+    await correlation.add_event("acme-corp", "DESKTOP-042", {"action": "failed_login"}, timestamp=now)
+
+    events = await correlation.get_events("acme-corp", "DESKTOP-042", window_minutes=5, now=now)
+
+    assert events[0]["timestamp"] == now
 
 
 # ── SS-027: storage TTL (Redis-level expiry, from CORRELATION_WINDOW_TTL) ──
@@ -144,17 +302,6 @@ def test_window_key_format_matches_the_documented_tenant_host_scheme():
 # what get_events() actually returns. Detectors are called directly with
 # these lists rather than through Redis, since the detection *logic* is
 # what's under test here (SS-027 already covers the storage primitives).
-
-def _event(alert_id, log_type, action, severity="low", user="john.doe", destination_ip=None):
-    return {
-        "alert_id": alert_id,
-        "log_type": log_type,
-        "action": action,
-        "severity": severity,
-        "user": user,
-        "destination_ip": destination_ip,
-    }
-
 
 def test_credential_brute_force_triggers_on_enough_failed_logins():
     events = [
@@ -203,7 +350,9 @@ def test_successful_compromise_triggers_on_brute_force_then_success():
     assert chain is not None
     assert chain.pattern == CorrelationPattern.SUCCESSFUL_COMPROMISE
     assert "a-success" in chain.alert_ids
-    assert chain.mitre_technique_ids == ("T1078",)
+    # The detector requires failed logons BEFORE the success, so the
+    # brute force (T1110) is detected evidence alongside T1078.
+    assert chain.mitre_technique_ids == ("T1110", "T1078")
 
 
 def test_successful_compromise_does_not_trigger_on_a_lone_successful_login():
@@ -253,7 +402,9 @@ def test_privilege_escalation_triggers_after_login_with_high_severity():
     assert chain is not None
     assert chain.pattern == CorrelationPattern.PRIVILEGE_ESCALATION
     assert chain.confidence >= settings.CORRELATION_CONFIDENCE_THRESHOLD
-    assert chain.mitre_technique_ids == ("T1068",)
+    # T1548 (Abuse Elevation Control Mechanism), not T1068 — nothing in
+    # a login-then-privilege-change signal indicates an exploit.
+    assert chain.mitre_technique_ids == ("T1548",)
 
 
 def test_privilege_escalation_does_not_trigger_on_low_severity_change():

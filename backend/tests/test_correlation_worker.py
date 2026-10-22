@@ -3,6 +3,7 @@ SafeSOC — Correlation Worker Tests
 """
 
 import uuid
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -54,6 +55,65 @@ async def test_evaluate_correlation_async_adds_the_event_then_evaluates_the_wind
     assert event_arg["action"] == "failed_login"
 
     mock_evaluate_host.assert_called_once_with("acme-corp", "DESKTOP-042")
+
+
+# ── Event-time scoring (ADR-011) ─────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_the_event_is_scored_by_its_own_timestamp_not_processing_time(monkeypatch):
+    """
+    The actual defect: one Celery task per alert, running concurrently,
+    scored the correlation window at task-completion time — so the
+    order-sensitive detectors saw a two-event chain in either order.
+    """
+    doc = {
+        "alert_id": "abc-123",
+        "tenant_id": "acme-corp",
+        "host_id": "DESKTOP-042",
+        "log_type": "privilege",
+        "action": "permission_change",
+        "severity": "critical",
+        "timestamp": "2026-08-26T09:15:42Z",
+    }
+    monkeypatch.setattr(correlation_worker, "get_alert_by_id", AsyncMock(return_value=doc))
+    mock_add_event = AsyncMock()
+    monkeypatch.setattr(correlation_worker, "add_event", mock_add_event)
+    monkeypatch.setattr(correlation_worker, "evaluate_host", AsyncMock(return_value=[]))
+
+    await correlation_worker._evaluate_correlation_async("abc-123")
+
+    expected = datetime(2026, 8, 26, 9, 15, 42, tzinfo=timezone.utc).timestamp()
+    assert mock_add_event.call_args.kwargs["timestamp"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw, expected", [
+    ("2026-08-26T09:15:42Z", datetime(2026, 8, 26, 9, 15, 42, tzinfo=timezone.utc)),
+    ("2026-08-26T09:15:42+00:00", datetime(2026, 8, 26, 9, 15, 42, tzinfo=timezone.utc)),
+    ("2026-08-26T14:45:42+05:30", datetime(2026, 8, 26, 9, 15, 42, tzinfo=timezone.utc)),
+])
+async def test_event_timestamp_parses_both_z_and_offset_forms(raw, expected):
+    assert correlation_worker._event_timestamp({"timestamp": raw}, "abc-123") == expected.timestamp()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("doc", [{}, {"timestamp": None}, {"timestamp": "not-a-timestamp"}, {"timestamp": 1700000000}])
+async def test_event_timestamp_falls_back_to_now_for_an_unusable_timestamp(doc, monkeypatch):
+    """Degrades to the old processing-time behavior for that one event rather than dropping it from correlation."""
+    monkeypatch.setattr(correlation_worker.time, "time", lambda: 1_700_000_000.0)
+
+    assert correlation_worker._event_timestamp(doc, "abc-123") == 1_700_000_000.0
+
+
+@pytest.mark.asyncio
+async def test_an_unparseable_timestamp_is_logged_as_a_warning(monkeypatch):
+    warnings = []
+    monkeypatch.setattr(correlation_worker.logger, "warning", lambda msg, **kw: warnings.append((msg, kw)))
+
+    correlation_worker._event_timestamp({"timestamp": "nonsense"}, "abc-123")
+
+    assert len(warnings) == 1
+    assert warnings[0][1]["alert_id"] == "abc-123"
 
 
 @pytest.mark.asyncio

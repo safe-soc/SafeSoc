@@ -16,11 +16,17 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
-    env_file=".env",
-    env_file_encoding="utf-8",
-    case_sensitive=False,
-    extra="ignore",
-)
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+        # A blank value in .env means "use the default", not "use an
+        # empty string" — .env.example ships several of those
+        # deliberately (ANOMALY_MODEL_PATH=, REPORT_OUTPUT_DIR=). Now
+        # that docker-compose loads .env into the containers, without
+        # this those blanks would override real defaults with "".
+        env_ignore_empty=True,
+    )
 
     # ──────────────────────────────────────────────
     # Application
@@ -131,7 +137,21 @@ class Settings(BaseSettings):
     # was ruled out on quality grounds, not just latency.
     OLLAMA_MODEL: str = "llama3.2:3b"
     GROQ_API_KEY: str = ""
-    GROQ_MODEL: str = "mixtral-8x7b-32768"
+    # Groq retires hosted models on a published schedule, and a request
+    # for a retired id is a hard error, not a fallback: mixtral-8x7b-32768
+    # was shut down on 2025-03-20, and llama-3.3-70b-versatile /
+    # llama-3.1-8b-instant on 2026-08-16. openai/gpt-oss-120b is Groq's
+    # own listed replacement (openai/gpt-oss-20b is the smaller sibling).
+    GROQ_MODEL: str = "openai/gpt-oss-120b"
+    # gpt-oss are REASONING models: they spend tokens thinking before
+    # answering, and that spend comes out of the same completion budget
+    # as the answer. "low" keeps the thinking short, and the headroom is
+    # added to the caller's max_output_tokens so a small answer budget
+    # (120 tokens for a chat turn) isn't consumed entirely by reasoning,
+    # which returns an empty completion. Both are only used for gpt-oss
+    # models — see clients/groq.py::build_payload.
+    GROQ_REASONING_EFFORT: str = "low"       # low | medium | high
+    GROQ_REASONING_TOKEN_HEADROOM: int = 512
 
     @property
     def ollama_url(self) -> str:
@@ -161,7 +181,14 @@ class Settings(BaseSettings):
     # it. 120 was the largest value that stayed reliably under budget
     # across repeated real-data measurements (180 measured as high as
     # 10.12s on this hardware).
-    INVESTIGATION_LLM_MAX_OUTPUT_TOKENS: int = 120
+    # Raised 120 -> 200 alongside the fixed answer format (B2): the
+    # format asks for 1-3 sentences plus up to 5 short bullets, under
+    # ~120 words, which does not fit in 120 tokens — answers were being
+    # cut off mid-sentence. Still well inside the 10s budget above: the
+    # 180-token measurement below was taken against a 100-alert raw-JSON
+    # prompt, which _describe_tool_result has since replaced with a far
+    # smaller readable briefing.
+    INVESTIGATION_LLM_MAX_OUTPUT_TOKENS: int = 200
 
     # POST /api/v1/incidents/{id}/narrative (SS-109/110) has its own,
     # more generous timeout rather than reusing
@@ -197,7 +224,11 @@ class Settings(BaseSettings):
     # generous 25s timeout above (not the 10s interactive-chat budget),
     # so a larger token cap doesn't reintroduce the latency problem
     # INVESTIGATION_LLM_MAX_OUTPUT_TOKENS itself was added to prevent.
-    INCIDENT_NARRATIVE_LLM_MAX_OUTPUT_TOKENS: int = 350
+    # Raised 350 -> 450 alongside the fixed four-section markdown format
+    # (B1): ~180 words of prose plus four headings and bullet markers
+    # lands close enough to 350 that a slightly long summary was losing
+    # its last section. The 25s timeout above still bounds the call.
+    INCIDENT_NARRATIVE_LLM_MAX_OUTPUT_TOKENS: int = 450
 
     # Investigation Sessions (persistent, incident-scoped Q&A —
     # services/investigation_session.py) get their own timeout/token
@@ -217,6 +248,12 @@ class Settings(BaseSettings):
     # ──────────────────────────────────────────────
     CORRELATION_WINDOW_TTL: int = 3600      # 1 hour (seconds)
     CORRELATION_CONFIDENCE_THRESHOLD: float = 0.6
+    # Correlation windows are scored by EVENT time (see docs/decisions.md
+    # ADR-011), so an endpoint whose clock runs slightly fast produces
+    # events timestamped marginally in the future. They're still real
+    # events, so the window's upper bound allows this much skew rather
+    # than dropping them.
+    CORRELATION_CLOCK_SKEW_SECONDS: int = 300   # 5 minutes
 
     # ──────────────────────────────────────────────
     # Risk Scoring

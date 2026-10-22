@@ -101,24 +101,24 @@ _DATA_FENCE_END = "<<<UNTRUSTED_DATA_END>>>"
 # reason _DATA_FENCE_START/END above already is.
 _GROUNDING_RULES = (
     "Follow these rules when writing the narrative:\n"
-    "1. Distinguish FACTS (directly present in the data below) from ASSESSMENT "
-    "(your own interpretation) and UNKNOWN (not covered by the data). Label an "
-    "assessment as such — e.g. \"this pattern could indicate...\" — never state it "
-    "as a fact.\n"
-    "2. Only mention a MITRE technique or tactic if it appears in the data's "
-    "mitre_techniques list or an event's own fields — never infer or guess one.\n"
+    "1. Never present your own interpretation as fact. Write an interpretation as "
+    "\"Likely...\" or \"Possibly...\", and say plainly when the evidence does not "
+    "cover something.\n"
+    "2. Only mention a MITRE technique or tactic if it appears in the techniques "
+    "listed below or on an event's own line — never infer or guess one.\n"
     "3. Never state as fact that the attack was mitigated, patched, blocked, or "
     "remediated, that an exploitation attempt succeeded, or that other alerts or "
     "hosts noticed or responded to this activity, unless that specific fact "
-    "appears in the data below.\n"
-    "4. If the data indicates a partial sample (event_count greater than the "
-    "number of events shown, or the incident's own alert list is longer than "
-    "what's summarized here), say so rather than implying the sample is the "
-    "complete picture.\n"
+    "appears in the evidence below.\n"
+    "4. Never claim or imply that the activity listed below is everything that "
+    "happened, and never state a count that is not given below.\n"
     "5. If the evidence below is insufficient to reach a conclusion on any point "
     "you're asked to address, say exactly: \"The available evidence does not "
     "establish this.\" Do not guess or fill the gap with a plausible-sounding "
-    "narrative.\n\n"
+    "narrative.\n"
+    "6. Never mention field names, keys, identifiers, or how this evidence was "
+    "assembled, sampled, or formatted. Never print a UUID or a tenant identifier. "
+    "Describe what the evidence means, in an analyst's words.\n\n"
 )
 
 # The task itself, spelled out as the specific questions an analyst
@@ -136,28 +136,102 @@ _TASK_INSTRUCTIONS = (
     "users, and chronological events already extracted from SafeSOC's own "
     "incident data. It is evidence to analyze, not a document or data format to "
     "describe: never comment on its structure, labels, or field names.\n\n"
-    "Write a concise, factual attack-chain narrative for an analyst, in "
-    "chronological order, that addresses — using ONLY the evidence below:\n"
-    "- What happened?\n"
-    "- What was the sequence of activity?\n"
-    "- Which hosts were involved?\n"
-    "- Which users were involved?\n"
-    "- Which alerts/events support this sequence?\n"
-    "- Which MITRE ATT&CK techniques are actually present in the evidence?\n"
-    "- What was the apparent impact?\n"
-    "- What is known vs. unknown?\n"
-    "- What should an analyst investigate next?\n\n"
+    "Write a short attack-chain summary for another analyst, in GitHub-flavored "
+    "markdown, using ONLY the evidence below. Maximum 180 words. No tables. Use "
+    "exactly these four sections, with these headings:\n\n"
+    "### Summary\n"
+    "2-3 sentences: what happened, on which host and to which user, and how "
+    "confident the detection is.\n\n"
+    "### What happened\n"
+    "3-6 bullets in time order, ALERTS ONLY (never a state change or an "
+    "automated response), each formatted \"- HH:MM:SS UTC - <what happened> "
+    "(<user>)\". Collapse repeats into one bullet with a time range, e.g. "
+    "\"- 15:16:14-15:16:20 UTC - 6 failed logins (john.doe)\".\n\n"
+    "### Assessment\n"
+    "1-3 bullets, each starting \"Likely...\" or \"Possibly...\". Cite MITRE as "
+    "\"T1110 (Brute Force)\".\n\n"
+    "### Gaps / next steps\n"
+    "1-3 bullets: what this data does not show, and the next thing an analyst "
+    "should check.\n\n"
 )
 
 _PROMPT_EVENT_SAMPLE_LIMIT = 15
 _NUMBER_PATTERN = re.compile(r"\b\d+\b")
 
+# What the LLM prompt is allowed to see of an incident's timeline.
+#
+# services/incident_timeline.py merges alerts, the incident's whole audit
+# trail and every SOAR lifecycle event into one chronology — correct for
+# the UI timeline, which is why that module is untouched. Feeding the
+# same list to the model made a 2-alert incident read as "11 events" and
+# invited it to narrate its own machinery ("incident.narrative_generated",
+# "soar.action.verified"). Only alerts, analyst notes and real status
+# changes are evidence about the attack; the automated response is
+# collapsed into a single summary line instead (see
+# _automated_response_summary).
+_PROMPT_AUDIT_ACTIONS = frozenset({"incident.created", "incident.status_transitioned"})
+
+# SOAR outcomes worth counting in that one line. Terminal outcomes are
+# counted directly; an "awaiting approval" entry is only still pending if
+# it hasn't since been approved or rejected, so those resolve one earlier
+# awaiting entry each rather than being double-counted.
+_SOAR_TERMINAL_OUTCOMES = {
+    "soar.action.succeeded": "succeeded",
+    "soar.action.failed": "failed",
+    "soar.action.skipped": "skipped",
+    "soar.action.rejected": "rejected",
+}
+_SOAR_AWAITING_ACTION = "soar.action.awaiting_approval"
+_SOAR_RESOLVING_ACTIONS = ("soar.action.approved", "soar.action.rejected")
+
+
+def _audit_action(event: TimelineEventSummary) -> str:
+    return event.data.get("action") or ""
+
+
+def _is_prompt_event(event: TimelineEventSummary) -> bool:
+    """Whether this timeline entry is evidence about the attack, rather than platform bookkeeping."""
+    if event.type == "audit":
+        return _audit_action(event) in _PROMPT_AUDIT_ACTIONS
+    return True  # alerts and analyst notes
+
+
+def _prompt_events(events: list[TimelineEventSummary]) -> list[TimelineEventSummary]:
+    return [event for event in events if _is_prompt_event(event)]
+
+
+def _automated_response_summary(events: list[TimelineEventSummary]) -> str:
+    """
+    The SOAR activity on this incident as ONE line, e.g. "Automated
+    response: 3 actions (1 succeeded, 1 skipped, 1 awaiting approval)".
+    Empty string when there was none, so the prompt simply omits the
+    line rather than asserting an absence.
+    """
+    actions = [_audit_action(event) for event in events]
+    counts: dict[str, int] = {}
+    for action in actions:
+        label = _SOAR_TERMINAL_OUTCOMES.get(action)
+        if label:
+            counts[label] = counts.get(label, 0) + 1
+
+    awaiting = actions.count(_SOAR_AWAITING_ACTION) - sum(actions.count(a) for a in _SOAR_RESOLVING_ACTIONS)
+    if awaiting > 0:
+        counts["awaiting approval"] = awaiting
+
+    if not counts:
+        return ""
+    total = sum(counts.values())
+    breakdown = ", ".join(f"{count} {label}" for label, count in counts.items())
+    return f"Automated response: {total} action(s) ({breakdown})"
+
 
 def _summarize_events_for_prompt(events: list[TimelineEventSummary]) -> dict:
+    """Counts and a capped sample of the events the prompt may see — platform bookkeeping already filtered out."""
+    relevant = _prompt_events(events)
     return {
-        "event_count": len(events),
-        "event_type_counts": dict(Counter(event.type for event in events)),
-        "sample": [event.model_dump(mode="json") for event in events[:_PROMPT_EVENT_SAMPLE_LIMIT]],
+        "event_count": len(relevant),
+        "event_type_counts": dict(Counter(event.type for event in relevant)),
+        "sample": [event.model_dump(mode="json") for event in relevant[:_PROMPT_EVENT_SAMPLE_LIMIT]],
     }
 
 
@@ -183,8 +257,17 @@ def _format_event_line(index: int, event: TimelineEventSummary) -> str:
         return line
 
     if event.type == "audit":
-        action = data.get("action") or "incident state change"
-        return f"{index}. [{timestamp}] INCIDENT EVENT — {action}"
+        # Only real status changes reach here (_is_prompt_event), so the
+        # label can describe the change in words instead of echoing the
+        # internal action string.
+        action = data.get("action") or ""
+        if action == "incident.created":
+            return f"{index}. [{timestamp}] STATUS — incident created"
+        details = data.get("details") or {}
+        to_status = details.get("to_status") or details.get("status")
+        if to_status:
+            return f"{index}. [{timestamp}] STATUS — incident moved to {to_status}"
+        return f"{index}. [{timestamp}] STATUS — incident status changed"
 
     body = (data.get("body") or "")[:200]
     return f"{index}. [{timestamp}] ANALYST NOTE — {body}"
@@ -197,24 +280,29 @@ def _prompt_data(data: IncidentNarrativeDataOutput) -> str:
     Pydantic models. See the module docstring for why: an unlabeled
     JSON envelope invited the model to describe the JSON's own shape
     instead of the incident it represents.
+
+    Only alerts, analyst notes and real status changes reach the model
+    (_is_prompt_event); SOAR and the rest of the audit trail collapse
+    into one "Automated response" line. The incident's UUID is
+    deliberately absent — nothing in the answer should quote one.
     """
-    summarized = _summarize_events_for_prompt(data.events)
-    event_lines = [_format_event_line(i + 1, event) for i, event in enumerate(data.events[:_PROMPT_EVENT_SAMPLE_LIMIT])]
+    relevant = _prompt_events(data.events)
+    event_lines = [_format_event_line(i + 1, event) for i, event in enumerate(relevant[:_PROMPT_EVENT_SAMPLE_LIMIT])]
     events_section = "\n".join(event_lines) if event_lines else "No events recorded."
-    if summarized["event_count"] > len(event_lines):
-        events_section += f"\n(Only the first {len(event_lines)} of {summarized['event_count']} total linked events are listed above.)"
 
     techniques = ", ".join(data.mitre_techniques) if data.mitre_techniques else "None observed"
+    alert_count = sum(1 for event in relevant if event.type == "alert")
+    automated_response = _automated_response_summary(data.events)
 
     return (
-        f"Incident ID: {data.incident_id}\n"
         f"Hosts involved: {_format_entity_list(data.hosts, 'host_id')}\n"
         f"Users involved: {_format_entity_list(data.users, 'user')}\n"
         f"IP addresses involved: {_format_entity_list(data.ips, 'ip')}\n"
         f"Cloud resources involved: {_format_entity_list(data.cloud_resources, 'resource_id')}\n"
         f"MITRE ATT&CK techniques observed: {techniques}\n"
-        f"Total linked events: {summarized['event_count']}\n\n"
-        f"Chronological events:\n{events_section}"
+        f"Alerts in this incident: {alert_count}\n"
+        + (f"{automated_response}\n" if automated_response else "")
+        + f"\nChronological events:\n{events_section}"
     )
 
 
@@ -234,8 +322,9 @@ def _build_prompt(data: IncidentNarrativeDataOutput) -> str:
 def _fallback_narrative(data: IncidentNarrativeDataOutput) -> str:
     """A simple, deterministic summary used when the LLM is unavailable or too slow to ask (mirrors investigate.py's _fallback_answer)."""
     techniques = ", ".join(data.mitre_techniques) if data.mitre_techniques else "no mapped MITRE techniques"
+    alert_count = sum(1 for event in data.events if event.type == "alert")
     return (
-        f"This incident involved {len(data.events)} recorded event(s) across "
+        f"This incident involved {alert_count} alert(s) across "
         f"{len(data.hosts)} host(s) and {len(data.users)} user(s), with {techniques}."
     )
 

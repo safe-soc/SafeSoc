@@ -18,6 +18,7 @@ import app.services.incident_narrative as narrative_module
 from app.services.incident_narrative import (
     _DATA_FENCE_END,
     _DATA_FENCE_START,
+    _automated_response_summary,
     _build_prompt,
     _fallback_narrative,
     _generate_narrative,
@@ -76,16 +77,45 @@ def test_build_prompt_frames_the_data_as_evidence_not_a_format_to_describe():
     assert "to describe and summarize" not in prompt  # the specific phrasing implicated in the bad behavior
 
 
-def test_build_prompt_asks_the_specific_analyst_questions():
-    """The prompt must give the model a content-shaped task (the concrete questions an analyst needs answered), not just an open-ended "summarize this"."""
+def test_build_prompt_instructs_the_four_markdown_sections():
+    """
+    The prompt gives the model a fixed output shape, not an open-ended
+    "summarize this": four named markdown sections, in order. Replaces
+    the earlier free-form question list, which against Groq's
+    openai/gpt-oss-120b produced long, table-heavy answers with
+    shouting FACTS / ASSESSMENT banners.
+    """
+    prompt = _build_prompt(_data())
+
+    for heading in ("### Summary", "### What happened", "### Assessment", "### Gaps / next steps"):
+        assert heading in prompt, f"missing section heading: {heading}"
+    assert prompt.index("### Summary") < prompt.index("### What happened") < prompt.index("### Assessment") < prompt.index("### Gaps / next steps")
+
+
+def test_build_prompt_bounds_the_narrative_length_and_bans_tables():
     prompt = _build_prompt(_data()).lower()
 
-    for question_fragment in (
-        "what happened", "sequence of activity", "which hosts were involved", "which users were involved",
-        "mitre att&ck techniques are actually present", "apparent impact", "known vs. unknown",
-        "investigate next",
-    ):
-        assert question_fragment in prompt, f"missing question: {question_fragment}"
+    assert "maximum 180 words" in prompt
+    assert "no tables" in prompt
+    assert "markdown" in prompt
+
+
+def test_build_prompt_asks_for_an_alerts_only_chronology():
+    """The "What happened" bullets must describe alerts — never a state change or an automated response."""
+    prompt = _build_prompt(_data())
+
+    assert "ALERTS ONLY" in prompt
+    assert "HH:MM:SS UTC" in prompt
+
+
+def test_build_prompt_no_longer_asks_for_shouting_fact_banners():
+    """The rule (never present interpretation as fact) is kept; the FACTS/ASSESSMENT/UNKNOWN labels it used to demand are not."""
+    prompt = _build_prompt(_data())
+
+    assert "FACTS (" not in prompt
+    assert "UNKNOWN (" not in prompt
+    assert "Likely..." in prompt  # the replacement register
+    assert "never present your own interpretation as fact" in prompt.lower()
 
 
 def test_build_prompt_instructs_the_exact_insufficient_evidence_phrase():
@@ -160,7 +190,7 @@ def test_a_realistic_incident_payload_produces_a_prompt_that_reads_as_incident_e
     assert "Users involved: leo.chen" in prompt
     assert "MITRE ATT&CK techniques observed: T1078, T1068" in prompt
     assert "Privilege escalation detected for leo.chen on DEMO-CRITICAL-01" in prompt
-    assert "ALERT" in prompt and "INCIDENT EVENT" in prompt
+    assert "ALERT" in prompt and "STATUS — incident created" in prompt
 
     # ...and none of the raw envelope keys that previously leaked the
     # payload's own shape into the model's answer.
@@ -181,11 +211,121 @@ def test_prompt_data_summarizes_a_large_event_list():
 
     prompt_evidence = _prompt_data(data)
 
-    assert "Total linked events: 40" in prompt_evidence
-    assert "Only the first 15 of 40 total linked events are listed above." in prompt_evidence
+    assert "Alerts in this incident: 40" in prompt_evidence
+    # The old "(Only the first 15 of 40 ...)" note is gone: the model
+    # was quoting the prompt's own sampling back at the analyst.
+    assert "Only the first" not in prompt_evidence
+    assert prompt_evidence.count("[2026-08-01 10:00:00 UTC]") == 15  # still capped, not all 40
     summarized = _summarize_events_for_prompt(events)
     assert summarized["event_count"] == 40
     assert len(summarized["sample"]) == 15  # capped, not all 40
+
+
+# ── Prompt event filtering (audit noise) ─────────────────────────────
+#
+# services/incident_timeline.py merges alerts, the incident's audit
+# trail and every SOAR lifecycle event into one chronology — right for
+# the UI timeline (which is why that module is untouched), wrong for the
+# prompt: a 2-alert incident was described as "11 events" and the model
+# narrated its own machinery ("incident.narrative_generated",
+# "soar.action.verified").
+
+def _noisy_incident_events():
+    return [
+        TimelineEventSummary(type="alert", timestamp="2026-08-26T09:12:04Z", data={"host_id": "H1", "user": "john.doe", "action": "failed_login", "description": "Failed login"}),
+        TimelineEventSummary(type="alert", timestamp="2026-08-26T09:12:20Z", data={"host_id": "H1", "user": "john.doe", "action": "login_success", "description": "Authenticated"}),
+        TimelineEventSummary(type="audit", timestamp="2026-08-26T09:16:00Z", data={"action": "incident.created", "details": {"pattern": "successful_compromise"}}),
+        TimelineEventSummary(type="audit", timestamp="2026-08-26T09:16:30Z", data={"action": "soar.playbook.triggered", "details": {}}),
+        TimelineEventSummary(type="audit", timestamp="2026-08-26T09:16:40Z", data={"action": "soar.action.started", "details": {}}),
+        TimelineEventSummary(type="audit", timestamp="2026-08-26T09:16:50Z", data={"action": "soar.action.succeeded", "details": {}}),
+        TimelineEventSummary(type="audit", timestamp="2026-08-26T09:16:55Z", data={"action": "soar.action.verified", "details": {}}),
+        TimelineEventSummary(type="audit", timestamp="2026-08-26T09:17:00Z", data={"action": "soar.action.skipped", "details": {}}),
+        TimelineEventSummary(type="audit", timestamp="2026-08-26T09:17:10Z", data={"action": "soar.action.awaiting_approval", "details": {}}),
+        TimelineEventSummary(type="audit", timestamp="2026-08-26T09:18:00Z", data={"action": "incident.merged", "details": {}}),
+        TimelineEventSummary(type="audit", timestamp="2026-08-26T09:18:30Z", data={"action": "incident.narrative_generated", "details": {}}),
+        TimelineEventSummary(type="audit", timestamp="2026-08-26T09:19:00Z", data={"action": "incident.status_transitioned", "details": {"to_status": "investigating"}}),
+        TimelineEventSummary(type="note", timestamp="2026-08-26T09:20:00Z", data={"body": "Escalated to tier 2"}),
+    ]
+
+
+def test_prompt_data_excludes_soar_and_platform_audit_events():
+    prompt_evidence = _prompt_data(_data(events=_noisy_incident_events()))
+
+    for noise in ("soar.playbook.triggered", "soar.action.started", "soar.action.succeeded",
+                  "soar.action.verified", "soar.action.skipped", "soar.action.awaiting_approval",
+                  "incident.narrative_generated", "incident.merged"):
+        assert noise not in prompt_evidence, f"{noise} leaked into the prompt"
+
+
+def test_prompt_data_keeps_alerts_notes_and_real_status_changes():
+    prompt_evidence = _prompt_data(_data(events=_noisy_incident_events()))
+
+    assert "Failed login" in prompt_evidence
+    assert "Authenticated" in prompt_evidence
+    assert "ANALYST NOTE — Escalated to tier 2" in prompt_evidence
+    assert "STATUS — incident created" in prompt_evidence
+    assert "STATUS — incident moved to investigating" in prompt_evidence
+
+
+def test_prompt_data_counts_alerts_not_the_whole_timeline():
+    """The reported symptom: a 2-alert incident described as "11 events"."""
+    prompt_evidence = _prompt_data(_data(events=_noisy_incident_events()))
+
+    assert "Alerts in this incident: 2" in prompt_evidence
+    assert "13" not in prompt_evidence  # the raw timeline length never reaches the model
+
+
+def test_prompt_data_summarizes_the_automated_response_in_one_line():
+    prompt_evidence = _prompt_data(_data(events=_noisy_incident_events()))
+
+    assert "Automated response: 3 action(s) (1 succeeded, 1 skipped, 1 awaiting approval)" in prompt_evidence
+
+
+def test_automated_response_line_is_omitted_when_there_was_no_soar_activity():
+    """No line at all, rather than asserting an absence the model might comment on."""
+    events = [TimelineEventSummary(type="alert", timestamp="2026-08-26T09:12:04Z", data={"host_id": "H1"})]
+
+    assert "Automated response" not in _prompt_data(_data(events=events))
+    assert _automated_response_summary(events) == ""
+
+
+def test_an_approved_action_is_no_longer_counted_as_awaiting_approval():
+    events = [
+        TimelineEventSummary(type="audit", timestamp="2026-08-26T09:17:10Z", data={"action": "soar.action.awaiting_approval"}),
+        TimelineEventSummary(type="audit", timestamp="2026-08-26T09:17:20Z", data={"action": "soar.action.approved"}),
+        TimelineEventSummary(type="audit", timestamp="2026-08-26T09:17:30Z", data={"action": "soar.action.succeeded"}),
+    ]
+
+    summary = _automated_response_summary(events)
+
+    assert summary == "Automated response: 1 action(s) (1 succeeded)"
+
+
+def test_prompt_data_never_contains_the_incident_uuid():
+    """No raw UUID or tenant id in the prompt — the model was quoting them into answers."""
+    incident_id = uuid.UUID("11111111-2222-3333-4444-555555555555")
+
+    prompt_evidence = _prompt_data(_data(incident_id=incident_id))
+
+    assert str(incident_id) not in prompt_evidence
+    assert "Incident ID" not in prompt_evidence
+
+
+def test_a_narrative_citing_the_automated_response_counts_is_grounded():
+    """The grounding check runs against the same filtered prompt text, so the summary line's numbers count as grounded."""
+    data = _data(events=_noisy_incident_events())
+    prompt_evidence = _prompt_data(data)
+
+    narrative = "2 alerts on H1. Automated response ran 3 actions: 1 succeeded, 1 skipped, 1 awaiting approval."
+
+    assert _narrative_appears_grounded(narrative, prompt_evidence) is True
+
+
+def test_a_narrative_citing_the_raw_timeline_length_is_not_grounded():
+    """The inverse: "13 events" (the unfiltered timeline length) is no longer a number the prompt supports."""
+    data = _data(events=_noisy_incident_events())
+
+    assert _narrative_appears_grounded("This incident involved 13 events.", _prompt_data(data)) is False
 
 
 # ── fallback narrative ────────────────────────────────────────────────
@@ -200,7 +340,9 @@ def test_fallback_narrative_summarizes_counts_and_techniques():
 
     narrative = _fallback_narrative(data)
 
-    assert "3 recorded event" in narrative
+    # Counts ALERTS, not the whole timeline: an incident with two
+    # alerts and nine audit/SOAR entries used to read as "11 events".
+    assert "3 alert(s)" in narrative
     assert "1 host" in narrative
     assert "2 user" in narrative
     assert "T1110, T1078" in narrative

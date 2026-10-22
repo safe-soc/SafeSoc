@@ -150,7 +150,7 @@ async def test_includes_mitre_tactic_and_technique_ids(monkeypatch):
 
     trend = result.trends[0]
     assert trend.mitre_tactic == "Privilege Escalation"
-    assert trend.mitre_technique_ids == ["T1068"]
+    assert trend.mitre_technique_ids == ["T1548"]
 
 
 @pytest.mark.asyncio

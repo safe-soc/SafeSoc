@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.core.enums import Intent, IncidentStatus, RiskLevel
+from app.core.enums import CorrelationPattern, Intent, IncidentStatus, RiskLevel
 from app.mcp import TOOLS
 from app.mcp.tools import (
     AlertListOutput,
@@ -334,6 +334,32 @@ async def test_incident_narrative_data_dedupes_and_sorts_mitre_techniques(monkey
     result = await incident_narrative_data(None, incident.tenant_id, IncidentNarrativeDataInput(incident_id=incident.id))
 
     assert result.mitre_techniques == ["T1078", "T1110"]
+
+
+@pytest.mark.asyncio
+async def test_incident_narrative_data_falls_back_to_the_category_mapping_for_mitre(monkeypatch):
+    """Synthetic alerts carry no mitre_technique — the incident's category must still supply its techniques."""
+    incident = _incident(category=CorrelationPattern.CREDENTIAL_BRUTE_FORCE)
+    timeline = [TimelineEntry(type="alert", timestamp=datetime.now(timezone.utc), data={"host_id": "H1"})]
+    _mock_narrative_sources(monkeypatch, incident, timeline=timeline)
+
+    result = await incident_narrative_data(None, incident.tenant_id, IncidentNarrativeDataInput(incident_id=incident.id))
+
+    assert result.mitre_techniques == ["T1110"]
+
+
+@pytest.mark.asyncio
+async def test_incident_narrative_data_unions_alert_and_category_mitre_techniques(monkeypatch):
+    """Both sources, with adapters/wazuh.py's comma-joined alert value split into its own ids."""
+    incident = _incident(category=CorrelationPattern.LATERAL_MOVEMENT)
+    timeline = [
+        TimelineEntry(type="alert", timestamp=datetime.now(timezone.utc), data={"mitre_technique": "T1110.001, T1078"}),
+    ]
+    _mock_narrative_sources(monkeypatch, incident, timeline=timeline)
+
+    result = await incident_narrative_data(None, incident.tenant_id, IncidentNarrativeDataInput(incident_id=incident.id))
+
+    assert result.mitre_techniques == ["T1021", "T1078", "T1110.001"]
 
 
 @pytest.mark.asyncio

@@ -23,6 +23,7 @@ import LevelBadge from '../components/LevelBadge';
 import MitreBadge from '../components/MitreBadge';
 import IncidentTimeline from '../components/IncidentTimeline';
 import EvidenceExplorer from '../components/EvidenceExplorer';
+import { MarkdownAnswer } from '../components/MarkdownAnswer';
 import AttackChainGraph from '../components/AttackChainGraph';
 import AttackChainGraphView from '../components/AttackChainGraphView';
 import Spinner from '../components/Spinner';
@@ -296,7 +297,7 @@ export default function IncidentDetail() {
                 AI-generated summary
               </span>
             )}
-            <p className="mt-2 text-sm text-slate-200">{narrative.narrative}</p>
+            <MarkdownAnswer className="mt-2">{narrative.narrative}</MarkdownAnswer>
             {narrative.is_fallback && (
               <p className="mt-2 text-xs text-slate-500">
                 The AI summarizer was unavailable — this is a deterministic summary of the same data.

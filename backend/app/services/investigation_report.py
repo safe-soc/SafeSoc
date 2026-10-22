@@ -37,8 +37,8 @@ from typing import Callable, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.enums import LogSource
-from app.core.mitre_mapping import MITRE_PATTERN_MAPPING
+from app.core.enums import CorrelationPattern, LogSource
+from app.core.mitre_mapping import MITRE_PATTERN_MAPPING, split_technique_ids
 from app.db.opensearch import get_alerts_by_ids, search_alerts
 from app.models.endpoint import Endpoint
 from app.models.incident import Incident
@@ -358,6 +358,20 @@ def _daily_counts(alerts: list[dict]) -> list[DailyCount]:
     return [DailyCount(date=date, count=count) for date, count in sorted(buckets.items())]
 
 
+def _has_technique(alert: dict, parents: tuple[str, ...]) -> bool:
+    """
+    True if any of this alert's MITRE technique ids belongs to one of
+    `parents`. Splits adapters/wazuh.py's comma-joined value and matches
+    at the parent level, so a sub-technique counts for its parent
+    (T1021.001 -> T1021) — an exact == comparison missed both shapes.
+    """
+    return any(
+        technique == parent or technique.startswith(f"{parent}.")
+        for technique in split_technique_ids(alert.get("mitre_technique"))
+        for parent in parents
+    )
+
+
 def _build_behavior_categories() -> list[tuple[str, Callable[[dict], bool]]]:
     """
     (category label, matcher) pairs — a matcher receives one alert dict
@@ -372,8 +386,8 @@ def _build_behavior_categories() -> list[tuple[str, Callable[[dict], bool]]]:
         ("Credential attacks", lambda a: a.get("action") == "failed_login"),
         ("Authentication anomalies", lambda a: a.get("action") in ("unusual_authentication", "remote_login")),
         ("Suspicious process activity", lambda a: a.get("log_type") == "process" and a.get("action") in ("process_execution", "powershell_execution")),
-        ("Privilege escalation", lambda a: a.get("action") == "privilege_escalation" or a.get("mitre_technique") == "T1068"),
-        ("Lateral movement", lambda a: a.get("mitre_technique") == "T1021"),
+        ("Privilege escalation", lambda a: a.get("action") == "privilege_escalation" or _has_technique(a, ("T1068", "T1548"))),
+        ("Lateral movement", lambda a: _has_technique(a, ("T1021",))),
         ("Malware-related activity", lambda a: a.get("action") in ("malware_detected", "persistence")),
         ("Network anomalies", lambda a: a.get("action") == "suspicious_network_connection"),
         ("Policy violations", lambda a: a.get("action") == "policy_violation"),
@@ -423,25 +437,48 @@ def _behavior_findings(alerts: list[dict]) -> list[BehaviorFinding]:
     return findings
 
 
-def _mitre_rows(alerts: list[dict]) -> list[MitreRow]:
+def _mitre_rows(alerts: list[dict], category: Optional[CorrelationPattern] = None) -> list[MitreRow]:
+    """
+    Both of an incident's MITRE sources (see core/mitre_mapping.py):
+    the alerts' own technique ids — comma-joined multi-technique values
+    split into one row each, deduped on (technique, host) — plus a row
+    for each technique the incident's `category` maps to that the
+    alerts didn't already account for. `category` is None for the
+    endpoint report, which spans several incidents and so has no single
+    pattern to attribute.
+    """
     seen: set[tuple[str, str]] = set()
     rows: list[MitreRow] = []
     for alert in alerts:
-        technique = alert.get("mitre_technique")
-        if not technique:
-            continue
         host = alert.get("host_id", "unknown")
-        key = (technique, host)
-        if key in seen:
-            continue
-        seen.add(key)
-        rows.append(MitreRow(
-            technique_id=technique,
-            tactic=alert.get("mitre_tactic") or "—",
-            evidence_description=(alert.get("description") or alert.get("action") or "")[:140],
-            affected_host=host,
-            related_alert=str(alert.get("alert_id", ""))[:8],
-        ))
+        for technique in split_technique_ids(alert.get("mitre_technique")):
+            key = (technique, host)
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(MitreRow(
+                technique_id=technique,
+                tactic=alert.get("mitre_tactic") or "—",
+                evidence_description=(alert.get("description") or alert.get("action") or "")[:140],
+                affected_host=host,
+                related_alert=str(alert.get("alert_id", ""))[:8],
+            ))
+
+    if category is not None:
+        mapping = MITRE_PATTERN_MAPPING[category]
+        covered = {technique for technique, _ in seen}
+        hosts = ", ".join(sorted({alert.get("host_id", "unknown") for alert in alerts})) or "unknown"
+        for technique in mapping.technique_ids:
+            if technique in covered:
+                continue
+            rows.append(MitreRow(
+                technique_id=technique,
+                tactic=mapping.tactic,
+                evidence_description=f"Detected correlation pattern: {category.value.replace('_', ' ')}",
+                affected_host=hosts,
+                related_alert="—",
+            ))
+
     rows.sort(key=lambda r: r.technique_id)
     return rows
 
@@ -938,7 +975,7 @@ async def gather_incident_report_data(db: AsyncSession, tenant_id: uuid.UUID, in
     counts = _severity_counts(alerts)
     timestamps = [t for t in (_parse_ts(a.get("timestamp")) for a in alerts) if t is not None]
     behavior = _behavior_findings(alerts)
-    mitre = _mitre_rows(alerts)
+    mitre = _mitre_rows(alerts, incident.category)
     incidents_by_alert_id = {aid: str(incident.id) for aid in incident.alert_ids}
 
     endpoints = [

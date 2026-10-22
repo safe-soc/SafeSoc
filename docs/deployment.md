@@ -48,10 +48,12 @@ This starts six services, defined in `docker-compose.yml`:
 - **`postgres`** — PostgreSQL 16, healthcheck-gated, persisted to a named volume.
 - **`redis`** — Redis 7, healthcheck-gated.
 - **`backend`** — builds `backend/Dockerfile`, waits for all three healthchecks above before starting, mounts `./backend` into the container for live-reload during development, and is pointed at each dependency by container hostname (`OPENSEARCH_HOST=opensearch`, `POSTGRES_HOST=postgres`, `REDIS_HOST=redis`) rather than `localhost`.
-- **`worker`** — `celery -A app.tasks.celery_app worker`, runs the enrichment/correlation/scoring/reporting/notification background tasks.
+- **`worker`** — `celery -A app.tasks.celery_app worker`, runs the enrichment/correlation/scoring/reporting/notification background tasks. Reads the same root `.env` as `backend`, so both always agree on which LLM provider and model are in use.
 - **`beat`** — `celery -A app.tasks.celery_app beat`, dispatches the scheduled risk-recalculation and weekly-report tasks on their configured intervals.
 
-No `.env` file is required to start — both services have working defaults. Verify it's up:
+No `.env` file is required to start — every service has working defaults. Where one exists, `docker-compose.yml` loads the **root `.env`** into `backend`, `worker` and `beat` (`env_file`, `required: false`), so the AI features are configured in one place: set `LLM_PROVIDER=ollama` with the model pulled on the Docker host (`ollama pull llama3.2:3b`), or `LLM_PROVIDER=groq` with a real `GROQ_API_KEY`. The same file supplies `VT_API_KEY`, `ABUSEIPDB_API_KEY` and `TELEGRAM_*`; only the container hostnames (`OPENSEARCH_HOST`, `POSTGRES_HOST`, `REDIS_HOST`, `OLLAMA_HOST`) stay in compose's own `environment:`, because those must override `.env`'s `localhost` values. Without a configured, reachable provider the AI summary and incident chat fall back to their templated text rather than failing.
+
+Verify it's up:
 
 ```bash
 curl http://localhost:8000/health

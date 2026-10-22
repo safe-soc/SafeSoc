@@ -10,12 +10,74 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.config import settings
 from app.core.enums import UserRole
 from app.core.security import create_access_token
 from app.main import app
 from app.tasks.enrichment import enrich_alert
 from app.workers.correlation_worker import evaluate_correlation
 from app.workers.notification_worker import notify_if_critical
+
+
+@pytest.fixture(autouse=True)
+def _pinned_settings(monkeypatch) -> None:
+    """
+    Pin the settings the suite's expectations are written against to
+    their code defaults, for every test.
+
+    docker-compose.yml loads the root .env into the backend container
+    (so one file configures backend/worker/beat — see
+    docs/deployment.md), which means `docker compose exec backend
+    pytest` inherits the developer's REAL configuration. With
+    LLM_PROVIDER=groq and live provider keys in .env, 31 tests across
+    test_investigate_router.py, test_incident_narrative.py,
+    test_investigation_session.py and test_incidents_router.py failed
+    inside Docker while passing locally: they assert against the
+    default provider (ollama) and the unconfigured-key behavior, and
+    they monkeypatch `ollama.generate` — which a groq-configured run
+    never calls.
+
+    Pinned here rather than passed as `-e` overrides on the command
+    line, so the suite is hermetic wherever it runs. A test that needs
+    a specific value still sets it itself: monkeypatch applies these
+    first (autouse fixtures run before the test body) and the test's
+    own later monkeypatch.setattr wins.
+    """
+    for name, value in (
+        ("LLM_PROVIDER", "ollama"),
+        ("GROQ_API_KEY", ""),
+        ("VT_API_KEY", ""),
+        ("ABUSEIPDB_API_KEY", ""),
+        ("TELEGRAM_BOT_TOKEN", ""),
+        ("TELEGRAM_CHAT_ID", ""),
+    ):
+        monkeypatch.setattr(settings, name, value)
+
+
+@pytest.fixture(autouse=True)
+def _no_outbound_http(monkeypatch) -> None:
+    """
+    No test may make a real network call to Groq, VirusTotal,
+    AbuseIPDB, Telegram or Ollama. All five clients (app/clients/*.py)
+    use `requests`, so blocking at the transport adapter catches every
+    call that isn't mocked — including one a future test forgets to
+    mock, which would otherwise spend a real API quota or hang on a
+    timeout inside a container that does have keys and egress.
+
+    Deliberately scoped to `requests` rather than sockets in general:
+    the real-Postgres integration tests
+    (test_enrichment_transaction_boundary.py) need their database
+    connection, and opensearch-py/redis don't go through requests.
+    Tests that replace `module.requests.post` with a Mock bypass this
+    entirely, which is exactly how the client tests are written.
+    """
+    def _blocked(*args, **kwargs):
+        raise RuntimeError(
+            "Outbound HTTP is blocked in tests (tests/conftest.py::_no_outbound_http). "
+            "Mock the client's requests.post/get instead of calling a real provider."
+        )
+
+    monkeypatch.setattr("requests.adapters.HTTPAdapter.send", _blocked)
 
 
 @pytest.fixture
