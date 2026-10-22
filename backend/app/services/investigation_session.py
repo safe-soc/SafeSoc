@@ -288,7 +288,11 @@ def evidence_summary(data: IncidentNarrativeDataOutput) -> dict:
         "hosts": sorted({host["host_id"] for host in data.hosts if host.get("host_id")}),
         "users": sorted({user["user"] for user in data.users if user.get("user")}),
         "mitre_techniques": data.mitre_techniques,
-        "alert_count": len(data.events),
+        # data.events is the whole incident timeline (alerts plus audit
+        # entries — transitions, merges, SOAR lifecycle — and notes), so
+        # len() of it overstated the alert count against the number the
+        # incident's own "Linked Alerts" section shows. Count alerts only.
+        "alert_count": sum(1 for event in data.events if event.type == "alert"),
     }
 
 

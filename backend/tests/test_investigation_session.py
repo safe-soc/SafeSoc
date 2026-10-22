@@ -303,6 +303,28 @@ def test_evidence_summary_extracts_real_hosts_users_techniques_from_live_data():
     assert summary["alert_count"] == 1
 
 
+def test_evidence_summary_alert_count_counts_only_alert_timeline_entries():
+    """
+    `events` is the full incident timeline, so alert_count must ignore
+    the non-alert entries ("audit" in production — transitions, merges,
+    SOAR lifecycle — plus notes) rather than counting the whole list.
+    """
+    timestamp = "2026-08-26T09:15:42Z"
+    events = [
+        TimelineEventSummary(type="alert", timestamp=timestamp, data={"host_id": "DEMO-CRITICAL-01", "mitre_technique": "T1068"}),
+        TimelineEventSummary(type="transition", timestamp=timestamp, data={"action": "incident.status_changed"}),
+        TimelineEventSummary(type="alert", timestamp=timestamp, data={"host_id": "DEMO-CRITICAL-01", "mitre_technique": "T1078"}),
+        TimelineEventSummary(type="note", timestamp=timestamp, data={"body": "Escalated to tier 2"}),
+        TimelineEventSummary(type="soar", timestamp=timestamp, data={"action": "soar.action.succeeded"}),
+        TimelineEventSummary(type="audit", timestamp=timestamp, data={"action": "incident.merged"}),
+        TimelineEventSummary(type="alert", timestamp=timestamp, data={"host_id": "DEMO-CRITICAL-02", "mitre_technique": "T1059"}),
+    ]
+
+    summary = svc.evidence_summary(_evidence_data(events=events))
+
+    assert summary["alert_count"] == 3
+
+
 # ── ask_question (grounded answer + fallback) ────────────────────────
 
 @pytest.mark.asyncio
