@@ -150,6 +150,10 @@ async def test_real_incident_to_playbook_to_action_to_verification_to_audit(monk
 
     from app.schemas.log import TIResult
     monkeypatch.setattr(soar_execution.enrichment_service, "enrich_indicator", AsyncMock(return_value=TIResult(is_malicious=True, vt_malicious=8, vt_total=70)))
+    # The handler also asks ti_cache whether any provider ever checked
+    # this indicator (skipped-vs-enriched); this fake session models no
+    # ti_cache rows, so that boundary is mocked too.
+    monkeypatch.setattr(soar_execution.enrichment_service, "has_ti_data", AsyncMock(return_value=True))
 
     # Real note/investigation-action creation would need a real analyst
     # user + investigation session round trip — outside this fake

@@ -101,6 +101,20 @@ def _action(run_id, action_type=SoarActionType.ADD_INCIDENT_NOTE, autonomy_class
     )
 
 
+def _mock_enrichment(monkeypatch, ti_result=None, *, has_ti_data: bool = True):
+    """
+    Boundary-mock both of _execute_enrich_indicator's direct
+    dependencies. has_ti_data answers "did any provider ever check this
+    indicator" from ti_cache (services/enrichment.py) — it decides
+    skipped-vs-enriched, so it is mocked explicitly here rather than
+    left to the fake session, which models no ti_cache rows.
+    """
+    from app.schemas.log import TIResult
+
+    monkeypatch.setattr(soar_execution.enrichment_service, "enrich_indicator", AsyncMock(return_value=ti_result if ti_result is not None else TIResult()))
+    monkeypatch.setattr(soar_execution.enrichment_service, "has_ti_data", AsyncMock(return_value=has_ti_data))
+
+
 @pytest.fixture(autouse=True)
 def _mock_audit_and_realtime(monkeypatch):
     monkeypatch.setattr(soar_execution, "record_event", AsyncMock())
@@ -176,7 +190,7 @@ async def test_skipped_action_succeeds_but_is_never_marked_verified(monkeypatch)
     action = _action(run.id, action_type=SoarActionType.ENRICH_INDICATOR)
     action.parameters = {"indicator": "203.0.113.5"}
     db = _FakeExecutionSession(action, run, incident)
-    monkeypatch.setattr(soar_execution.enrichment_service, "enrich_indicator", AsyncMock(return_value=TIResult(source_ip="203.0.113.5")))
+    _mock_enrichment(monkeypatch, TIResult(source_ip="203.0.113.5"), has_ti_data=False)
 
     result = await soar_execution.execute_action(db, action.id)
 
@@ -196,7 +210,7 @@ async def test_skipped_action_does_not_emit_a_verified_event(monkeypatch):
     action = _action(run.id, action_type=SoarActionType.ENRICH_INDICATOR)
     action.parameters = {"indicator": "203.0.113.5"}
     db = _FakeExecutionSession(action, run, incident)
-    monkeypatch.setattr(soar_execution.enrichment_service, "enrich_indicator", AsyncMock(return_value=TIResult(source_ip="203.0.113.5")))
+    _mock_enrichment(monkeypatch, TIResult(source_ip="203.0.113.5"), has_ti_data=False)
     emitted: list[str] = []
 
     async def _capture(db_, tenant, action_name, *args, **kwargs):
@@ -218,8 +232,8 @@ async def test_a_non_ip_enrichment_is_skipped_end_to_end(monkeypatch):
     action = _action(run.id, action_type=SoarActionType.ENRICH_INDICATOR)
     action.parameters = {"indicator": "evil.example.com"}
     db = _FakeExecutionSession(action, run, incident)
-    enrich_mock = AsyncMock()
-    monkeypatch.setattr(soar_execution.enrichment_service, "enrich_indicator", enrich_mock)
+    _mock_enrichment(monkeypatch)
+    enrich_mock = soar_execution.enrichment_service.enrich_indicator
 
     result = await soar_execution.execute_action(db, action.id)
 
@@ -240,10 +254,7 @@ async def test_an_enrichment_with_real_provider_data_is_still_verified(monkeypat
     action = _action(run.id, action_type=SoarActionType.ENRICH_INDICATOR)
     action.parameters = {"indicator": "203.0.113.5"}
     db = _FakeExecutionSession(action, run, incident)
-    monkeypatch.setattr(
-        soar_execution.enrichment_service, "enrich_indicator",
-        AsyncMock(return_value=TIResult(source_ip="203.0.113.5", is_malicious=True, vt_malicious=5, vt_total=70, abuse_confidence=93)),
-    )
+    _mock_enrichment(monkeypatch, TIResult(source_ip="203.0.113.5", is_malicious=True, vt_malicious=5, vt_total=70, abuse_confidence=93))
 
     result = await soar_execution.execute_action(db, action.id)
 
@@ -480,7 +491,7 @@ async def test_collect_additional_evidence_handler_summarizes_real_evidence(monk
 async def test_enrich_indicator_handler_returns_ti_result(monkeypatch):
     from app.schemas.log import TIResult
 
-    monkeypatch.setattr(soar_execution.enrichment_service, "enrich_indicator", AsyncMock(return_value=TIResult(is_malicious=True, vt_malicious=5, vt_total=70)))
+    _mock_enrichment(monkeypatch, TIResult(is_malicious=True, vt_malicious=5, vt_total=70))
 
     result = await soar_execution._execute_enrich_indicator(None, uuid.uuid4(), uuid.uuid4(), {"indicator": "203.0.113.5"})
 
@@ -496,8 +507,8 @@ async def test_enrich_indicator_handler_fails_without_an_indicator():
 
 @pytest.mark.asyncio
 async def test_enrich_indicator_handler_handles_a_non_ip_indicator_without_calling_ti_providers(monkeypatch):
-    enrich_mock = AsyncMock()
-    monkeypatch.setattr(soar_execution.enrichment_service, "enrich_indicator", enrich_mock)
+    _mock_enrichment(monkeypatch)
+    enrich_mock = soar_execution.enrichment_service.enrich_indicator
 
     result = await soar_execution._execute_enrich_indicator(None, uuid.uuid4(), uuid.uuid4(), {"indicator": "not-an-ip.example"})
 
@@ -511,12 +522,12 @@ async def test_enrich_indicator_handler_handles_a_non_ip_indicator_without_calli
 async def test_enrich_indicator_handler_reports_skipped_when_no_provider_returned_data(monkeypatch):
     """
     No VT/AbuseIPDB key configured (or every provider unreachable with
-    nothing cached) yields an empty TIResult — reporting that as a
+    nothing cached) leaves no ti_cache row behind — reporting that as a
     plain success claimed an enrichment that never happened.
     """
     from app.schemas.log import TIResult
 
-    monkeypatch.setattr(soar_execution.enrichment_service, "enrich_indicator", AsyncMock(return_value=TIResult(source_ip="203.0.113.5")))
+    _mock_enrichment(monkeypatch, TIResult(source_ip="203.0.113.5"), has_ti_data=False)
 
     result = await soar_execution._execute_enrich_indicator(None, uuid.uuid4(), uuid.uuid4(), {"indicator": "203.0.113.5"})
 
@@ -529,10 +540,14 @@ async def test_enrich_indicator_handler_reports_skipped_when_no_provider_returne
 
 @pytest.mark.asyncio
 async def test_enrich_indicator_handler_is_not_skipped_when_a_provider_returned_a_clean_verdict(monkeypatch):
-    """A clean verdict is real provider data (vt_total is the engine count) — not a skip."""
+    """
+    A clean verdict is real provider data however zero-valued its
+    counters are: a ti_cache row exists, so the indicator WAS checked.
+    This is the case the old value-based check misreported as a skip.
+    """
     from app.schemas.log import TIResult
 
-    monkeypatch.setattr(soar_execution.enrichment_service, "enrich_indicator", AsyncMock(return_value=TIResult(source_ip="203.0.113.5", vt_malicious=0, vt_total=70)))
+    _mock_enrichment(monkeypatch, TIResult(source_ip="203.0.113.5", vt_malicious=0, vt_total=0, abuse_confidence=0))
 
     result = await soar_execution._execute_enrich_indicator(None, uuid.uuid4(), uuid.uuid4(), {"indicator": "203.0.113.5"})
 

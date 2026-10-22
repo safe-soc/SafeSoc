@@ -32,6 +32,25 @@ async def _get_cached(db: AsyncSession, indicator: str, provider: TIProvider) ->
     return result.scalar_one_or_none()
 
 
+async def has_ti_data(db: AsyncSession, indicator: str) -> bool:
+    """
+    Whether any TI provider has ever checked this indicator — i.e. at
+    least one ti_cache row exists for it, from any provider, expired or
+    not.
+
+    This is deliberately the SAME definition of "checked" that
+    services/incident_evidence.py::_ti_verdicts uses to decide between
+    a verdict and "Not checked" in the Evidence panel, so callers
+    reporting enrichment coverage agree with what that panel shows.
+    Note what it is NOT: a verdict-value test. A clean indicator that a
+    provider really did check carries all-zero counters, which is
+    indistinguishable by value from "nothing answered" — only the
+    presence of a cache row separates the two.
+    """
+    result = await db.execute(select(TICache.id).where(TICache.indicator == indicator).limit(1))
+    return result.first() is not None
+
+
 async def _write_cache(db: AsyncSession, indicator: str, provider: TIProvider, result: TIResult) -> None:
     existing = await _get_cached(db, indicator, provider)
     expires_at = compute_expiry(result.is_malicious)

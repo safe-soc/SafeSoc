@@ -158,18 +158,20 @@ async def _execute_enrich_indicator(db: AsyncSession, tenant_id: uuid.UUID, inci
         return {"success": True, "skipped": True, "message": f"[SafeSOC] Skipped — indicator '{indicator}' is not an IP, so no enrichment provider is available for it.", "indicator": indicator, "is_malicious": None}
 
     ti_result = await enrichment_service.enrich_indicator(db, indicator)
-    if not ti_result.vt_total and not ti_result.abuse_confidence:
-        # services/enrichment.py yields an empty TIResult when no
-        # provider key is configured, or when every provider is
+    if not await enrichment_service.has_ti_data(db, indicator):
+        # No ti_cache row for this indicator means no provider ever
+        # answered for it — no key configured, or every provider
         # unreachable with nothing cached. Reporting that as a verified
-        # success claimed an enrichment that never happened — the panel
+        # success claimed an enrichment that never happened: the panel
         # read "succeeded / Verified" for an IP the Evidence panel
-        # still showed as "Not checked" (no ti_cache row was written,
-        # which is exactly what that panel reads).
+        # still showed as "Not checked".
         #
-        # Falsy, not `is None`: schemas/log.py::TIResult defaults these
-        # counters to 0 and _merge() always returns a fully-populated
-        # model, so an `is None` test here would never fire.
+        # The cache row, not the verdict values, is the test — and it's
+        # the very same one incident_evidence.py::_ti_verdicts uses, so
+        # the two panels can't disagree. A genuinely clean indicator
+        # (AbuseIPDB configured, IP never reported) has all-zero
+        # counters yet WAS checked; judging by value alone called that
+        # a skip.
         return {
             "success": True,
             "skipped": True,
