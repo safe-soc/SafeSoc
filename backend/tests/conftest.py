@@ -81,19 +81,6 @@ def _no_outbound_http(monkeypatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _token_users_exist(monkeypatch) -> AsyncMock:
-    """
-    get_current_user (and the WebSocket auth) now confirms a token's
-    user still exists — a Postgres lookup. Tests mint tokens for random,
-    never-persisted users, so by default every token's user "exists";
-    tests of the deleted-user path override this to return False.
-    """
-    mock = AsyncMock(return_value=True)
-    monkeypatch.setattr("app.core.dependencies.user_exists", mock)
-    return mock
-
-
-@pytest.fixture(autouse=True)
 def _mock_incident_summary_lookup(monkeypatch) -> AsyncMock:
     """
     Every incident response now carries hosts/severity derived from its

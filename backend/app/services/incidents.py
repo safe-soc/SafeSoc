@@ -222,14 +222,11 @@ async def list_incidents(
     status: Optional[IncidentStatus] = None,
     page: int = 1,
     size: int = 50,
-    category: Optional[CorrelationPattern] = None,
 ) -> tuple[list[Incident], int]:
-    """List incidents scoped to a tenant, optionally filtered by status and/or detected pattern, newest first."""
+    """List incidents scoped to a tenant, optionally filtered by status, newest first."""
     filters = [Incident.tenant_id == tenant_id]
     if status is not None:
         filters.append(Incident.status == status)
-    if category is not None:
-        filters.append(Incident.category == category)
 
     count_result = await db.execute(select(func.count()).select_from(Incident).where(*filters))
     total = count_result.scalar_one()

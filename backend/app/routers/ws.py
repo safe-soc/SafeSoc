@@ -17,7 +17,7 @@ import asyncio
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.core.exceptions import InvalidTokenError
-from app.core.dependencies import current_user_from_token
+from app.core.security import decode_access_token
 from app.db.redis import get_client
 from app.services.realtime import channel_name
 from app.utils.logger import get_logger
@@ -62,13 +62,12 @@ async def dashboard_events(websocket: WebSocket) -> None:
         return
 
     try:
-        # Same check as every HTTP route: valid token AND a user that still exists.
-        current_user = await current_user_from_token(token)
+        claims = decode_access_token(token)
     except InvalidTokenError:
         await websocket.close(code=1008)
         return
 
-    tenant_id = str(current_user.tenant_id)
+    tenant_id = claims["tenant_id"]
     await websocket.accept()
 
     client = get_client()

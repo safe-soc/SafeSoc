@@ -9,7 +9,6 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from './useAuth';
-import { clearToken } from '../lib/auth-storage';
 
 export interface RealtimeEvent {
   type: string;
@@ -47,17 +46,8 @@ export function useRealtimeEvents(): { events: RealtimeEvent[]; isConnected: boo
         }
       };
 
-      socket.onclose = (event: CloseEvent) => {
+      socket.onclose = () => {
         setIsConnected(false);
-        // 1008 = the server refused the token (expired, or its user no
-        // longer exists): same as an HTTP 401 in lib/api.ts — clear the
-        // session and sign in again instead of retrying forever.
-        if (event.code === 1008 && !cancelled) {
-          cancelled = true;
-          clearToken();
-          window.location.href = '/login';
-          return;
-        }
         if (!cancelled) {
           reconnectTimerRef.current = setTimeout(connect, RECONNECT_DELAY_MS);
         }

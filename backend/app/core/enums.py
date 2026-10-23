@@ -178,15 +178,6 @@ class QueryResolution(str, Enum):
     REFUSAL = "refusal"                # prompt injection / cross-tenant phrasing
 
 
-class FallbackReason(str, Enum):
-    """Why an Investigate answer is a templated fallback instead of the LLM's."""
-    RATE_LIMITED = "rate_limited"
-    TIMEOUT = "timeout"
-    ERROR = "error"
-    UNGROUNDED = "ungrounded"
-    DATA_ERROR = "data_error"
-
-
 class ComplianceStatus(str, Enum):
     """
     Internal evidence-classification vocabulary for the Compliance

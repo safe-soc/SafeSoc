@@ -316,16 +316,12 @@ export interface IncidentNarrativeResponse {
   };
 }
 
-// Why an answer is a templated fallback (backend FallbackReason).
-export type FallbackReason = 'rate_limited' | 'timeout' | 'error' | 'ungrounded' | 'data_error';
-
 export interface InvestigateResponse {
   session_id: string;
   intent: string;
   answer: string;
   data: Record<string, unknown>;
   is_fallback: boolean;
-  fallback_reason?: FallbackReason | null;
 }
 
 // GET /api/v1/endpoints (SS-034) — no host_os field on this resource;

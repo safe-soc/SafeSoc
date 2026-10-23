@@ -230,8 +230,7 @@ async def test_risky_endpoints_reuses_list_endpoints_and_respects_limit(monkeypa
     assert isinstance(result, RiskyEndpointsOutput)
     assert len(result.endpoints) == 2
     assert result.endpoints[0]["host_id"] == "HOST-0"
-    # The analyst asked for 2 and got 2: complete, not partial.
-    assert result.truncated is False
+    assert result.truncated is True  # 5 known endpoints, limit=2 — 3 were left out
 
 
 @pytest.mark.asyncio

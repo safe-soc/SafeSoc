@@ -4,14 +4,16 @@ POST /api/v1/auth/register, /login, /refresh — registration, JWT
 issuance, and token refresh.
 """
 
+import uuid
+
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.enums import UserRole
 from app.core.exceptions import InvalidCredentialsError
-from app.core.dependencies import current_user_from_token
-from app.core.security import create_access_token, verify_password
+from app.core.security import create_access_token, decode_access_token, verify_password
 from app.db.postgresql import get_db
 from app.models.user import User
 from app.schemas.auth import LoginRequest, RefreshRequest, RegisterRequest, RegisterResponse, TokenResponse
@@ -57,7 +59,11 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh(payload: RefreshRequest):
-    """Issue a new access token from a still-valid existing token whose user still exists (401 otherwise)."""
-    current = await current_user_from_token(payload.token)
-    token = create_access_token(current.tenant_id, current.user_id, current.role)
+    """Issue a new access token from a still-valid existing token."""
+    claims = decode_access_token(payload.token)
+    token = create_access_token(
+        uuid.UUID(claims["tenant_id"]),
+        uuid.UUID(claims["user_id"]),
+        UserRole(claims["role"]),
+    )
     return TokenResponse(access_token=token)
