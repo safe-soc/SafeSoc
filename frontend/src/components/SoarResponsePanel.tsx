@@ -14,7 +14,7 @@ import SoarActionApprovalDialog from './SoarActionApprovalDialog';
 import SoarStatusBadge from './SoarStatusBadge';
 import Spinner from './Spinner';
 import { api } from '../lib/api';
-import { formatDateTime, formatRelativeTime } from '../lib/format';
+import Timestamp from './Timestamp';
 import { formatActionType } from '../lib/soarLabels';
 import { titleCase } from '../lib/format';
 import type { PlaybookResponse, SoarActionExecution, SoarPlaybookRunDetail, SoarPlaybookRunSummary } from '../lib/types';
@@ -108,7 +108,7 @@ function ActionTimeline({ action }: { action: SoarActionExecution }) {
             <span className={`text-[10px] leading-tight ${step.state === 'pending' ? 'text-slate-600' : 'text-slate-400'}`}>
               {step.label}
             </span>
-            {step.timestamp && <span className="text-[9px] text-slate-600">{formatRelativeTime(step.timestamp)}</span>}
+            {step.timestamp && <Timestamp iso={step.timestamp} format="relative" className="text-[9px] text-slate-600" />}
           </div>
           {index < steps.length - 1 && (
             <div className={`mx-1.5 h-0.5 flex-1 rounded ${step.state === 'done' ? 'bg-green-500/60' : 'bg-slate-800'}`} />
@@ -189,7 +189,7 @@ export default function SoarResponsePanel({ incidentId }: { incidentId: string }
                 <div>
                   <p className="text-sm font-medium text-slate-200">{playbookTitles[run.playbook_id] ?? run.playbook_id}</p>
                   <p className="mt-0.5 text-xs text-slate-500">
-                    Triggered {titleCase(run.triggered_by)} · {formatDateTime(run.created_at)}
+                    Triggered {titleCase(run.triggered_by)} · <Timestamp iso={run.created_at} />
                   </p>
                 </div>
                 <SoarStatusBadge status={run.status} />
@@ -233,7 +233,12 @@ export default function SoarResponsePanel({ incidentId }: { incidentId: string }
                         <span className={action.verification_status === 'verified' ? 'text-green-400' : 'text-red-400'}>
                           {titleCase(action.verification_status)}
                         </span>
-                        {action.verified_at && ` · ${formatRelativeTime(action.verified_at)}`}
+                        {action.verified_at && (
+                          <>
+                            {' · '}
+                            <Timestamp iso={action.verified_at} format="relative" />
+                          </>
+                        )}
                       </p>
                     )}
                   </li>

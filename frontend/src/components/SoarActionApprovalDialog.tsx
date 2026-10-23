@@ -15,7 +15,7 @@
 
 import { useState } from 'react';
 import { api } from '../lib/api';
-import { formatDateTime } from '../lib/format';
+import Timestamp from './Timestamp';
 import { describeSimulatedImpact, describeTarget, formatActionType } from '../lib/soarLabels';
 import type { SoarActionExecution } from '../lib/types';
 
@@ -99,7 +99,9 @@ export default function SoarActionApprovalDialog({
           </div>
           <div>
             <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Queued</dt>
-            <dd className="mt-0.5 text-slate-400">{formatDateTime(action.created_at)}</dd>
+            <dd className="mt-0.5 text-slate-400">
+              <Timestamp iso={action.created_at} />
+            </dd>
           </div>
         </dl>
 

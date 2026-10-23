@@ -19,7 +19,7 @@ import Spinner from './Spinner';
 import { BotIcon } from './icons';
 import { MarkdownAnswer } from './MarkdownAnswer';
 import { api } from '../lib/api';
-import { formatDateTime, formatRelativeTime } from '../lib/format';
+import Timestamp from './Timestamp';
 import type {
   AskQuestionResponse,
   FindingCategory,
@@ -268,7 +268,7 @@ export default function IncidentInvestigationPanel({
           <h2 className="text-sm font-semibold text-slate-200">Investigation</h2>
           {detail && (
             <p className="text-xs text-slate-500">
-              Session started {formatRelativeTime(detail.created_at)}
+              Session started <Timestamp iso={detail.created_at} format="relative" />
               {sessions.length > 1 && ` · ${sessions.length} session(s) for this incident`}
             </p>
           )}
@@ -338,9 +338,7 @@ export default function IncidentInvestigationPanel({
                           Automated summary
                         </span>
                       )}
-                      <span className="text-[11px] text-slate-600" title={formatDateTime(turn.created_at)}>
-                        {formatRelativeTime(turn.created_at)}
-                      </span>
+                      <Timestamp iso={turn.created_at} format="relative" className="text-[11px] text-slate-600" />
                     </div>
                   </li>
                 ))}
@@ -451,7 +449,7 @@ export default function IncidentInvestigationPanel({
                           </button>
                         </div>
                       ) : (
-                        <span className="text-[11px] text-slate-600">Completed {formatRelativeTime(action.completed_at ?? action.created_at)}</span>
+                        <span className="text-[11px] text-slate-600">Completed <Timestamp iso={action.completed_at ?? action.created_at} format="relative" /></span>
                       )}
                     </li>
                   ))}
@@ -492,8 +490,8 @@ export default function IncidentInvestigationPanel({
                   {detail.notes.map((note) => (
                     <li key={note.id} className="rounded-lg border border-slate-800/80 bg-slate-950/50 px-3 py-2">
                       <p className="text-sm text-slate-200">{note.body}</p>
-                      <p className="mt-1 text-[11px] text-slate-600" title={formatDateTime(note.created_at)}>
-                        {formatRelativeTime(note.created_at)}
+                      <p className="mt-1 text-[11px] text-slate-600">
+                        <Timestamp iso={note.created_at} format="relative" />
                       </p>
                     </li>
                   ))}

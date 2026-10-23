@@ -22,7 +22,7 @@ import OsIcon from '../components/OsIcon';
 import { EndpointIcon, SortIcon } from '../components/icons';
 import { api } from '../lib/api';
 import { fetchAlertLookup } from '../lib/alertLookup';
-import { formatDateTime } from '../lib/format';
+import Timestamp from '../components/Timestamp';
 import type { Endpoint } from '../lib/types';
 
 type SortKey = 'risk_score' | 'host_id' | 'updated_at';
@@ -165,7 +165,9 @@ export default function Endpoints() {
                     <td className="px-4 py-3">
                       <LevelBadge level={endpoint.risk_level} />
                     </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-slate-400">{formatDateTime(endpoint.updated_at)}</td>
+                    <td className="whitespace-nowrap px-4 py-3 text-slate-400">
+                      <Timestamp iso={endpoint.updated_at} />
+                    </td>
                   </tr>
                 ))
               )}

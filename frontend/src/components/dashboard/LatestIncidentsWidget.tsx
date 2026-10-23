@@ -6,7 +6,8 @@
 
 import { Link } from 'react-router-dom';
 import type { Incident } from '../../lib/types';
-import { categoryLabel, hostsLabel, formatRelativeTime } from '../../lib/format';
+import { categoryLabel, hostsLabel } from '../../lib/format';
+import Timestamp from '../Timestamp';
 import LevelBadge from '../LevelBadge';
 import StatusBadge from '../StatusBadge';
 import EmptyState from '../EmptyState';
@@ -37,7 +38,7 @@ export default function LatestIncidentsWidget({ incidents, isLoading }: { incide
                   </p>
                   <p className="truncate text-xs text-slate-500">
                     <span className="font-mono">{incident.id.slice(0, 8)}</span> · {incident.alert_ids.length} alert
-                    {incident.alert_ids.length === 1 ? '' : 's'} · {formatRelativeTime(incident.updated_at)}
+                    {incident.alert_ids.length === 1 ? '' : 's'} · <Timestamp iso={incident.updated_at} format="relative" />
                   </p>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">

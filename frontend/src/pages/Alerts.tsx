@@ -25,7 +25,8 @@ import EmptyState from '../components/EmptyState';
 import TableSkeleton from '../components/TableSkeleton';
 import { AlertIcon, ChevronLeftIcon, ChevronRightIcon, SearchIcon } from '../components/icons';
 import { api } from '../lib/api';
-import { dismissReasonLabel, formatDateTime } from '../lib/format';
+import { dismissReasonLabel } from '../lib/format';
+import Timestamp from '../components/Timestamp';
 import {
   DISMISS_REASONS,
   LOG_SOURCES,
@@ -291,8 +292,8 @@ export default function Alerts() {
               ) : (
                 alerts.map((alert) => (
                   <tr key={alert.alert_id} className="border-t border-slate-800/70 transition-colors hover:bg-slate-900/50">
-                    <td className="whitespace-nowrap px-4 py-2.5 text-slate-400" title={alert.timestamp}>
-                      {formatDateTime(alert.timestamp)}
+                    <td className="whitespace-nowrap px-4 py-2.5 text-slate-400">
+                      <Timestamp iso={alert.timestamp} />
                     </td>
                     <td className="px-4 py-2.5">
                       <LevelBadge level={alert.severity} />

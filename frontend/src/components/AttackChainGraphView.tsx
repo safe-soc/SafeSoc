@@ -17,7 +17,8 @@
 
 import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from 'react';
 import { computeForceLayout, groupParallelEdges, type GroupedEdge } from '../lib/graphLayout';
-import { formatDateTime, formatRelativeTime } from '../lib/format';
+import { formatDateTime, formatUtcTooltip } from '../lib/format';
+import Timestamp from './Timestamp';
 import type { GraphNode, GraphNodeType, IncidentGraph } from '../lib/types';
 
 const VIEW_WIDTH = 760;
@@ -172,7 +173,7 @@ export default function AttackChainGraphView({ graph }: { graph: IncidentGraph }
                 <title>
                   {`${sourceNode.label} ↔ ${targetNode.label} — ${edge.count} alert${edge.count === 1 ? '' : 's'}` +
                     (hasMitre ? ` — ${edge.mitre.map((m) => m.technique).join(', ')}` : '') +
-                    ` — latest ${formatDateTime(edge.latestTimestamp)}`}
+                    ` — latest ${formatDateTime(edge.latestTimestamp)} (${formatUtcTooltip(edge.latestTimestamp)})`}
                 </title>
                 {edge.count > 1 && (
                   <>
@@ -217,7 +218,7 @@ export default function AttackChainGraphView({ graph }: { graph: IncidentGraph }
               </p>
               <p className="mt-0.5 text-slate-500">
                 {selection.edge.count} connecting alert{selection.edge.count === 1 ? '' : 's'} · latest{' '}
-                {formatRelativeTime(selection.edge.latestTimestamp)}
+                <Timestamp iso={selection.edge.latestTimestamp} format="relative" />
               </p>
               {selection.edge.mitre.length > 0 && (
                 <p className="mt-1 flex flex-wrap gap-1">

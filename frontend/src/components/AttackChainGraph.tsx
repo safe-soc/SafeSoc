@@ -9,7 +9,7 @@
  */
 
 import MitreBadge from './MitreBadge';
-import { formatDateTime, formatRelativeTime } from '../lib/format';
+import Timestamp from './Timestamp';
 import type { GraphNode, GraphNodeType, IncidentGraph } from '../lib/types';
 
 const NODE_TYPE_STYLES: Record<GraphNodeType, string> = {
@@ -65,8 +65,8 @@ export default function AttackChainGraph({ graph }: { graph: IncidentGraph }) {
                 {target ? <NodeChip node={target} /> : <span className="font-mono text-slate-400">{edge.target}</span>}
                 <MitreBadge technique={edge.mitre_technique ?? null} tactic={edge.mitre_tactic ?? null} />
               </div>
-              <p className="mt-1.5 text-xs text-slate-500" title={formatDateTime(edge.timestamp)}>
-                {formatRelativeTime(edge.timestamp)}
+              <p className="mt-1.5 text-xs text-slate-500">
+                <Timestamp iso={edge.timestamp} format="relative" />
               </p>
             </div>
           </li>

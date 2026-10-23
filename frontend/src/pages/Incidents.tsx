@@ -14,7 +14,8 @@ import EmptyState from '../components/EmptyState';
 import TableSkeleton from '../components/TableSkeleton';
 import { ChevronLeftIcon, ChevronRightIcon, IncidentIcon } from '../components/icons';
 import { api } from '../lib/api';
-import { categoryLabel, formatDateTime, formatRelativeTime, hostsLabel } from '../lib/format';
+import { categoryLabel, hostsLabel } from '../lib/format';
+import Timestamp from '../components/Timestamp';
 import type { Incident, IncidentListResponse, IncidentStatus } from '../lib/types';
 
 const STATUSES: IncidentStatus[] = ['open', 'investigating', 'resolved', 'false_positive'];
@@ -148,11 +149,11 @@ export default function Incidents() {
                     <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-300">
                       {incident.alert_ids.length} alert{incident.alert_ids.length === 1 ? '' : 's'}
                     </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-slate-400" title={formatDateTime(incident.created_at)}>
-                      {formatRelativeTime(incident.created_at)}
+                    <td className="whitespace-nowrap px-4 py-3 text-slate-400">
+                      <Timestamp iso={incident.created_at} format="relative" />
                     </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-slate-400" title={formatDateTime(incident.updated_at)}>
-                      {formatRelativeTime(incident.updated_at)}
+                    <td className="whitespace-nowrap px-4 py-3 text-slate-400">
+                      <Timestamp iso={incident.updated_at} format="relative" />
                     </td>
                   </tr>
                 ))

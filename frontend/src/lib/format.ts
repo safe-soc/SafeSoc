@@ -1,16 +1,82 @@
 /**
  * SafeSOC — Formatting Helpers
  * Small, dependency-free formatters shared across pages/widgets.
+ *
+ * Time convention: every time on screen is the viewer's LOCAL time with
+ * its zone shown ("22 Oct 2026, 14:16:16 IST"). The tooltip adds the UTC
+ * time ("2026-10-22 08:46:16 UTC") so analysts can match AI answers and
+ * raw logs, which use UTC. Use components/Timestamp.tsx to render one;
+ * it wires up the text and tooltip together. A missing or unparseable
+ * timestamp renders "—", never "Invalid Date".
  */
 
 import type { CorrelationPattern, DismissReason, Incident } from './types';
 
-export function formatDateTime(iso: string): string {
-  return new Date(iso).toLocaleString();
+const PLACEHOLDER = '—';
+
+/** A Date for a usable timestamp, or null for empty/invalid input. */
+export function parseTimestamp(iso: string | null | undefined): Date | null {
+  if (!iso) return null;
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
-export function formatRelativeTime(iso: string): string {
-  const deltaMs = Date.now() - new Date(iso).getTime();
+// Day/month/time come from a fixed locale so the layout is always
+// "22 Oct 2026, 14:16:16". The zone name comes from the viewer's own
+// locale, the one most likely to have an abbreviation for their zone:
+// en-IN says "IST" where en-GB only has "GMT+5:30".
+const DATE_TIME_FORMAT = new Intl.DateTimeFormat('en-GB', {
+  day: '2-digit',
+  month: 'short',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23',
+});
+const TIME_FORMAT = new Intl.DateTimeFormat('en-GB', {
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23',
+});
+const ZONE_FORMAT = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' });
+
+function zoneName(date: Date): string {
+  return ZONE_FORMAT.formatToParts(date).find((part) => part.type === 'timeZoneName')?.value ?? '';
+}
+
+/** Local date and time with the zone, e.g. "22 Oct 2026, 14:16:16 IST". */
+export function formatDateTime(iso: string | null | undefined): string {
+  const date = parseTimestamp(iso);
+  if (!date) return PLACEHOLDER;
+  return `${DATE_TIME_FORMAT.format(date)} ${zoneName(date)}`.trim();
+}
+
+/** Local time only with the zone, e.g. "14:16:16 IST" — for compact rows and ranges. */
+export function formatTime(iso: string | null | undefined): string {
+  const date = parseTimestamp(iso);
+  if (!date) return PLACEHOLDER;
+  return `${TIME_FORMAT.format(date)} ${zoneName(date)}`.trim();
+}
+
+/** The same instant in UTC, e.g. "2026-10-22 08:46:16 UTC" — the tooltip next to any local time. */
+export function formatUtcTooltip(iso: string | null | undefined): string {
+  const date = parseTimestamp(iso);
+  if (!date) return PLACEHOLDER;
+  return `${date.toISOString().slice(0, 19).replace('T', ' ')} UTC`;
+}
+
+/** Tooltip for a relative time ("21 minutes ago"): the local time, then UTC, on two lines. */
+export function relativeTimeTooltip(iso: string | null | undefined): string {
+  if (!parseTimestamp(iso)) return PLACEHOLDER;
+  return `${formatDateTime(iso)}\n${formatUtcTooltip(iso)}`;
+}
+
+export function formatRelativeTime(iso: string | null | undefined): string {
+  const date = parseTimestamp(iso);
+  if (!date) return PLACEHOLDER;
+  const deltaMs = Date.now() - date.getTime();
   const deltaSeconds = Math.round(deltaMs / 1000);
 
   const units: [Intl.RelativeTimeFormatUnit, number][] = [

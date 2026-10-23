@@ -41,7 +41,7 @@ import Spinner from '../components/Spinner';
 import StatusBadge from '../components/StatusBadge';
 import { AlertIcon, ChevronLeftIcon } from '../components/icons';
 import { api } from '../lib/api';
-import { formatDateTime, formatRelativeTime } from '../lib/format';
+import Timestamp from '../components/Timestamp';
 import type {
   Alert,
   AlertSearchResponse,
@@ -255,7 +255,7 @@ export default function EndpointDetail() {
               </div>
               <div>
                 <p className="text-xs uppercase tracking-wide text-slate-500">Last Updated</p>
-                <p className="mt-1 text-sm text-slate-300">{endpoint ? formatDateTime(endpoint.updated_at) : '—'}</p>
+                <p className="mt-1 text-sm text-slate-300"><Timestamp iso={endpoint?.updated_at} /></p>
               </div>
             </div>
             {!endpoint && (
@@ -331,9 +331,7 @@ export default function EndpointDetail() {
                   {alerts.slice(0, 5).map((alert) => (
                     <li key={alert.alert_id} className="flex items-center justify-between text-sm">
                       <span className="truncate text-slate-300">{alert.description}</span>
-                      <span className="ml-2 shrink-0 text-xs text-slate-500" title={formatDateTime(alert.timestamp)}>
-                        {formatRelativeTime(alert.timestamp)}
-                      </span>
+                      <Timestamp iso={alert.timestamp} format="relative" className="ml-2 shrink-0 text-xs text-slate-500" />
                     </li>
                   ))}
                 </ul>
@@ -357,7 +355,7 @@ export default function EndpointDetail() {
                       <span className="font-mono text-slate-300">{incident.id.slice(0, 8)}</span>
                       <StatusBadge status={incident.status} />
                       <span className="text-xs text-slate-500">{incident.alert_ids.length} alert{incident.alert_ids.length === 1 ? '' : 's'}</span>
-                      <span className="ml-auto text-xs text-slate-600">{formatRelativeTime(incident.updated_at)}</span>
+                      <Timestamp iso={incident.updated_at} format="relative" className="ml-auto text-xs text-slate-600" />
                     </Link>
                   </li>
                 ))}
@@ -423,7 +421,9 @@ export default function EndpointDetail() {
                   <tbody>
                     {alerts.slice(0, RECENT_ALERTS_TABLE_ROWS).map((alert) => (
                       <tr key={alert.alert_id} className="border-t border-slate-800/70">
-                        <td className="whitespace-nowrap px-2 py-2 text-slate-400">{formatDateTime(alert.timestamp)}</td>
+                        <td className="whitespace-nowrap px-2 py-2 text-slate-400">
+                          <Timestamp iso={alert.timestamp} />
+                        </td>
                         <td className="px-2 py-2">
                           <LevelBadge level={alert.severity} />
                         </td>

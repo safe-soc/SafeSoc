@@ -1,119 +1,258 @@
 /**
  * SafeSOC — Incident Investigation Timeline (SS-099)
  * Renders GET /api/v1/incidents/{id}/timeline's chronological merge of
- * linked alerts, audit-log activity, and notes as one narrative feed —
- * type-specific rendering per entry, oldest first (the order the
- * backend already returns them in).
+ * linked alerts, audit-log activity, and notes as one narrative feed,
+ * oldest first (the order the backend already returns them in).
+ *
+ * Noise is collapsed for display only (lib/timelineGroups.ts): repeated
+ * adjacent alerts/audit rows fold into one row, and each SOAR action's
+ * lifecycle becomes one row with its final state. Every folded entry is
+ * one click away, and nothing is removed from the backend audit log.
+ * A filter (All / Attack / Analyst / Automation) narrows the feed; its
+ * choice is remembered per browser.
  */
 
+import { useState } from 'react';
 import LevelBadge from './LevelBadge';
 import MitreBadge from './MitreBadge';
-import { formatDateTime, formatRelativeTime } from '../lib/format';
+import Timestamp from './Timestamp';
+import { formatTime, relativeTimeTooltip } from '../lib/format';
+import {
+  TIMELINE_FILTERS,
+  describeAuditEntry,
+  filterTimelineRows,
+  groupTimelineEntries,
+  type TimelineCategory,
+  type TimelineFilter,
+  type TimelineRow,
+} from '../lib/timelineGroups';
 import type { Alert, TimelineEntry } from '../lib/types';
 
-const AUDIT_ACTION_LABELS: Record<string, string> = {
-  'incident.created': 'Incident created',
-  'incident.merged': 'Incident merged with a new detection',
-  'incident.status_transitioned': 'Status changed',
-  'incident.assigned': 'Assigned',
-  'incident.alert_linked': 'Alert linked',
-  'incident.note_added': 'Note added',
-  // SOAR lifecycle (Phase 3.5) — the backend decides which of these
-  // reach the timeline (services/incident_timeline.py); this only
-  // decides how they read.
-  'soar.playbook.triggered': 'SOAR playbook triggered',
-  'soar.playbook_run.cancelled': 'SOAR playbook cancelled',
-  'soar.action.skipped': 'SOAR action skipped',
-  'soar.action.awaiting_approval': 'SOAR action awaiting approval',
-  'soar.action.approved': 'SOAR action approved',
-  'soar.action.rejected': 'SOAR action rejected',
-  'soar.action.started': 'SOAR action started',
-  'soar.action.succeeded': 'SOAR action succeeded',
-  'soar.action.failed': 'SOAR action failed',
-  'soar.action.verified': 'SOAR action verified',
-  'soar.action.verification_failed': 'SOAR action could not be verified',
+const FILTER_STORAGE_KEY = 'safesoc.incidentTimeline.filter';
+
+const FILTER_LABELS: Record<TimelineFilter, string> = {
+  all: 'All',
+  attack: 'Attack',
+  analyst: 'Analyst',
+  automation: 'Automation',
 };
 
-// Why a SOAR action never ran. Mirrors services/soar.py's own
-// _SKIP_* reasons — worth spelling out rather than showing the raw
-// enum, since "we did nothing here" needs to explain itself.
-const SOAR_SKIP_REASONS: Record<string, string> = {
-  required_evidence_unavailable: 'this incident carries no such evidence',
-  parameter_validation_failed: 'its parameters failed validation',
+const DOT_COLORS: Record<TimelineCategory, string> = {
+  attack: 'bg-orange-500',
+  analyst: 'bg-blue-500',
+  automation: 'bg-slate-600',
 };
 
-function describeAuditEntry(data: Record<string, unknown>): string {
-  const action = typeof data.action === 'string' ? data.action : 'unknown';
-  const label = AUDIT_ACTION_LABELS[action] ?? action;
-  const details = (data.details ?? {}) as Record<string, unknown>;
-  if (action === 'incident.status_transitioned' && details.from_status && details.to_status) {
-    return `${label}: ${details.from_status} → ${details.to_status}`;
+function readStoredFilter(): TimelineFilter {
+  try {
+    const stored = window.localStorage.getItem(FILTER_STORAGE_KEY);
+    return TIMELINE_FILTERS.includes(stored as TimelineFilter) ? (stored as TimelineFilter) : 'all';
+  } catch {
+    return 'all';
   }
-  if (action === 'soar.playbook.triggered' && details.playbook_id) {
-    return `${label}: ${details.playbook_id}`;
-  }
-  if (action === 'soar.action.skipped' && details.action_type) {
-    const reason = typeof details.reason === 'string' ? SOAR_SKIP_REASONS[details.reason] ?? details.reason : null;
-    return reason ? `${label}: ${details.action_type} — ${reason}` : `${label}: ${details.action_type}`;
-  }
-  if (action.startsWith('soar.action.') && details.action_type) {
-    return `${label}: ${details.action_type}`;
-  }
-  return label;
 }
 
-function EntryDot({ type }: { type: TimelineEntry['type'] }) {
-  const colors: Record<TimelineEntry['type'], string> = {
-    alert: 'bg-orange-500',
-    audit: 'bg-blue-500',
-    note: 'bg-slate-400',
-  };
-  return <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${colors[type]}`} />;
+function storeFilter(filter: TimelineFilter): void {
+  try {
+    window.localStorage.setItem(FILTER_STORAGE_KEY, filter);
+  } catch {
+    // Storage blocked (private mode, policy) — the choice just isn't remembered.
+  }
+}
+
+/** "14:16:16 IST · 21 minutes ago", or "14:10:02 IST–14:16:16 IST · 21 minutes ago" for a group. */
+function RowTime({ entries }: { entries: TimelineEntry[] }) {
+  const first = entries[0].timestamp;
+  const last = entries[entries.length - 1].timestamp;
+  return (
+    <p className="mt-1.5 text-xs text-slate-500">
+      {entries.length > 1 && first !== last ? (
+        <span title={`${relativeTimeTooltip(first)}\n–\n${relativeTimeTooltip(last)}`}>
+          {formatTime(first)}–{formatTime(last)}
+        </span>
+      ) : (
+        <Timestamp iso={first} format="time" />
+      )}
+      {' · '}
+      <Timestamp iso={last} format="relative" />
+    </p>
+  );
+}
+
+function ExpandToggle({ expanded, controls, onToggle, count }: { expanded: boolean; controls: string; onToggle: () => void; count: number }) {
+  return (
+    <button
+      type="button"
+      aria-expanded={expanded}
+      aria-controls={controls}
+      onClick={onToggle}
+      className="text-xs text-blue-400 hover:underline focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500"
+    >
+      {expanded ? 'Hide' : `Show ${count}`}
+    </button>
+  );
+}
+
+function AlertRow({ row, expanded, onToggle }: { row: TimelineRow; expanded: boolean; onToggle: () => void }) {
+  const alerts = row.entries.map((entry) => entry.data as unknown as Alert);
+  const first = alerts[0];
+  const withMitre = alerts.find((alert) => alert.mitre_technique);
+  const users = [...new Set(alerts.map((alert) => alert.user).filter((user) => user && user !== 'unknown'))];
+  const listId = `${row.key}-alerts`;
+
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <LevelBadge level={first.severity} />
+        {alerts.length > 1 ? (
+          <span className="text-slate-300">
+            {alerts.length} × {first.action}
+          </span>
+        ) : null}
+        <span className="font-mono text-slate-300">{first.host_id}</span>
+        {alerts.length === 1 && <span className="text-slate-500">{first.action}</span>}
+        <MitreBadge technique={withMitre?.mitre_technique ?? null} tactic={withMitre?.mitre_tactic ?? null} />
+        {alerts.length > 1 && <ExpandToggle expanded={expanded} controls={listId} onToggle={onToggle} count={alerts.length} />}
+      </div>
+      {alerts.length > 1 && users.length > 0 && <p className="mt-1 text-xs text-slate-500">users: {users.join(', ')}</p>}
+      <RowTime entries={row.entries} />
+      {alerts.length > 1 && expanded && (
+        <ul id={listId} className="mt-2 space-y-1 border-l border-slate-800 pl-3">
+          {alerts.map((alert, index) => (
+            <li key={alert.alert_id ?? `${row.key}-${index}`} className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+              <Timestamp iso={alert.timestamp} format="time" className="tabular-nums text-slate-500" />
+              {alert.user && <span>{alert.user}</span>}
+              <span className="truncate text-slate-500">{alert.description}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}
+
+function SoarLifecycleRow({
+  row,
+  expanded,
+  onToggle,
+}: {
+  row: Extract<TimelineRow, { kind: 'soar_lifecycle' }>;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const listId = `${row.key}-steps`;
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-xs text-slate-400" title={row.detail ?? undefined}>
+          {row.text}
+        </p>
+        <ExpandToggle expanded={expanded} controls={listId} onToggle={onToggle} count={row.entries.length} />
+      </div>
+      <RowTime entries={row.entries} />
+      {expanded && (
+        <ul id={listId} className="mt-2 space-y-1 border-l border-slate-800 pl-3">
+          {row.entries.map((entry, index) => (
+            <li key={`${row.key}-${index}`} className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+              <Timestamp iso={entry.timestamp} format="time" className="tabular-nums" />
+              <span>{describeAuditEntry(entry.data)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
 }
 
 export default function IncidentTimeline({ entries }: { entries: TimelineEntry[] }) {
+  const [filter, setFilter] = useState<TimelineFilter>(readStoredFilter);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+
   if (entries.length === 0) {
     return <p className="text-sm text-slate-500">Nothing to show yet — alerts, activity, and notes will appear here as they happen.</p>;
   }
 
+  const rows = filterTimelineRows(groupTimelineEntries(entries), filter);
+
+  const toggle = (key: string) =>
+    setExpanded((previous) => {
+      const next = new Set(previous);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  const chooseFilter = (next: TimelineFilter) => {
+    setFilter(next);
+    storeFilter(next);
+  };
+
   return (
-    <ol className="space-y-0">
-      {entries.map((entry, index) => {
-        const key = `${entry.type}-${entry.timestamp}-${index}`;
-        return (
-          <li key={key} className="relative flex gap-3 pb-4 last:pb-0">
-            <div className="flex flex-col items-center">
-              <EntryDot type={entry.type} />
-              {index < entries.length - 1 && <span className="mt-1 w-px flex-1 bg-slate-800" />}
-            </div>
-            <div className="flex-1 rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
-              {entry.type === 'alert' && (() => {
-                const alert = entry.data as unknown as Alert;
-                return (
-                  <div className="flex flex-wrap items-center gap-2 text-sm">
-                    <LevelBadge level={alert.severity} />
-                    <span className="font-mono text-slate-300">{alert.host_id}</span>
-                    <span className="text-slate-500">{alert.action}</span>
-                    <MitreBadge technique={alert.mitre_technique ?? null} tactic={alert.mitre_tactic ?? null} />
-                  </div>
-                );
-              })()}
+    <div>
+      <div role="group" aria-label="Filter timeline" className="mb-3 flex flex-wrap gap-1.5">
+        {TIMELINE_FILTERS.map((option) => (
+          <button
+            key={option}
+            type="button"
+            aria-pressed={filter === option}
+            onClick={() => chooseFilter(option)}
+            className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 ${
+              filter === option
+                ? 'bg-blue-600 text-white'
+                : 'border border-slate-800 bg-slate-900 text-slate-400 hover:border-slate-700 hover:text-slate-200'
+            }`}
+          >
+            {FILTER_LABELS[option]}
+          </button>
+        ))}
+      </div>
 
-              {entry.type === 'audit' && (
-                <p className="text-sm text-slate-200">{describeAuditEntry(entry.data)}</p>
-              )}
+      {rows.length === 0 ? (
+        <p className="text-sm text-slate-500">Nothing in this view — try another filter.</p>
+      ) : (
+        <ol className="space-y-0">
+          {rows.map((row, index) => {
+            const isAutomation = row.category === 'automation';
+            const isExpanded = expanded.has(row.key);
+            return (
+              <li key={row.key} className={`relative flex gap-3 last:pb-0 ${isAutomation ? 'pb-2' : 'pb-4'}`}>
+                <div className="flex flex-col items-center">
+                  <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${DOT_COLORS[row.category]}`} />
+                  {index < rows.length - 1 && <span className="mt-1 w-px flex-1 bg-slate-800" />}
+                </div>
+                <div
+                  className={`flex-1 rounded-lg border ${
+                    isAutomation ? 'border-slate-800/50 bg-slate-950/30 px-3 py-2' : 'border-slate-800/80 bg-slate-950/50 p-3'
+                  }`}
+                >
+                  {row.kind === 'alert' && <AlertRow row={row} expanded={isExpanded} onToggle={() => toggle(row.key)} />}
 
-              {entry.type === 'note' && (
-                <p className="text-sm text-slate-200">{String(entry.data.body ?? '')}</p>
-              )}
+                  {row.kind === 'soar_lifecycle' && (
+                    <SoarLifecycleRow row={row} expanded={isExpanded} onToggle={() => toggle(row.key)} />
+                  )}
 
-              <p className="mt-1.5 text-xs text-slate-500" title={formatDateTime(entry.timestamp)}>
-                {formatRelativeTime(entry.timestamp)}
-              </p>
-            </div>
-          </li>
-        );
-      })}
-    </ol>
+                  {row.kind === 'audit' && (
+                    <>
+                      <p className={isAutomation ? 'text-xs text-slate-400' : 'text-sm text-slate-200'}>
+                        {row.text}
+                        {row.entries.length > 1 && <span className="text-slate-500"> (×{row.entries.length})</span>}
+                      </p>
+                      <RowTime entries={row.entries} />
+                    </>
+                  )}
+
+                  {row.kind === 'note' && (
+                    <>
+                      <p className="text-sm text-slate-200">{String(row.entries[0].data.body ?? '')}</p>
+                      <RowTime entries={row.entries} />
+                    </>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </div>
   );
 }

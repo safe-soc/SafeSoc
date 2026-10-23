@@ -29,7 +29,8 @@ import AttackChainGraphView from '../components/AttackChainGraphView';
 import Spinner from '../components/Spinner';
 import { api } from '../lib/api';
 import { fetchAlertLookup, type AlertLookup } from '../lib/alertLookup';
-import { formatDateTime, formatRelativeTime, incidentTitle } from '../lib/format';
+import { incidentTitle } from '../lib/format';
+import Timestamp from '../components/Timestamp';
 import {
   ALLOWED_TRANSITIONS,
   type Incident,
@@ -268,7 +269,8 @@ export default function IncidentDetail() {
               <span className="select-all font-mono text-slate-300" title={incident.id}>
                 {incident.id.slice(0, 8)}
               </span>{' '}
-              · Created {formatDateTime(incident.created_at)} · Updated {formatRelativeTime(incident.updated_at)}
+              · Created <Timestamp iso={incident.created_at} /> · Updated{' '}
+              <Timestamp iso={incident.updated_at} format="relative" />
             </>
           }
           actions={<GenerateReportButton scope="incident" id={incident.id} />}
@@ -541,8 +543,8 @@ export default function IncidentDetail() {
                 </div>
                 <div className="flex-1 rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
                   <p className="text-sm text-slate-200">{note.body}</p>
-                  <p className="mt-1.5 text-xs text-slate-500" title={formatDateTime(note.created_at)}>
-                    {formatRelativeTime(note.created_at)}
+                  <p className="mt-1.5 text-xs text-slate-500">
+                    <Timestamp iso={note.created_at} format="relative" />
                   </p>
                 </div>
               </li>
