@@ -16,7 +16,7 @@ import { useState } from 'react';
 import LevelBadge from './LevelBadge';
 import MitreBadge from './MitreBadge';
 import Timestamp from './Timestamp';
-import { formatTime, relativeTimeTooltip } from '../lib/format';
+import { formatDateTime, formatTimeRange, formatUtcTooltip, parseTimestamp } from '../lib/format';
 import {
   TIMELINE_FILTERS,
   describeAuditEntry,
@@ -60,18 +60,28 @@ function storeFilter(filter: TimelineFilter): void {
   }
 }
 
-/** "14:16:16 IST · 21 minutes ago", or "14:10:02 IST–14:16:16 IST · 21 minutes ago" for a group. */
+function sameSecond(a: string, b: string): boolean {
+  const start = parseTimestamp(a);
+  const end = parseTimestamp(b);
+  return !!start && !!end && Math.floor(start.getTime() / 1000) === Math.floor(end.getTime() / 1000);
+}
+
+/**
+ * "14:16:16 IST · 21 minutes ago" for one entry (or a group within one
+ * second), "16:33:29–16:35:31 IST · 21 minutes ago" for a group. The
+ * tooltip gives the exact local and UTC times of both ends.
+ */
 function RowTime({ entries }: { entries: TimelineEntry[] }) {
   const first = entries[0].timestamp;
   const last = entries[entries.length - 1].timestamp;
   return (
     <p className="mt-1.5 text-xs text-slate-500">
-      {entries.length > 1 && first !== last ? (
-        <span title={`${relativeTimeTooltip(first)}\n–\n${relativeTimeTooltip(last)}`}>
-          {formatTime(first)}–{formatTime(last)}
-        </span>
-      ) : (
+      {sameSecond(first, last) || !parseTimestamp(last) ? (
         <Timestamp iso={first} format="time" />
+      ) : (
+        <span title={`${formatDateTime(first)} – ${formatDateTime(last)}\n${formatUtcTooltip(first)} – ${formatUtcTooltip(last)}`}>
+          {formatTimeRange(first, last)}
+        </span>
       )}
       {' · '}
       <Timestamp iso={last} format="relative" />
@@ -166,6 +176,8 @@ function SoarLifecycleRow({
 
 export default function IncidentTimeline({ entries }: { entries: TimelineEntry[] }) {
   const [filter, setFilter] = useState<TimelineFilter>(readStoredFilter);
+  // Every group starts collapsed; a key is only here once the analyst
+  // expands that row, and leaves again when they collapse it.
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
 
   if (entries.length === 0) {
@@ -233,11 +245,30 @@ export default function IncidentTimeline({ entries }: { entries: TimelineEntry[]
 
                   {row.kind === 'audit' && (
                     <>
-                      <p className={isAutomation ? 'text-xs text-slate-400' : 'text-sm text-slate-200'}>
-                        {row.text}
-                        {row.entries.length > 1 && <span className="text-slate-500"> (×{row.entries.length})</span>}
-                      </p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className={isAutomation ? 'text-xs text-slate-400' : 'text-sm text-slate-200'}>
+                          {row.text}
+                          {row.entries.length > 1 && <span className="text-slate-500"> (×{row.entries.length})</span>}
+                        </p>
+                        {row.entries.length > 1 && (
+                          <ExpandToggle
+                            expanded={isExpanded}
+                            controls={`${row.key}-entries`}
+                            onToggle={() => toggle(row.key)}
+                            count={row.entries.length}
+                          />
+                        )}
+                      </div>
                       <RowTime entries={row.entries} />
+                      {row.entries.length > 1 && isExpanded && (
+                        <ul id={`${row.key}-entries`} className="mt-2 space-y-1 border-l border-slate-800 pl-3">
+                          {row.entries.map((entry, entryIndex) => (
+                            <li key={`${row.key}-${entryIndex}`} className="text-xs text-slate-500">
+                              <Timestamp iso={entry.timestamp} format="time" className="tabular-nums" />
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                     </>
                   )}
 

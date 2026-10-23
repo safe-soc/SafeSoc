@@ -22,9 +22,7 @@ export function parseTimestamp(iso: string | null | undefined): Date | null {
 }
 
 // Day/month/time come from a fixed locale so the layout is always
-// "22 Oct 2026, 14:16:16". The zone name comes from the viewer's own
-// locale, the one most likely to have an abbreviation for their zone:
-// en-IN says "IST" where en-GB only has "GMT+5:30".
+// "22 Oct 2026, 14:16:16", whatever the browser's language.
 const DATE_TIME_FORMAT = new Intl.DateTimeFormat('en-GB', {
   day: '2-digit',
   month: 'short',
@@ -40,24 +38,93 @@ const TIME_FORMAT = new Intl.DateTimeFormat('en-GB', {
   second: '2-digit',
   hourCycle: 'h23',
 });
-const ZONE_FORMAT = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' });
+
+// The zone label must not depend on the browser's language: an en-US
+// browser in India gets "GMT+5:30" from Intl, not "IST". So the label
+// comes from the IANA zone itself. Zones with daylight saving list
+// [standard offset (minutes east of UTC), standard name, summer name];
+// the date's actual offset picks between them.
+const ZONE_ABBREVIATIONS: Record<string, string | [number, string, string]> = {
+  'Asia/Kolkata': 'IST',
+  'Asia/Calcutta': 'IST',
+  UTC: 'UTC',
+  'Etc/UTC': 'UTC',
+  'Europe/London': [0, 'GMT', 'BST'],
+  'America/New_York': [-300, 'EST', 'EDT'],
+  'America/Los_Angeles': [-480, 'PST', 'PDT'],
+  'Europe/Berlin': [60, 'CET', 'CEST'],
+  'Asia/Singapore': 'SGT',
+  'Asia/Dubai': 'GST',
+};
+
+const VIEWER_TIME_ZONE = (() => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone ?? '';
+  } catch {
+    return '';
+  }
+})();
+
+/** "UTC+05:30" / "UTC-04:00" / "UTC" for an offset in minutes east of UTC — never "GMT+5:30". */
+export function formatUtcOffset(offsetMinutes: number): string {
+  if (offsetMinutes === 0) return 'UTC';
+  const sign = offsetMinutes > 0 ? '+' : '-';
+  const abs = Math.abs(offsetMinutes);
+  const hours = String(Math.floor(abs / 60)).padStart(2, '0');
+  const minutes = String(abs % 60).padStart(2, '0');
+  return `UTC${sign}${hours}:${minutes}`;
+}
+
+/**
+ * The zone label for an IANA zone at a given offset (minutes east of
+ * UTC): a known abbreviation ("IST", "EDT"…), else "UTC+05:30" style.
+ * Pure, so it can be checked for any zone regardless of the machine's.
+ */
+export function zoneLabel(timeZone: string, offsetMinutes: number): string {
+  const known = ZONE_ABBREVIATIONS[timeZone];
+  if (typeof known === 'string') return known;
+  if (known) {
+    const [standardOffset, standardName, summerName] = known;
+    if (offsetMinutes === standardOffset) return standardName;
+    if (offsetMinutes === standardOffset + 60) return summerName;
+  }
+  return formatUtcOffset(offsetMinutes);
+}
 
 function zoneName(date: Date): string {
-  return ZONE_FORMAT.formatToParts(date).find((part) => part.type === 'timeZoneName')?.value ?? '';
+  // getTimezoneOffset is minutes WEST of UTC, in the viewer's zone at that date.
+  return zoneLabel(VIEWER_TIME_ZONE, -date.getTimezoneOffset());
 }
 
 /** Local date and time with the zone, e.g. "22 Oct 2026, 14:16:16 IST". */
 export function formatDateTime(iso: string | null | undefined): string {
   const date = parseTimestamp(iso);
   if (!date) return PLACEHOLDER;
-  return `${DATE_TIME_FORMAT.format(date)} ${zoneName(date)}`.trim();
+  return `${DATE_TIME_FORMAT.format(date)} ${zoneName(date)}`;
 }
 
 /** Local time only with the zone, e.g. "14:16:16 IST" — for compact rows and ranges. */
 export function formatTime(iso: string | null | undefined): string {
   const date = parseTimestamp(iso);
   if (!date) return PLACEHOLDER;
-  return `${TIME_FORMAT.format(date)} ${zoneName(date)}`.trim();
+  return `${TIME_FORMAT.format(date)} ${zoneName(date)}`;
+}
+
+/**
+ * A time range with the zone once, at the end: "16:33:29–16:35:31 IST".
+ * Collapses to a single time when both ends fall in the same second. If
+ * the zone label changes inside the range (a DST switch), both ends
+ * keep their own label so neither time is misread.
+ */
+export function formatTimeRange(startIso: string | null | undefined, endIso: string | null | undefined): string {
+  const start = parseTimestamp(startIso);
+  const end = parseTimestamp(endIso);
+  if (!start || !end) return formatTime(start ? startIso : endIso);
+  if (Math.floor(start.getTime() / 1000) === Math.floor(end.getTime() / 1000)) return formatTime(startIso);
+  const startZone = zoneName(start);
+  const endZone = zoneName(end);
+  if (startZone !== endZone) return `${formatTime(startIso)}–${formatTime(endIso)}`;
+  return `${TIME_FORMAT.format(start)}–${TIME_FORMAT.format(end)} ${endZone}`;
 }
 
 /** The same instant in UTC, e.g. "2026-10-22 08:46:16 UTC" — the tooltip next to any local time. */
