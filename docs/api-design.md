@@ -79,12 +79,14 @@ On partial failure, `errors` is a list of `{ "index": <int>, "error": "<pydantic
 
 | Param | Required | Default | Notes |
 |---|---|---|---|
-| `tenant_id` | yes | — | Mandatory filter; no auth derives this automatically |
+| `tenant_id` | no | — | Derived from the JWT; if passed it must match the token's tenant (403 otherwise) |
 | `severity` | no | — | Exact match: `low`/`medium`/`high`/`critical` |
 | `log_type` | no | — | Exact match against `LogType` enum |
 | `source` | no | — | Exact match against `LogSource` enum |
 | `host_id` | no | — | Exact match |
 | `timerange_hours` | no | `24` | 1–720 |
+| `q` | no | — | Free-text search, max 200 chars, ANDed with the other filters. Case-insensitive substring match on `host_id`, `user`, `action`, `rule_id`, `mitre_technique`; analyzed `match` on `description`; `source_ip`/`destination_ip` only when `q` is an IP, a CIDR, or a dotted prefix such as `198.51.100` (searched as `198.51.100.0/24`). Input is only ever passed as a literal value (escaped wildcard, `match` text, parsed IP), never through `query_string` syntax |
+| `triage` | no | — | `untriaged` (no acknowledge/dismiss), `acknowledged` (acknowledged, not dismissed) or `dismissed`. Triage state lives in Postgres, so this becomes an `alert_id` include/exclude filter on the search |
 | `page` | no | `1` | ≥1 |
 | `size` | no | `50` | 1–500 |
 
@@ -99,6 +101,20 @@ On partial failure, `errors` is a list of `{ "index": <int>, "error": "<pydantic
 }
 ```
 Results are sorted by `timestamp` descending and searched across all `safesoc-alerts-*` monthly indices.
+
+Each alert is merged with its triage state: `acknowledged`, `dismissed`, `dismiss_reason` and `dismiss_note` (`false`/`null` when there's no annotation row). `total`/`pages` reflect `q` and `triage`.
+
+### `POST /api/v1/alerts/{alert_id}/acknowledge` · `.../dismiss` · `.../restore`
+
+Analyst triage (`analyst` role or higher), tenant-scoped, audit-logged as `alert.acknowledged`, `alert.dismissed` and `alert.restored`. All three return the annotation: `{ alert_id, acknowledged, dismissed, dismiss_reason, dismiss_note, updated_by_user_id, updated_at }`.
+
+`dismiss` requires a body:
+```json
+{ "reason": "expected_activity", "note": "Nightly backup job on this host." }
+```
+`reason` is one of `false_positive`, `expected_activity`, `duplicate`, `other`. `note` is optional, up to 500 characters, and **required** when `reason` is `other`. A missing or invalid reason, or `other` without a note, returns 422. The audit details record `{reason, note}`.
+
+`restore` takes no body. It clears `dismissed`, `dismiss_reason` and `dismiss_note`, leaves `acknowledged` alone, and records the cleared values in the audit details as `{previous_reason, previous_note}`.
 
 ### `POST /api/v1/auth/register`
 

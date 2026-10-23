@@ -30,12 +30,18 @@ def test_there_is_exactly_one_migration_head():
     assert len(heads) == 1
 
 
-def test_the_soar_migration_is_the_current_head_and_chains_from_the_prior_one():
+def test_the_soar_migrations_are_on_the_linear_chain_to_head():
+    """
+    Both SOAR migrations are ancestors of the single head, each with a
+    real predecessor. (Later migrations, e.g. the alert dismiss-reason
+    one, now sit above them, so "SOAR is the head" no longer holds.)
+    """
     script = _script_directory()
-    head_revision = script.get_revision(script.get_heads()[0])
-    assert "soar" in (head_revision.doc or "").lower()
-    # Exactly one down_revision — a real predecessor, not a fresh/branch root.
-    assert head_revision.down_revision is not None
+    chain = {rev.revision: rev for rev in script.walk_revisions("base", "heads")}
+    soar = [rev for rev in chain.values() if "soar" in (rev.doc or "").lower()]
+    assert len(soar) == 2
+    for revision in soar:
+        assert revision.down_revision is not None
 
 
 def test_exactly_two_migration_files_target_soar_tables():

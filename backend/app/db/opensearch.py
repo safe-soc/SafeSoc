@@ -3,6 +3,7 @@ SafeSOC — OpenSearch Client
 Connection management, index setup, bulk writes, and search queries.
 """
 
+import ipaddress
 from datetime import datetime
 from typing import Optional
 
@@ -211,6 +212,62 @@ async def update_alert_anomaly_score(alert_id: str, timestamp: datetime, anomaly
         return False
 
 
+# Free-text alert search (GET /api/v1/alerts?q=). Keyword fields are
+# matched as a case-insensitive substring; description is analyzed text,
+# so it gets a plain `match`. IP fields are `ip`-typed and can't be
+# substring-matched, so they're only queried when q is an IP, a CIDR, or
+# a dotted prefix like "198.51.100" (turned into a CIDR).
+SEARCH_KEYWORD_FIELDS = ("host_id", "user", "action", "rule_id", "mitre_technique")
+SEARCH_IP_FIELDS = ("source_ip", "destination_ip")
+SEARCH_QUERY_MAX_LENGTH = 200
+
+
+def _escape_wildcard(value: str) -> str:
+    """Escape the wildcard query's own metacharacters so user input is always literal."""
+    return value.replace("\\", "\\\\").replace("*", "\\*").replace("?", "\\?")
+
+
+def _ip_search_term(q: str) -> Optional[str]:
+    """An IP or CIDR usable in a `term` query on an ip field, or None if q isn't IP-shaped."""
+    try:
+        return str(ipaddress.ip_address(q))
+    except ValueError:
+        pass
+    if "/" in q:
+        try:
+            return str(ipaddress.ip_network(q, strict=False))
+        except ValueError:
+            return None
+    # Dotted IPv4 prefix: "198.51.100" or "198.51.100." -> 198.51.100.0/24.
+    octets = q.rstrip(".").split(".")
+    if "." in q and 1 <= len(octets) <= 3 and all(o.isdigit() and int(o) <= 255 for o in octets):
+        return f"{'.'.join(octets + ['0'] * (4 - len(octets)))}/{8 * len(octets)}"
+    return None
+
+
+def build_alert_search_clause(q: str) -> Optional[dict]:
+    """
+    The `q` part of the alert search as a bool/should clause, or None
+    for a blank q. User input only ever reaches OpenSearch as a literal
+    value (escaped wildcard pattern, `match` text, or a parsed IP) —
+    never through query_string syntax, so characters like `"`, `:`,
+    `(`, `*` or a backslash can neither break nor rewrite the query.
+    """
+    q = q.strip()[:SEARCH_QUERY_MAX_LENGTH]
+    if not q:
+        return None
+
+    pattern = f"*{_escape_wildcard(q)}*"
+    should: list[dict] = [
+        {"wildcard": {field: {"value": pattern, "case_insensitive": True}}} for field in SEARCH_KEYWORD_FIELDS
+    ]
+    should.append({"match": {"description": {"query": q, "operator": "and"}}})
+    ip_term = _ip_search_term(q)
+    if ip_term:
+        should.extend({"term": {field: ip_term}} for field in SEARCH_IP_FIELDS)
+    return {"bool": {"should": should, "minimum_should_match": 1}}
+
+
 async def search_alerts(
     tenant_id: str,
     severity: Optional[str] = None,
@@ -223,11 +280,22 @@ async def search_alerts(
     timerange_hours: int = 24,
     page: int = 1,
     size: int = 50,
+    q: Optional[str] = None,
+    alert_ids_include: Optional[list[str]] = None,
+    alert_ids_exclude: Optional[list[str]] = None,
 ) -> dict:
     """
     Search alerts with mandatory tenant_id filter.
     Returns paginated results with total count.
+
+    `q` is a free-text search (see build_alert_search_clause), ANDed
+    with every other filter. alert_ids_include/exclude restrict the
+    results by id (the Alerts page's triage filter); an empty include
+    list means nothing can match.
     """
+    if alert_ids_include is not None and not alert_ids_include:
+        return {"total": 0, "page": page, "size": size, "pages": 0, "alerts": []}
+
     client = get_client()
 
     must_filters = [{"term": {"tenant_id": tenant_id}}]
@@ -246,6 +314,11 @@ async def search_alerts(
         must_filters.append({"term": {"user": user}})
     if source_ip:
         must_filters.append({"term": {"source_ip": source_ip}})
+    if alert_ids_include is not None:
+        must_filters.append({"terms": {"alert_id": alert_ids_include}})
+    search_clause = build_alert_search_clause(q) if q else None
+    if search_clause:
+        must_filters.append(search_clause)
 
     range_filter = {
         "range": {
@@ -261,6 +334,7 @@ async def search_alerts(
             "bool": {
                 "must": must_filters,
                 "filter": [range_filter],
+                "must_not": [{"terms": {"alert_id": alert_ids_exclude}}] if alert_ids_exclude else [],
             }
         },
         "sort": [{"timestamp": {"order": "desc"}}],

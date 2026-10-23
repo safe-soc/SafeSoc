@@ -3,7 +3,7 @@
  * Small, dependency-free formatters shared across pages/widgets.
  */
 
-import type { CorrelationPattern, Incident } from './types';
+import type { CorrelationPattern, DismissReason, Incident } from './types';
 
 export function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString();
@@ -63,4 +63,15 @@ export function hostsLabel(hosts: string[]): string {
 export function incidentTitle(incident: Pick<Incident, 'category' | 'hosts'>): string {
   const category = categoryLabel(incident.category);
   return incident.hosts.length > 0 ? `${category} on ${hostsLabel(incident.hosts)}` : category;
+}
+
+const DISMISS_REASON_LABELS: Record<DismissReason, string> = {
+  false_positive: 'False positive',
+  expected_activity: 'Expected activity',
+  duplicate: 'Duplicate',
+  other: 'Other',
+};
+
+export function dismissReasonLabel(reason: DismissReason): string {
+  return DISMISS_REASON_LABELS[reason] ?? titleCase(reason);
 }

@@ -40,6 +40,21 @@ class Severity(str, Enum):
     CRITICAL = "critical"
 
 
+class DismissReason(str, Enum):
+    """Why an analyst dismissed an alert (stored as text on alert_annotations.dismiss_reason)."""
+    FALSE_POSITIVE = "false_positive"
+    EXPECTED_ACTIVITY = "expected_activity"
+    DUPLICATE = "duplicate"
+    OTHER = "other"
+
+
+class TriageStatus(str, Enum):
+    """Alerts-page triage filter. An alert with no annotation row is untriaged."""
+    UNTRIAGED = "untriaged"
+    ACKNOWLEDGED = "acknowledged"
+    DISMISSED = "dismissed"
+
+
 class IncidentStatus(str, Enum):
     """Incident lifecycle states."""
     OPEN = "open"

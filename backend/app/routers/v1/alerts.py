@@ -1,8 +1,9 @@
 """
 SafeSOC — Alerts API
-GET /api/v1/alerts — paginated alert search with filters.
-POST /api/v1/alerts/{alert_id}/acknowledge, .../dismiss — analyst
-triage actions (SS-107).
+GET /api/v1/alerts — paginated alert search with filters, free-text
+search (`q`) and a triage-status filter.
+POST /api/v1/alerts/{alert_id}/acknowledge, .../dismiss (with a
+reason), .../restore — analyst triage actions (SS-107).
 Requires a valid JWT (SS-015); tenant_id is derived from the token,
 not the caller-supplied query parameter (SS-016).
 """
@@ -13,12 +14,18 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import CurrentUser, ensure_tenant_matches, get_current_user, require_role
-from app.core.enums import UserRole
+from app.core.enums import TriageStatus, UserRole
 from app.db.opensearch import get_alert_severity_summary, search_alerts
 from app.db.postgresql import get_db
 from app.models.alert_annotation import AlertAnnotation
-from app.schemas.alerts import AlertAnnotationResponse
-from app.services.alert_annotations import acknowledge_alert, dismiss_alert, get_annotations_for_alert_ids
+from app.schemas.alerts import AlertAnnotationResponse, AlertDismissRequest
+from app.services.alert_annotations import (
+    acknowledge_alert,
+    dismiss_alert,
+    get_alert_ids_for_triage_status,
+    get_annotations_for_alert_ids,
+    restore_alert,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["alerts"])
 
@@ -28,6 +35,8 @@ def _annotation_to_response(annotation: AlertAnnotation) -> AlertAnnotationRespo
         alert_id=annotation.alert_id,
         acknowledged=annotation.acknowledged,
         dismissed=annotation.dismissed,
+        dismiss_reason=annotation.dismiss_reason,
+        dismiss_note=annotation.dismiss_note,
         updated_by_user_id=annotation.updated_by_user_id,
         updated_at=annotation.updated_at,
     )
@@ -44,6 +53,12 @@ async def get_alerts(
     source: Optional[str] = Query(None, description="Filter by source"),
     host_id: Optional[str] = Query(None, description="Filter by endpoint"),
     timerange_hours: int = Query(24, ge=1, le=720, description="Hours to look back"),
+    q: Optional[str] = Query(
+        None,
+        max_length=200,
+        description="Free-text search across host, user, action, description, source/destination IP, rule and MITRE technique",
+    ),
+    triage: Optional[TriageStatus] = Query(None, description="Filter by triage status; omit for all"),
     page: int = Query(1, ge=1, description="Page number"),
     size: int = Query(50, ge=1, le=500, description="Results per page"),
     db: AsyncSession = Depends(get_db),
@@ -57,8 +72,15 @@ async def get_alerts(
     Returns paginated results sorted by timestamp descending, each
     merged with its acknowledged/dismissed triage state (SS-107) —
     defaulting to False for an alert with no AlertAnnotation row yet.
+    `q` and `triage` narrow the results (and the total) like any other filter.
     """
     ensure_tenant_matches(current_user, tenant_id)
+
+    alert_ids_include = alert_ids_exclude = None
+    if triage is not None:
+        alert_ids_include, alert_ids_exclude = await get_alert_ids_for_triage_status(
+            db, current_user.tenant_id, triage
+        )
 
     result = await search_alerts(
         tenant_id=str(current_user.tenant_id),
@@ -69,6 +91,9 @@ async def get_alerts(
         timerange_hours=timerange_hours,
         page=page,
         size=size,
+        q=q,
+        alert_ids_include=alert_ids_include,
+        alert_ids_exclude=alert_ids_exclude,
     )
 
     alert_ids = [alert["alert_id"] for alert in result["alerts"] if alert.get("alert_id")]
@@ -77,6 +102,8 @@ async def get_alerts(
         annotation = annotations.get(alert.get("alert_id"))
         alert["acknowledged"] = annotation.acknowledged if annotation else False
         alert["dismissed"] = annotation.dismissed if annotation else False
+        alert["dismiss_reason"] = annotation.dismiss_reason.value if annotation and annotation.dismiss_reason else None
+        alert["dismiss_note"] = annotation.dismiss_note if annotation else None
 
     return result
 
@@ -118,9 +145,27 @@ async def acknowledge(
 @router.post("/alerts/{alert_id}/dismiss", response_model=AlertAnnotationResponse)
 async def dismiss(
     alert_id: str,
+    payload: AlertDismissRequest,
     current_user: CurrentUser = Depends(require_role(UserRole.ANALYST)),
     db: AsyncSession = Depends(get_db),
 ):
-    """Mark an alert dismissed (SS-107) — tenant-scoped, audit-logged."""
-    annotation = await dismiss_alert(db, current_user.tenant_id, alert_id, current_user.user_id)
+    """
+    Mark an alert dismissed with a reason (SS-107) — tenant-scoped,
+    audit-logged with the reason and note. `note` is required when
+    `reason` is "other" (422 otherwise).
+    """
+    annotation = await dismiss_alert(
+        db, current_user.tenant_id, alert_id, current_user.user_id, reason=payload.reason, note=payload.note
+    )
+    return _annotation_to_response(annotation)
+
+
+@router.post("/alerts/{alert_id}/restore", response_model=AlertAnnotationResponse)
+async def restore(
+    alert_id: str,
+    current_user: CurrentUser = Depends(require_role(UserRole.ANALYST)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Undo a dismissal: clears dismissed, reason and note. Audit-logged as alert.restored."""
+    annotation = await restore_alert(db, current_user.tenant_id, alert_id, current_user.user_id)
     return _annotation_to_response(annotation)
