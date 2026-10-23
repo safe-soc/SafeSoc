@@ -29,7 +29,7 @@ import AttackChainGraphView from '../components/AttackChainGraphView';
 import Spinner from '../components/Spinner';
 import { api } from '../lib/api';
 import { fetchAlertLookup, type AlertLookup } from '../lib/alertLookup';
-import { formatDateTime, formatRelativeTime } from '../lib/format';
+import { formatDateTime, formatRelativeTime, incidentTitle } from '../lib/format';
 import {
   ALLOWED_TRANSITIONS,
   type Incident,
@@ -247,22 +247,27 @@ export default function IncidentDetail() {
 
       <div className="mt-2">
         <PageHeader
-          title={`Incident ${incident.id.slice(0, 8)}`}
+          title={incidentTitle(incident)}
           description={
             <>
-              Created {formatDateTime(incident.created_at)} · Updated {formatRelativeTime(incident.updated_at)}
+              Incident{' '}
+              <span className="select-all font-mono text-slate-300" title={incident.id}>
+                {incident.id.slice(0, 8)}
+              </span>{' '}
+              · Created {formatDateTime(incident.created_at)} · Updated {formatRelativeTime(incident.updated_at)}
             </>
           }
-          actions={
-            <div className="flex items-center gap-3">
-              {incident.confidence != null && (
-                <span className="text-xs text-slate-500">{Math.round(incident.confidence * 100)}% confidence</span>
-              )}
-              <StatusBadge status={incident.status} />
-              <GenerateReportButton scope="incident" id={incident.id} />
-            </div>
-          }
+          actions={<GenerateReportButton scope="incident" id={incident.id} />}
         />
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {incident.severity && <LevelBadge level={incident.severity} />}
+          <StatusBadge status={incident.status} />
+          {incident.confidence != null && (
+            <span className="inline-flex items-center rounded-full bg-violet-500/10 px-2.5 py-0.5 text-xs font-medium tabular-nums text-violet-300 ring-1 ring-inset ring-violet-500/30">
+              {Math.round(incident.confidence * 100)}% confidence
+            </span>
+          )}
+        </div>
       </div>
 
       {actionError && <p className="mt-3 text-sm text-red-400">{actionError}</p>}

@@ -3,7 +3,7 @@
  * Small, dependency-free formatters shared across pages/widgets.
  */
 
-import type { CorrelationPattern } from './types';
+import type { CorrelationPattern, Incident } from './types';
 
 export function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString();
@@ -57,4 +57,10 @@ export function categoryLabel(category: CorrelationPattern | null): string {
 export function hostsLabel(hosts: string[]): string {
   if (hosts.length === 0) return '—';
   return hosts.length === 1 ? hosts[0] : `${hosts[0]} +${hosts.length - 1}`;
+}
+
+/** Readable incident title, e.g. "Successful compromise on UBUNTU-WEB-01"; just the category when no host resolved. */
+export function incidentTitle(incident: Pick<Incident, 'category' | 'hosts'>): string {
+  const category = categoryLabel(incident.category);
+  return incident.hosts.length > 0 ? `${category} on ${hostsLabel(incident.hosts)}` : category;
 }
