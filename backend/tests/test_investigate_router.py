@@ -9,18 +9,21 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from opensearchpy.exceptions import OpenSearchException
 
-from app.core.enums import Intent, UserRole
+from app.core.enums import Intent, QueryResolution, UserRole
 from app.core.security import create_access_token
 from app.db.postgresql import get_db
 from app.main import app
 from app.mcp.tools import AlertListOutput, EndpointSnapshotOutput, RiskyEndpointsOutput
-from app.services.investigation import ConversationContext
+from app.services.investigation import UNKNOWN_INTENT_ANSWER, ConversationContext, KnownEntities, Resolution
 
 
 def _mock_resolve_query(monkeypatch, intent, params=None):
-    monkeypatch.setattr(
-        "app.routers.v1.investigate.resolve_query", AsyncMock(return_value=(intent, params or {}))
-    )
+    """UNKNOWN resolves to the help text; any other intent to a tool call."""
+    if intent == Intent.UNKNOWN:
+        resolution = Resolution(kind=QueryResolution.UNKNOWN, intent=intent, message=UNKNOWN_INTENT_ANSWER)
+    else:
+        resolution = Resolution(kind=QueryResolution.TOOL, intent=intent, params=params or {})
+    monkeypatch.setattr("app.routers.v1.investigate.resolve_query", AsyncMock(return_value=resolution))
 
 
 def _headers_for(tenant_id: uuid.UUID, user_id: uuid.UUID, role: UserRole = UserRole.ANALYST) -> dict:
@@ -68,6 +71,12 @@ def _mock_investigation_context(monkeypatch):
     monkeypatch.setattr("app.routers.v1.investigate.get_context", AsyncMock(return_value=None))
     monkeypatch.setattr("app.routers.v1.investigate.append_turn", AsyncMock())
     monkeypatch.setattr("app.routers.v1.investigate.record_event", AsyncMock())
+    # Known-entity lookup (Redis + OpenSearch + Postgres) and the
+    # context writes are no-ops here; test_investigate_resolution.py
+    # covers them.
+    monkeypatch.setattr("app.routers.v1.investigate.get_known_entities", AsyncMock(return_value=KnownEntities()))
+    monkeypatch.setattr("app.routers.v1.investigate.commit_context", AsyncMock())
+    monkeypatch.setattr("app.routers.v1.investigate.remember_clarification", AsyncMock())
 
 
 def test_investigate_requires_authentication(client):
@@ -877,7 +886,7 @@ def test_investigate_audits_an_unknown_intent(client, monkeypatch):
         target_type="investigation_session",
         target_id="session-unk",
         actor_user_id=user_id,
-        details={"query": "what's the weather?", "intent": "unknown", "outcome": "unclassified"},
+        details={"query": "what's the weather?", "intent": "unknown", "outcome": "unknown"},
     )
 
 

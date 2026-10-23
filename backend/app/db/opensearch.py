@@ -358,6 +358,42 @@ async def search_alerts(
     }
 
 
+async def get_alert_entity_terms(tenant_id: str, lookback_days: int = 30, size: int = 500) -> dict[str, list[str]]:
+    """
+    Distinct host_id and user values in this tenant's recent alerts,
+    most frequent first — one size:0 search with two terms aggregations,
+    not a document scan. Feeds the Investigate chat's known-entity
+    matching (services/investigation.py::get_known_entities), which
+    caches the result. "unknown" users are dropped.
+    """
+    client = get_client()
+    response = client.search(
+        index="safesoc-alerts-*",
+        body={
+            "query": {
+                "bool": {
+                    "must": [{"term": {"tenant_id": tenant_id}}],
+                    "filter": [{"range": {"timestamp": {"gte": f"now-{lookback_days}d", "lte": "now"}}}],
+                }
+            },
+            "size": 0,
+            "aggs": {
+                "hosts": {"terms": {"field": "host_id", "size": size}},
+                "users": {"terms": {"field": "user", "size": size}},
+            },
+        },
+    )
+    aggs = response.get("aggregations", {})
+
+    def keys(name: str) -> list[str]:
+        return [str(bucket["key"]) for bucket in aggs.get(name, {}).get("buckets", []) if bucket.get("key")]
+
+    return {
+        "host_id": keys("hosts"),
+        "user": [user for user in keys("users") if user.lower() != "unknown"],
+    }
+
+
 async def get_alert_severity_summary(tenant_id: str, timerange_hours: int = 24, host_id: Optional[str] = None) -> dict:
     """
     Aggregate severity counts for the SAME tenant+time-window population

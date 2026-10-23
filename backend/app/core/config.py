@@ -163,6 +163,15 @@ class Settings(BaseSettings):
     # pattern as CORRELATION_WINDOW_TTL below.
     INVESTIGATION_SESSION_TTL_SECONDS: int = 600  # 10 minutes
 
+    # The Investigate chat recognizes host and user names by matching
+    # them against this tenant's known entities (endpoints table +
+    # distinct host_id/user in recent alerts). One aggregation builds
+    # the list; it's cached in Redis for this long so a chat turn never
+    # rescans alerts.
+    INVESTIGATION_KNOWN_ENTITIES_TTL_SECONDS: int = 300  # 5 minutes
+    INVESTIGATION_KNOWN_ENTITIES_LOOKBACK_DAYS: int = 30
+    INVESTIGATION_KNOWN_ENTITIES_MAX_TERMS: int = 500
+
     # POST /api/v1/investigate (SS-047) must meet the SRS's 15-second
     # response time target even when the LLM is slow/unreachable — this
     # bounds just the answer-generation step, leaving headroom under 15s

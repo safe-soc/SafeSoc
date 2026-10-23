@@ -360,3 +360,14 @@ TOOLS: dict[Intent, MCPTool] = {
         handler=_attack_chain_status,
     ),
 }
+
+# OVERVIEW ("anything suspicious today?") has no dedicated tool yet:
+# it runs the top-alerts query until one exists, so every intent dispatches.
+TOOLS[Intent.OVERVIEW] = MCPTool(
+    intent=Intent.OVERVIEW,
+    name="overview",
+    description="Tenant-wide overview — currently the most recent alerts, optionally filtered by severity.",
+    input_model=TopAlertsInput,
+    output_model=AlertListOutput,
+    handler=_top_alerts,
+)

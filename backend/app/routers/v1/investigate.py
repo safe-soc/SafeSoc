@@ -10,6 +10,12 @@ query and resolve conversation context (SS-044/SS-046), call the
 matching MCP tool (SS-045), then ask the configured LLM provider
 (SS-042/SS-043) to turn the tool's structured result into a
 conversational answer.
+
+Out-of-scope, unsafe, noise and clarifying turns are answered
+deterministically from services/investigation.py without calling a
+tool or the LLM. Conversation context is committed only after a tool
+call succeeds, so a failed or out-of-scope turn never becomes what the
+next follow-up inherits.
 """
 
 import asyncio
@@ -27,12 +33,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.clients import groq, ollama
 from app.core.config import settings
 from app.core.dependencies import CurrentUser, get_current_user
-from app.core.enums import Intent
+from app.core.enums import Intent, QueryResolution
 from app.db.postgresql import get_db
 from app.mcp import TOOLS
 from app.schemas.investigation import InvestigateRequest, InvestigateResponse
 from app.services.audit import record_event
-from app.services.investigation import append_turn, get_context, resolve_query
+from app.services.investigation import (
+    append_turn,
+    commit_context,
+    get_context,
+    get_known_entities,
+    remember_clarification,
+    resolve_query,
+)
 from app.services.investigation_session import _ANSWER_FORMAT
 from app.utils.logger import get_logger
 
@@ -40,11 +53,6 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["investigate"])
 
-_UNKNOWN_INTENT_ANSWER = (
-    "I couldn't determine what you're asking. Try asking about failed logins, IP activity, "
-    "an endpoint's status, top alerts, user activity, cloud findings, risky endpoints, or "
-    "attack chain status."
-)
 
 
 def _fallback_answer(intent: Intent, tool_result: BaseModel) -> str:
@@ -472,21 +480,29 @@ async def investigate(
     reference what was already discussed (SS-046).
     """
     session_id = payload.session_id or str(uuid.uuid4())
+    tenant_key = str(current_user.tenant_id)
 
-    intent, params = await resolve_query(str(current_user.tenant_id), session_id, payload.query)
+    known = await get_known_entities(db, current_user.tenant_id)
+    resolution = await resolve_query(tenant_key, session_id, payload.query, known)
+    intent, params = resolution.intent, resolution.params
 
-    if intent == Intent.UNKNOWN:
+    if resolution.kind != QueryResolution.TOOL:
+        # Answered deterministically: no tool call, no LLM, and the saved
+        # context is left as it was — except a clarifying question, which
+        # is remembered so the analyst's short reply can complete it.
+        if resolution.kind == QueryResolution.CLARIFY:
+            await remember_clarification(tenant_key, session_id, intent, params, resolution.missing)
         await _record_investigation_audit_event(
             db,
             current_user.tenant_id,
             session_id,
             current_user.user_id,
-            details={"query": payload.query, "intent": "unknown", "outcome": "unclassified"},
+            details={"query": payload.query, "intent": intent.value, "outcome": resolution.kind.value},
         )
         return InvestigateResponse(
             session_id=session_id,
-            intent=Intent.UNKNOWN,
-            answer=_UNKNOWN_INTENT_ANSWER,
+            intent=intent,
+            answer=resolution.message or "",
             data={},
             is_fallback=False,
         )
@@ -521,15 +537,21 @@ async def investigate(
             is_fallback=True,
         )
 
-    context = await get_context(str(current_user.tenant_id), session_id)
+    # Only now, with the tool call succeeded, does this turn become the
+    # context a follow-up builds on.
+    await commit_context(tenant_key, session_id, intent, params)
+
+    context = await get_context(tenant_key, session_id)
     transcript = context.transcript if context is not None else []
 
     answer, is_fallback = await _generate_answer(payload.query, intent, tool_result, transcript)
+    if resolution.notice:
+        answer = f"{resolution.notice}\n\n{answer}"
 
     # Recorded only on this success path (SS-088) — the UNKNOWN and
     # tool-error-fallback answers above intentionally aren't part of
     # the transcript the LLM prompt draws on.
-    await append_turn(str(current_user.tenant_id), session_id, payload.query, answer)
+    await append_turn(tenant_key, session_id, payload.query, answer)
 
     await _record_investigation_audit_event(
         db,
