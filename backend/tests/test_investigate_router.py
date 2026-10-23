@@ -414,8 +414,9 @@ async def test_generate_answer_logs_a_warning_when_the_answer_is_not_grounded(mo
     )
 
     mock_logger.warning.assert_called_once()
-    message = mock_logger.warning.call_args.args[0]
-    assert "not found" in message.lower()
+    kwargs = mock_logger.warning.call_args.kwargs
+    assert kwargs["reason"] == "ungrounded"
+    assert "not found" in kwargs["detail"].lower()
 
 
 @pytest.mark.asyncio
@@ -434,20 +435,26 @@ async def test_generate_answer_does_not_log_a_warning_when_the_answer_is_grounde
 
 
 @pytest.mark.asyncio
-async def test_generate_answer_ungrounded_warning_does_not_change_is_fallback_or_block_the_answer(monkeypatch):
-    """SS-092's recommendation: flag, don't block — the analyst still sees the (flagged-in-logs) answer."""
+async def test_generate_answer_replaces_an_ungrounded_answer_with_the_templated_one(monkeypatch):
+    """
+    An answer citing a number that isn't in the data (999 here) is not
+    shown: the templated answer built from the same data is used instead,
+    with fallback_reason "ungrounded" — no second LLM call.
+    """
+    from app.core.enums import FallbackReason
     from app.routers.v1.investigate import _generate_answer
 
-    monkeypatch.setattr(
-        "app.routers.v1.investigate.ollama.generate", Mock(return_value="Found 999 unrelated incidents.")
+    generate = Mock(return_value="Found 999 unrelated incidents.")
+    monkeypatch.setattr("app.routers.v1.investigate.ollama.generate", generate)
+
+    answer, reason = await _generate_answer(
+        "top alerts", Intent.TOP_ALERTS,
+        AlertListOutput(subject="alerts in the last 24 hours", total=3, alerts=[]), [],
     )
 
-    answer, is_fallback = await _generate_answer(
-        "top alerts", Intent.TOP_ALERTS, AlertListOutput(total=3, alerts=[]), []
-    )
-
-    assert answer == "Found 999 unrelated incidents."
-    assert is_fallback is False
+    assert answer == "Alerts in the last 24 hours: 3."
+    assert reason == FallbackReason.UNGROUNDED
+    generate.assert_called_once()
 
 
 # ── Latency diagnosis: prompt-data summarization + output-token cap ──
@@ -465,20 +472,38 @@ def _make_alert(i, host="DESKTOP-042", user="john.doe", severity="high"):
     }
 
 
-def test_describe_alert_list_computes_correct_top_counts():
-    """Same guarantee the old dict-shaped summarizer carried: the aggregate counts are what let the model answer "which host is most affected" correctly."""
-    from app.routers.v1.investigate import _describe_alert_list
+def test_prompt_counts_come_from_aggregations_not_the_sample():
+    """
+    The sample is 5 alerts on HOST-A/HOST-B, but the aggregation over all
+    500 matches says HOST-C dominates — the prompt must show the real
+    totals and must not derive counts from the sample at all.
+    """
+    from app.routers.v1.investigate import _prompt_data
 
     alerts = (
         [_make_alert(i, host="HOST-A", user="alice") for i in range(3)]
         + [_make_alert(i, host="HOST-B", user="bob") for i in range(3, 5)]
     )
+    result = AlertListOutput(
+        total=500, alerts=alerts, truncated=True,
+        counts={"Hosts": {"HOST-C": 480, "HOST-A": 15, "HOST-B": 5}},
+    )
 
-    briefing = _describe_alert_list(alerts, total=5)
+    prompt_text = _prompt_data(result)
 
-    assert "Matching alerts: 5" in briefing
-    assert "Most affected endpoints: HOST-A (3), HOST-B (2)" in briefing
-    assert "Most affected users: alice (3), bob (2)" in briefing
+    assert "Matching alerts: 500 in total" in prompt_text
+    assert "Hosts: HOST-C (480), HOST-A (15), HOST-B (5)" in prompt_text
+    assert "HOST-A (3)" not in prompt_text and "Most affected" not in prompt_text
+
+
+def test_prompt_sample_rows_carry_only_the_compact_fields():
+    from app.routers.v1.investigate import _describe_alert_list
+
+    briefing = _describe_alert_list([_make_alert(1)], total=1)
+
+    row = briefing.splitlines()[-1]
+    assert row == "1. time=2026-08-25T02:47:11Z host=DESKTOP-042 user=john.doe activity=failed_login severity=high source IP=45.33.32.100"
+    assert "Failed SSH authentication attempt" not in briefing and "T1110" not in briefing
 
 
 def test_describe_alert_list_caps_the_example_count():
@@ -501,7 +526,6 @@ def test_prompt_data_summarizes_a_large_alerts_list():
     prompt_text = _prompt_data(result)
 
     assert len(prompt_text) < len(result.model_dump_json()) / 4  # substantially smaller than the raw dump
-    assert "Most affected endpoints: DESKTOP-042 (100)" in prompt_text
     assert "Matching alerts: 100" in prompt_text
 
 
@@ -517,13 +541,15 @@ def test_prompt_data_summarizes_recent_alerts_on_endpoint_snapshot():
     from app.routers.v1.investigate import _prompt_data
 
     result = EndpointSnapshotOutput(
-        host_id="DESKTOP-042", risk_score=80, risk_level="high",
-        recent_alert_count=20, recent_alerts=[_make_alert(i) for i in range(20)], truncated=True,
+        host_id="DESKTOP-042", risk_score=80, risk_level="high", recent_alert_count=40,
+        counts={"Activity types": {"failed_login": 39, "login_success": 1}},
+        recent_alerts=[_make_alert(i) for i in range(20)], truncated=True,
     )
 
     prompt_text = _prompt_data(result)
 
-    assert "Most affected endpoints: DESKTOP-042 (20)" in prompt_text
+    assert "Matching alerts: 40 in total" in prompt_text
+    assert "Activity types: failed_login (39), login_success (1)" in prompt_text
     assert "Risk score: 80" in prompt_text  # other fields still reach the model, as readable labels
 
 
@@ -783,7 +809,7 @@ async def test_generate_answer_falls_back_when_the_llm_exceeds_the_timeout(monke
 
     monkeypatch.setattr(settings, "INVESTIGATION_LLM_TIMEOUT_SECONDS", 0.2)
 
-    def _slow_generate(prompt):
+    def _slow_generate(prompt, *args, **kwargs):
         time.sleep(1.0)
         return "too slow"
 
@@ -791,12 +817,12 @@ async def test_generate_answer_falls_back_when_the_llm_exceeds_the_timeout(monke
     monkeypatch.setattr(ollama, "generate", _slow_generate)
 
     started = time.monotonic()
-    answer, is_fallback = await _generate_answer("top alerts", Intent.TOP_ALERTS, AlertListOutput(total=3, alerts=[]))
+    answer, reason = await _generate_answer("top alerts", Intent.TOP_ALERTS, AlertListOutput(total=3, alerts=[]))
     elapsed = time.monotonic() - started
 
     assert elapsed < 0.5  # bounded by the (shortened) timeout, not the slow call's 1.0s
     assert "3" in answer
-    assert is_fallback is True
+    assert reason.value == "timeout"
 
 
 @pytest.mark.asyncio
@@ -813,17 +839,16 @@ async def test_generate_answer_logs_a_specific_message_on_timeout_not_an_empty_e
     import app.routers.v1.investigate as investigate_module
 
     monkeypatch.setattr(settings, "INVESTIGATION_LLM_TIMEOUT_SECONDS", 0.2)
-    monkeypatch.setattr(investigate_module.ollama, "generate", lambda prompt, *args: (time.sleep(1.0), "too slow")[1])
+    monkeypatch.setattr(investigate_module.ollama, "generate", lambda prompt, *args, **kwargs: (time.sleep(1.0), "too slow")[1])
     mock_logger = Mock()
     monkeypatch.setattr(investigate_module, "logger", mock_logger)
 
     await investigate_module._generate_answer("top alerts", Intent.TOP_ALERTS, AlertListOutput(total=3, alerts=[]))
 
     mock_logger.warning.assert_called_once()
-    message, kwargs = mock_logger.warning.call_args.args[0], mock_logger.warning.call_args.kwargs
-    assert "timed out" in message
-    assert kwargs["timeout_seconds"] == 0.2
-    assert "error" not in kwargs  # not the generic path — no empty error="" string
+    kwargs = mock_logger.warning.call_args.kwargs
+    assert kwargs["reason"] == "timeout"
+    assert kwargs["detail"] == "no answer within 0.2s"  # never an empty error string
 
 
 @pytest.mark.asyncio
@@ -840,10 +865,9 @@ async def test_generate_answer_logs_the_exception_type_on_a_non_timeout_failure(
     await investigate_module._generate_answer("top alerts", Intent.TOP_ALERTS, AlertListOutput(total=3, alerts=[]))
 
     mock_logger.warning.assert_called_once()
-    message, kwargs = mock_logger.warning.call_args.args[0], mock_logger.warning.call_args.kwargs
-    assert "failed" in message
-    assert kwargs["error_type"] == "OllamaError"
-    assert kwargs["error"] == "connection refused"
+    kwargs = mock_logger.warning.call_args.kwargs
+    assert kwargs["reason"] == "error"
+    assert kwargs["detail"] == "OllamaError: connection refused"
 
 
 def test_investigate_response_time_meets_the_15_second_srs_target(client, auth_headers, monkeypatch):

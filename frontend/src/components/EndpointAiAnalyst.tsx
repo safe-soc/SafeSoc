@@ -20,8 +20,8 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import EvidencePanel from './EvidencePanel';
 import { BotIcon, SendIcon } from './icons';
 import { api } from '../lib/api';
-import { titleCase } from '../lib/format';
-import type { InvestigateResponse } from '../lib/types';
+import { fallbackBadgeLabel, titleCase } from '../lib/format';
+import type { FallbackReason, InvestigateResponse } from '../lib/types';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -29,6 +29,7 @@ interface Message {
   intent?: string;
   data?: Record<string, unknown>;
   isFallback?: boolean;
+  fallbackReason?: FallbackReason | null;
 }
 
 export default function EndpointAiAnalyst({ hostId }: { hostId: string }) {
@@ -81,6 +82,7 @@ export default function EndpointAiAnalyst({ hostId }: { hostId: string }) {
           intent: response.data.intent,
           data: response.data.data,
           isFallback: response.data.is_fallback,
+          fallbackReason: response.data.fallback_reason,
         },
       ]);
     } catch {
@@ -141,7 +143,7 @@ export default function EndpointAiAnalyst({ hostId }: { hostId: string }) {
                 )}
                 {message.isFallback && (
                   <span className="rounded-full border border-amber-700/40 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-400">
-                    Automated summary
+                    {fallbackBadgeLabel(message.fallbackReason)}
                   </span>
                 )}
                 {message.data && Object.keys(message.data).length > 0 && <EvidencePanel data={message.data} />}

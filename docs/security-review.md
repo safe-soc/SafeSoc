@@ -68,9 +68,16 @@ This isn't something a code fix in this pass addresses — the remediation is cr
 
 `core/config.py` defines this setting; nothing in the ingestion path reads it. Unlike the auth rate limits added in this pass (finding #1), ingest rate limiting raises a real design question this issue isn't the place to settle — per-tenant vs. per-API-key vs. global, and how it should interact with the documented `INGEST_BATCH_SIZE` cap. Recommend a dedicated follow-up issue.
 
-### 12. `POST /api/v1/auth/refresh` doesn't re-verify the user still exists or is active — **Deferred** (Medium)
+### 12. Tokens for deleted users — **Fixed**
 
-`refresh` re-signs a new token directly from the claims embedded in the old one, without querying the database. A deleted or deactivated user's token remains refreshable indefinitely as long as the caller keeps refreshing before each token expires. The blast radius is bounded today by `JWT_EXPIRY_HOURS` (24h) and by the fact that no user-deactivation feature exists yet to make this exploitable in practice — but it's worth fixing (adding a DB lookup to `refresh`) at the same time deactivation ships, since that's when this gap becomes live. Recommend a follow-up issue tied to that feature rather than a standalone DB dependency added to `refresh` now.
+A JWT stays signature-valid after its user is deleted (e.g. after a database reset), and every audit write for it then failed on `audit_log_actor_user_id_fkey`. `core/dependencies.py::current_user_from_token` now also confirms, by primary key, that the token's user still exists and belongs to the token's tenant; otherwise it returns 401. The result is cached for `USER_CHECK_CACHE_SECONDS` (5s) per (tenant, user).
+
+Three paths use it:
+- `get_current_user`, so every HTTP route;
+- the WebSocket endpoint (`routers/ws.py`, which closes with 1008);
+- `POST /api/v1/auth/refresh`, which no longer re-signs a token for a user that no longer exists.
+
+The frontend clears the session and redirects to `/login` on a 401 (`lib/api.ts`) and on a WebSocket 1008 close (`hooks/useRealtimeEvents.ts`). There's still no user-deactivation flag to check; when one ships, add it to the same lookup.
 
 ### 13. No secret redaction in structured logging — **Deferred, documentation only** (Low/Info)
 

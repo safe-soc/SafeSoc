@@ -50,7 +50,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.enums import Intent, QueryResolution
+from app.core.enums import CorrelationPattern, Intent, QueryResolution
 from app.db.opensearch import get_alert_entity_terms
 from app.db.redis import get_client
 from app.models.endpoint import Endpoint
@@ -642,6 +642,28 @@ _SUCCESS_QUESTION_PATTERN = re.compile(
     r"|\bgot\s+in\b|\bbreached\b"
 )
 _WINDOW_KEYS = frozenset({"timerange_hours", "start", "end"})
+_SUBJECT_KEYS = ("host_id", "user", "ip")
+# The tools' default lookback when no time is named.
+DEFAULT_LOOKBACK_HOURS = 24
+
+_LATERAL_MOVEMENT_PATTERN = re.compile(r"\blateral(?:ly)?\s+mov(?:e|es|ed|ing|ement)\b")
+# Question topics that are really "alerts of this log type".
+_LOG_TYPE_TOPICS: tuple[tuple[re.Pattern, str], ...] = (
+    (re.compile(
+        r"\bprivilege[sd]?(?:\s+(?:escalations?|changes?|use))?\b|\bsudo\b|\belevat(?:ion|ed|e)\b"
+        r"|\badmin(?:istrator|istrative)?\s+(?:rights|privileges|access)\b"
+    ), "privilege"),
+    (re.compile(
+        r"\b(?:network|outbound|inbound|external)\s+(?:connections?|traffic|activity|events?)\b|\bconnections?\s+to\b"
+    ), "network"),
+    (re.compile(
+        r"\bprocess(?:es)?\s+(?:started|launched|ran|run|executed|events?|activity)\b|\bprocesses\b"
+        r"|\bcommands?\s+(?:executed|run|ran)\b|\b(?:executed|ran)\s+commands?\b"
+    ), "process"),
+    (re.compile(
+        r"\bfiles?\s+(?:changes?|changed|modifications?|modified|events?|activity|access)\b|\b(?:modified|changed)\s+files?\b"
+    ), "file"),
+)
 
 # Whole-word markers that make a topic-less query a follow-up.
 _FOLLOW_UP_MARKERS = (
@@ -721,23 +743,48 @@ async def resolve_query(
     # that succeeded after failures) — never by re-running whatever
     # narrower search came before, which can't see a success. With no
     # host in the query or the conversation, the tenant-wide overview.
+    # It never inherits a time window (an earlier "yesterday" would hide a
+    # success that happened today) and looks back at least the default
+    # 24 hours, unless it bounds the window itself.
     if _SUCCESS_QUESTION_PATTERN.search(nq.lower):
         inherited = previous.params if previous is not None else {}
-        params = {} if _WINDOW_KEYS & entities.keys() else {k: inherited[k] for k in _WINDOW_KEYS if k in inherited}
-        params.update(entities)
+        params = dict(entities)
+        if not params.get("start"):
+            params["timerange_hours"] = max(params.get("timerange_hours", DEFAULT_LOOKBACK_HOURS), DEFAULT_LOOKBACK_HOURS)
         host_id = entities.get("host_id") or inherited.get("host_id")
         if host_id:
             return _finalize(Intent.ENDPOINT_SNAPSHOT, {**params, "host_id": host_id}, known)
         return _finalize(Intent.OVERVIEW, params, known)
+
+    # Activity-type topics: "lateral movement" is a detected chain
+    # pattern; privilege / network / process / file questions are alerts
+    # of that log type — never every alert.
+    if _LATERAL_MOVEMENT_PATTERN.search(nq.lower):
+        return _finalize(Intent.ATTACK_CHAIN_STATUS, {"category": CorrelationPattern.LATERAL_MOVEMENT.value}, known)
+    log_type = next((log_type for pattern, log_type in _LOG_TYPE_TOPICS if pattern.search(nq.lower)), None)
+    if log_type and topic in (None, Intent.TOP_ALERTS, Intent.OVERVIEW):
+        return _finalize(Intent.TOP_ALERTS, {**entities, "log_type": log_type}, known)
 
     if topic is not None:
         intent = classify_intent(nq.text, known)
         return _finalize(intent, entities, known)
 
     # No topic of its own: a follow-up inherits the previous turn, with
-    # every entity it names replacing the inherited one of that kind.
+    # every entity it names replacing the inherited one of that kind. An
+    # inherited time window only carries over while the follow-up stays
+    # on the same subject: naming a new host/user/IP without a time of
+    # its own resets to the default lookback.
     if previous is not None and _looks_like_follow_up(nq, entities):
-        return _finalize(previous.intent, {**previous.params, **entities}, known)
+        inherited = dict(previous.params)
+        names_new_subject = any(
+            entities.get(key) and entities[key] != inherited.get(key) for key in _SUBJECT_KEYS
+        )
+        # A time the follow-up states replaces the inherited window
+        # wholesale (never "last 6 hours" next to an old start/end).
+        if _WINDOW_KEYS & entities.keys() or names_new_subject:
+            for key in _WINDOW_KEYS:
+                inherited.pop(key, None)
+        return _finalize(previous.intent, {**inherited, **entities}, known)
 
     # Not a follow-up: a named host/user on its own is still a question.
     intent = classify_intent(nq.text, known)

@@ -20,9 +20,9 @@ from typing import Awaitable, Callable, Optional
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.enums import Intent, IncidentStatus, RiskLevel
+from app.core.enums import CorrelationPattern, Intent, IncidentStatus, RiskLevel
 from app.core.mitre_mapping import incident_technique_ids
-from app.db.opensearch import search_alerts
+from app.db.opensearch import get_alerts_by_ids, search_alerts
 from app.models.endpoint import Endpoint
 from app.models.incident import Incident
 from app.services.incident_evidence import get_incident_evidence
@@ -67,23 +67,28 @@ def _incident_to_dict(incident: Incident, summary: Optional[IncidentSummary] = N
 
 
 _ACTIVE_STATUSES = (IncidentStatus.OPEN, IncidentStatus.INVESTIGATING)
+_ACTIVE_STATUS_VALUES = frozenset(status.value for status in _ACTIVE_STATUSES)
 # How many incidents a status-wide listing considers; more than any
 # tenant's open set in practice, and the response reports the true total.
 _INCIDENT_LIST_LIMIT = 100
 
 
 async def _incidents_with_summaries(
-    db: AsyncSession, tenant_id: uuid.UUID, status: Optional[IncidentStatus] = None
-) -> tuple[list[dict], int]:
-    incidents, total = await list_incidents(db, tenant_id, status=status, size=_INCIDENT_LIST_LIMIT)
+    db: AsyncSession, tenant_id: uuid.UUID,
+    status: Optional[IncidentStatus] = None, category: Optional[CorrelationPattern] = None,
+) -> tuple[list[tuple[Incident, dict]], int]:
+    """Incidents with their model-facing dicts, from ONE batched alert lookup (services/incident_summary.py)."""
+    incidents, total = await list_incidents(db, tenant_id, status=status, size=_INCIDENT_LIST_LIMIT, category=category)
     summaries = await summarize_incidents(incidents)
-    return [_incident_to_dict(incident, summaries.get(incident.id)) for incident in incidents], total
+    return [(incident, _incident_to_dict(incident, summaries.get(incident.id))) for incident in incidents], total
 
 
-# ── Search scope, stated in every alert-backed result ───────────────
-# The model must say what was searched before answering, and never
-# claim something doesn't exist outside that scope. So each tool writes
-# down its own scope in plain words.
+# ── What was searched, in words ─────────────────────────────────────
+# Every alert-backed result carries `subject` ("failed logins for
+# john.doe on UBUNTU-WEB-01 in the last 24 hours") and `scope`
+# ("Searched <subject>."). The model must state the scope and never
+# claim absence outside it; the router builds the zero-result sentence
+# ("No <subject>.") and the templated fallback from the same words.
 
 def _format_bound(iso: str) -> str:
     try:
@@ -106,17 +111,21 @@ def _window_text(params: "_Window") -> str:
     return f"in the last {hours} hours"
 
 
-def _scope(what: str, params: "_Window", **qualifiers: Optional[str]) -> str:
-    parts = [f"Searched {what}"]
-    for label, value in qualifiers.items():
-        if value:
-            parts.append(f"{label.replace('_', ' ')} {value}")
-    parts.append(_window_text(params))
-    return " ".join(parts) + "."
+def _subject(what: str, params: "_Window", *qualifiers: Optional[str]) -> str:
+    """"<what> <qualifiers…> <window>" — qualifiers are pre-phrased ("for john.doe", "on WIN10-FIN-07") or None."""
+    return " ".join([what, *(q for q in qualifiers if q), _window_text(params)])
+
+
+def _scope(subject: str) -> str:
+    return f"Searched {subject}."
 
 
 def _window_kwargs(params: "_Window") -> dict:
     return {"timerange_hours": params.timerange_hours, "start": params.start, "end": params.end}
+
+
+def _when(prefix: str, value: Optional[str]) -> Optional[str]:
+    return f"{prefix} {value}" if value else None
 
 
 # Human labels for the per-field counts handed to the model and the
@@ -134,6 +143,11 @@ _COUNT_LABELS = {
 
 
 def _labeled_counts(counts: dict[str, dict[str, int]]) -> dict[str, dict[str, int]]:
+    """
+    Real totals: these come from OpenSearch terms aggregations over the
+    WHOLE match set (search_alerts' aggregate_by), never from the sample
+    rows a tool returns.
+    """
     labeled = {}
     for field, values in counts.items():
         if field == "user":
@@ -144,7 +158,7 @@ def _labeled_counts(counts: dict[str, dict[str, int]]) -> dict[str, dict[str, in
     return labeled
 
 
-def _alert_list_output(result: dict, scope: str = "") -> "AlertListOutput":
+def _alert_list_output(result: dict, subject: str = "") -> "AlertListOutput":
     """
     Shared by every tool backed by search_alerts (SS-086). `result["total"]`
     is a genuine full-match count (search_alerts sets track_total_hits),
@@ -153,7 +167,8 @@ def _alert_list_output(result: dict, scope: str = "") -> "AlertListOutput":
     without any extra query.
     """
     return AlertListOutput(
-        scope=scope,
+        subject=subject,
+        scope=_scope(subject) if subject else "",
         total=result["total"],
         counts=_labeled_counts(result.get("counts", {})),
         alerts=result["alerts"],
@@ -200,11 +215,13 @@ class CloudEventsInput(_Window):
 
 
 class RiskyEndpointsInput(BaseModel):
-    limit: int = Field(10, ge=1, le=50)
+    # None = not asked; the tool then shows _DEFAULT_RISKY_LIMIT.
+    limit: Optional[int] = Field(None, ge=1, le=50)
 
 
 class AttackChainStatusInput(BaseModel):
     status: Optional[IncidentStatus] = None
+    category: Optional[CorrelationPattern] = None
 
 
 class OverviewInput(_Window):
@@ -212,7 +229,9 @@ class OverviewInput(_Window):
 
 
 class AlertListOutput(BaseModel):
-    # Plain-words description of what was searched (filters + window).
+    # What was searched: `subject` in words, `scope` as the sentence the
+    # model must lead with.
+    subject: str = ""
     scope: str = ""
     total: int
     # Per-field counts over ALL matches, keyed by a readable label.
@@ -225,6 +244,7 @@ class AlertListOutput(BaseModel):
 
 
 class EndpointSnapshotOutput(BaseModel):
+    subject: str = ""
     scope: str = ""
     host_id: str
     risk_score: Optional[int] = None
@@ -234,10 +254,13 @@ class EndpointSnapshotOutput(BaseModel):
     counts: dict[str, dict[str, int]] = {}
     # The "did they get in?" signal: a login_success on this host after
     # failed_login attempts on it — the same host-level sequence the
-    # correlation engine's successful_compromise pattern detects.
+    # correlation engine's successful_compromise pattern detects. Also
+    # true while the host has an open successful_compromise incident.
     successful_login_after_failures: bool = False
     # Stronger: the success came from a source IP that had itself failed.
     same_source_success_after_failures: bool = False
+    # An open/investigating "Successful compromise" incident on this host.
+    compromise_incident_open: bool = False
     logins_after_failures: list[dict] = []
     open_incidents: list[dict] = []
     recent_alerts: list[dict]
@@ -246,10 +269,14 @@ class EndpointSnapshotOutput(BaseModel):
 
 class RiskyEndpointsOutput(BaseModel):
     endpoints: list[dict]
+    # True only when the analyst didn't ask for a number and the default
+    # cap left endpoints out — "top 3" returning 3 is complete.
     truncated: bool = False
 
 
 class AttackChainStatusOutput(BaseModel):
+    subject: str = ""
+    scope: str = ""
     total: int
     # Incidents are detected attack chains; open + investigating = active.
     active_count: int = 0
@@ -259,6 +286,7 @@ class AttackChainStatusOutput(BaseModel):
 
 
 class OverviewOutput(BaseModel):
+    subject: str = ""
     scope: str = ""
     # Every alert in the window (critical_high_total is the subset below).
     total_alerts: int
@@ -284,20 +312,19 @@ async def _auth_failures(db: AsyncSession, tenant_id: uuid.UUID, params: AuthFai
         host_id=params.host_id,
         user=params.user,
         size=100,
-        aggregate_by=["source_ip", "user", "host_id"],
+        aggregate_by=["source_ip", "user", "host_id", "severity"],
         **_window_kwargs(params),
     )
-    scope = _scope("failed logins", params, on=params.host_id, for_user=params.user)
-    return _alert_list_output(result, scope)
+    subject = _subject("failed logins", params, _when("for", params.user), _when("on", params.host_id))
+    return _alert_list_output(result, subject)
 
 
 async def _ip_activity(db: AsyncSession, tenant_id: uuid.UUID, params: IPActivityInput) -> AlertListOutput:
     result = await search_alerts(
         tenant_id=str(tenant_id), ip=params.ip, size=100,
-        aggregate_by=["host_id", "user", "action"], **_window_kwargs(params),
+        aggregate_by=["host_id", "user", "action", "severity"], **_window_kwargs(params),
     )
-    scope = _scope(f"all alerts with {params.ip} as source or destination", params)
-    return _alert_list_output(result, scope)
+    return _alert_list_output(result, _subject(f"alerts involving {params.ip} (as source or destination)", params))
 
 
 def _logins_after_failures(failures: list[dict], successes: list[dict]) -> list[dict]:
@@ -329,6 +356,22 @@ def _logins_after_failures(failures: list[dict], successes: list[dict]) -> list[
     return found
 
 
+async def _compromise_incident_logins(host_id: str, incidents: list[Incident]) -> list[dict]:
+    """
+    Login-success-after-failures evaluated over open "Successful
+    compromise" incidents' OWN alerts (one batched lookup) — the alerts
+    the correlation engine actually matched, which may fall outside the
+    searched window. Keeps the snapshot consistent with the incident.
+    """
+    alert_ids = sorted({alert_id for incident in incidents for alert_id in incident.alert_ids})
+    if not alert_ids:
+        return []
+    alerts = [alert for alert in await get_alerts_by_ids(alert_ids) if alert.get("host_id") == host_id]
+    failures = [alert for alert in alerts if alert.get("action") == "failed_login"]
+    successes = [alert for alert in alerts if alert.get("action") == "login_success"]
+    return _logins_after_failures(failures, successes)
+
+
 async def _endpoint_snapshot(
     db: AsyncSession, tenant_id: uuid.UUID, params: EndpointSnapshotInput
 ) -> EndpointSnapshotOutput:
@@ -337,30 +380,41 @@ async def _endpoint_snapshot(
     window = _window_kwargs(params)
     # Every alert type for this host, not just failures.
     alerts_result = await search_alerts(
-        tenant_id=tenant, host_id=params.host_id, size=20, aggregate_by=["action", "severity"], **window
+        tenant_id=tenant, host_id=params.host_id, size=20,
+        aggregate_by=["action", "severity", "user", "source_ip"], **window,
     )
     failures = await search_alerts(tenant_id=tenant, host_id=params.host_id, action="failed_login", size=200, **window)
     successes = await search_alerts(tenant_id=tenant, host_id=params.host_id, action="login_success", size=200, **window)
     logins_after_failures = _logins_after_failures(failures["alerts"], successes["alerts"])
 
-    active, _ = await _incidents_with_summaries(db, tenant_id)
-    open_incidents = [
-        incident for incident in active
-        if incident["status"] in {s.value for s in _ACTIVE_STATUSES} and params.host_id in incident["hosts"]
+    # The host's open incidents are always included, whatever the window.
+    rows, _ = await _incidents_with_summaries(db, tenant_id)
+    on_host = [
+        (incident, data) for incident, data in rows
+        if data["status"] in _ACTIVE_STATUS_VALUES and params.host_id in data["hosts"]
     ]
+    compromise = [incident for incident, _ in on_host if incident.category == CorrelationPattern.SUCCESSFUL_COMPROMISE]
+    if compromise:
+        seen = {(row["success_at"], row["source_ip"]) for row in logins_after_failures}
+        for row in await _compromise_incident_logins(params.host_id, compromise):
+            if (row["success_at"], row["source_ip"]) not in seen:
+                logins_after_failures.append(row)
 
+    subject = _subject(f"alerts on {params.host_id}", params)
     return EndpointSnapshotOutput(
-        scope=_scope(f"all alerts on {params.host_id}", params),
+        subject=subject,
+        scope=_scope(subject),
         host_id=params.host_id,
         risk_score=endpoint.risk_score if endpoint else None,
         risk_level=endpoint.risk_level if endpoint else None,
         last_scored_at=endpoint.updated_at if endpoint else None,
         recent_alert_count=alerts_result["total"],
         counts=_labeled_counts(alerts_result.get("counts", {})),
-        successful_login_after_failures=bool(logins_after_failures),
+        successful_login_after_failures=bool(logins_after_failures) or bool(compromise),
         same_source_success_after_failures=any(row["failed_attempts_from_same_source"] for row in logins_after_failures),
+        compromise_incident_open=bool(compromise),
         logins_after_failures=logins_after_failures,
-        open_incidents=open_incidents,
+        open_incidents=[data for _, data in on_host],
         recent_alerts=alerts_result["alerts"],
         truncated=alerts_result["total"] > len(alerts_result["alerts"]),
     )
@@ -376,49 +430,65 @@ async def _top_alerts(db: AsyncSession, tenant_id: uuid.UUID, params: TopAlertsI
         user=params.user,
         size=20,
         sort_by_severity=True,
-        aggregate_by=["severity", "log_type"],
+        aggregate_by=["severity", "log_type", "host_id", "user"],
         **_window_kwargs(params),
     )
-    what = f"{params.severity} alerts" if params.severity else "alerts of every severity"
-    scope = _scope(what, params, on=params.host_id, of_type=params.log_type, action=params.action, for_user=params.user)
-    return _alert_list_output(result, scope)
+    what = f"{params.severity} alerts" if params.severity else "alerts"
+    subject = _subject(
+        what, params, _when("of type", params.log_type), _when("with activity", params.action),
+        _when("for", params.user), _when("on", params.host_id),
+    )
+    return _alert_list_output(result, subject)
 
 
 async def _user_activity(db: AsyncSession, tenant_id: uuid.UUID, params: UserActivityInput) -> AlertListOutput:
     result = await search_alerts(
         tenant_id=str(tenant_id), user=params.user, size=100,
-        aggregate_by=["action", "host_id"], **_window_kwargs(params),
+        aggregate_by=["action", "host_id", "severity", "source_ip"], **_window_kwargs(params),
     )
-    return _alert_list_output(result, _scope(f"all alerts for account {params.user}", params))
+    return _alert_list_output(result, _subject(f"alerts for account {params.user}", params))
 
 
 async def _cloud_events(db: AsyncSession, tenant_id: uuid.UUID, params: CloudEventsInput) -> AlertListOutput:
     result = await search_alerts(
-        tenant_id=str(tenant_id), source="cloudlens", size=50, aggregate_by=["severity"], **_window_kwargs(params),
+        tenant_id=str(tenant_id), source="cloudlens", size=50, aggregate_by=["severity", "host_id"], **_window_kwargs(params),
     )
-    return _alert_list_output(result, _scope("CloudLens cloud findings", params))
+    return _alert_list_output(result, _subject("CloudLens cloud findings", params))
+
+
+_DEFAULT_RISKY_LIMIT = 10
 
 
 async def _risky_endpoints(db: AsyncSession, tenant_id: uuid.UUID, params: RiskyEndpointsInput) -> RiskyEndpointsOutput:
     endpoints = await list_endpoints(db, tenant_id)
-    limited = endpoints[: params.limit]
+    limit = params.limit or _DEFAULT_RISKY_LIMIT
+    limited = endpoints[:limit]
     return RiskyEndpointsOutput(
         endpoints=[_endpoint_to_dict(e) for e in limited],
-        truncated=len(endpoints) > len(limited),
+        # "Top 3" returning 3 is what was asked for, not a partial result.
+        truncated=params.limit is None and len(endpoints) > len(limited),
     )
 
 
 async def _attack_chain_status(
     db: AsyncSession, tenant_id: uuid.UUID, params: AttackChainStatusInput
 ) -> AttackChainStatusOutput:
-    incidents, total = await _incidents_with_summaries(db, tenant_id, params.status)
+    rows, total = await _incidents_with_summaries(db, tenant_id, params.status, params.category)
+    incidents = [data for _, data in rows]
     by_status: dict[str, int] = {}
     for incident in incidents:
         by_status[incident["status"]] = by_status.get(incident["status"], 0) + 1
-    active_values = {s.value for s in _ACTIVE_STATUSES}
+    parts = ["incidents"]
+    if params.category:
+        parts.append(f"of pattern {category_label(params.category)}")
+    if params.status:
+        parts.append(f"with status {params.status.value}")
+    subject = " ".join(parts)
     return AttackChainStatusOutput(
+        subject=subject,
+        scope=_scope(subject),
         total=total,
-        active_count=sum(count for status, count in by_status.items() if status in active_values),
+        active_count=sum(count for status, count in by_status.items() if status in _ACTIVE_STATUS_VALUES),
         counts={"Incidents by status": by_status} if by_status else {},
         incidents=incidents,
         truncated=total > len(incidents),
@@ -442,18 +512,18 @@ async def _overview(db: AsyncSession, tenant_id: uuid.UUID, params: OverviewInpu
         tenant_id=tenant, severities=["critical", "high"], size=_OVERVIEW_CRITICAL_LIMIT,
         sort_by_severity=True, **window,
     )
-    incidents, _ = await _incidents_with_summaries(db, tenant_id)
-    active_values = {s.value for s in _ACTIVE_STATUSES}
+    rows, _ = await _incidents_with_summaries(db, tenant_id)
     active = [
-        {key: incident[key] for key in ("category_label", "hosts", "severity", "confidence", "status", "alert_count")}
-        for incident in incidents if incident["status"] in active_values
+        {key: data[key] for key in ("category_label", "hosts", "severity", "confidence", "status", "alert_count")}
+        for _, data in rows if data["status"] in _ACTIVE_STATUS_VALUES
     ]
 
-    counts = _labeled_counts({**everything.get("counts", {}), **top.get("counts", {})})
+    subject = _subject("alerts", params)
     return OverviewOutput(
-        scope=_scope("all alerts and active incidents", params),
+        subject=subject,
+        scope=_scope(f"{subject} and active incidents"),
         total_alerts=everything["total"],
-        counts=counts,
+        counts=_labeled_counts({**everything.get("counts", {}), **top.get("counts", {})}),
         critical_high_total=critical_high["total"],
         critical_high_alerts=critical_high["alerts"],
         active_incident_count=len(active),

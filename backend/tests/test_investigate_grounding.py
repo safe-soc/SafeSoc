@@ -81,11 +81,11 @@ async def test_auth_failures_passes_user_and_window_and_counts_origin_targets_ho
     assert kwargs["tenant_id"] == str(TENANT)
     assert (kwargs["action"], kwargs["host_id"], kwargs["user"]) == ("failed_login", "WIN10-FIN-07", "jane.smith")
     assert (kwargs["start"], kwargs["end"]) == (window["start"], window["end"])
-    assert set(kwargs["aggregate_by"]) == {"source_ip", "user", "host_id"}
+    assert set(kwargs["aggregate_by"]) == {"source_ip", "user", "host_id", "severity"}
     assert result.counts["Source IPs (where the activity came from)"] == {"203.0.113.25": 6}
     assert result.counts["Accounts targeted or used"] == {"jane.smith": 6}  # "unknown" placeholder dropped
     assert result.scope == (
-        "Searched failed logins on WIN10-FIN-07 for user jane.smith between 21 Oct 2026 00:00 UTC "
+        "Searched failed logins for jane.smith on WIN10-FIN-07 between 21 Oct 2026 00:00 UTC "
         "and 22 Oct 2026 00:00 UTC."
     )
 
@@ -104,7 +104,7 @@ async def test_top_alerts_passes_every_filter_sorts_by_severity_and_counts(monke
     for key, value in params.items():
         assert kwargs[key] == value
     assert kwargs["sort_by_severity"] is True
-    assert set(kwargs["aggregate_by"]) == {"severity", "log_type"}
+    assert set(kwargs["aggregate_by"]) == {"severity", "log_type", "host_id", "user"}
     assert result.counts == {"Severity": {"critical": 1}, "Log types": {"privilege": 1}}
 
 
@@ -117,7 +117,7 @@ async def test_ip_activity_matches_source_or_destination_and_counts(monkeypatch)
 
     kwargs = search.call_args.kwargs
     assert (kwargs["tenant_id"], kwargs["ip"]) == (str(TENANT), "203.0.113.25")
-    assert set(kwargs["aggregate_by"]) == {"host_id", "user", "action"}
+    assert set(kwargs["aggregate_by"]) == {"host_id", "user", "action", "severity"}
 
 
 @pytest.mark.asyncio
@@ -130,14 +130,14 @@ async def test_user_activity_covers_every_alert_type_with_counts(monkeypatch):
     kwargs = search.call_args.kwargs
     assert (kwargs["tenant_id"], kwargs["user"]) == (str(TENANT), "jane.smith")
     assert "action" not in kwargs
-    assert set(kwargs["aggregate_by"]) == {"action", "host_id"}
+    assert set(kwargs["aggregate_by"]) == {"action", "host_id", "severity", "source_ip"}
 
 
 @pytest.mark.asyncio
-async def test_risky_endpoints_limit_defaults_to_10_and_is_capped(monkeypatch):
+async def test_risky_endpoints_limit_is_optional_and_capped(monkeypatch):
     from app.mcp.tools import RiskyEndpointsInput
 
-    assert RiskyEndpointsInput().limit == 10
+    assert RiskyEndpointsInput().limit is None  # not asked: the tool shows its default 10
     with pytest.raises(Exception):
         RiskyEndpointsInput(limit=500)
 
@@ -383,7 +383,7 @@ async def test_success_questions_route_to_snapshot_with_a_host_else_overview(mon
     await commit_context("t", "s2", Intent.AUTH_FAILURES, {"host_id": "UBUNTU-WEB-01", "timerange_hours": 6})
     followed = await resolve_query("t", "s2", "did they get in?", KNOWN, now=NOW)
     assert followed.intent == Intent.ENDPOINT_SNAPSHOT
-    assert followed.params == {"host_id": "UBUNTU-WEB-01", "timerange_hours": 6}
+    assert followed.params == {"host_id": "UBUNTU-WEB-01", "timerange_hours": 24}
 
 
 # ── 6. Prompt: glossary, scope line, readable counts ─────────────────

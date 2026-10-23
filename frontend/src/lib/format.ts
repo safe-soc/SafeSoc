@@ -10,7 +10,7 @@
  * timestamp renders "—", never "Invalid Date".
  */
 
-import type { CorrelationPattern, DismissReason, Incident } from './types';
+import type { CorrelationPattern, DismissReason, FallbackReason, Incident } from './types';
 
 const PLACEHOLDER = '—';
 
@@ -207,4 +207,9 @@ const DISMISS_REASON_LABELS: Record<DismissReason, string> = {
 
 export function dismissReasonLabel(reason: DismissReason): string {
   return DISMISS_REASON_LABELS[reason] ?? titleCase(reason);
+}
+
+/** Badge text for a templated (non-LLM) assistant answer. */
+export function fallbackBadgeLabel(reason: FallbackReason | null | undefined): string {
+  return reason === 'rate_limited' ? 'AI busy — showing automated summary' : 'Automated summary';
 }

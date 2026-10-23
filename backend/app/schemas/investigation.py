@@ -8,7 +8,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from app.core.enums import Intent
+from app.core.enums import FallbackReason, Intent
 
 
 class InvestigateRequest(BaseModel):
@@ -33,3 +33,7 @@ class InvestigateResponse(BaseModel):
     # to False so existing callers that don't set it explicitly still
     # get correct semantics (SS-084).
     is_fallback: bool = False
+    # Why it's a fallback, when it is: the LLM was rate limited (the UI
+    # says "AI busy"), timed out, errored, cited a number not in the data
+    # (ungrounded), or the data itself couldn't be retrieved (data_error).
+    fallback_reason: Optional[FallbackReason] = None

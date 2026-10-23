@@ -19,9 +19,9 @@ next follow-up inherits.
 """
 
 import asyncio
+import functools
 import re
 import uuid
-from collections import Counter
 from typing import Optional
 
 from fastapi import APIRouter, Depends
@@ -33,9 +33,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.clients import groq, ollama
 from app.core.config import settings
 from app.core.dependencies import CurrentUser, get_current_user
-from app.core.enums import Intent, QueryResolution
+from app.core.enums import FallbackReason, Intent, QueryResolution
 from app.db.postgresql import get_db
 from app.mcp import TOOLS
+from app.mcp.tools import (
+    AlertListOutput,
+    AttackChainStatusOutput,
+    EndpointSnapshotOutput,
+    OverviewOutput,
+    RiskyEndpointsOutput,
+)
 from app.schemas.investigation import InvestigateRequest, InvestigateResponse
 from app.services.audit import record_event
 from app.services.investigation import (
@@ -56,15 +63,115 @@ router = APIRouter(prefix="/api/v1", tags=["investigate"])
 
 
 
+def _capitalize(text: str) -> str:
+    return text[:1].upper() + text[1:]
+
+
+def _top_items(counts: dict, limit: int = 3) -> str:
+    return ", ".join(f"{name} ({count})" for name, count in list(counts.items())[:limit])
+
+
+def _percent(confidence) -> Optional[str]:
+    return f"{round(confidence * 100)}%" if isinstance(confidence, (int, float)) else None
+
+
+def _incident_phrase(incident: dict) -> str:
+    """"Privilege escalation on PRIV-TEST-01 (critical, 95%)"."""
+    hosts = ", ".join(incident.get("hosts") or []) or "an unknown host"
+    details = ", ".join(part for part in (incident.get("severity"), _percent(incident.get("confidence"))) if part)
+    return f"{incident.get('category_label') or 'Incident'} on {hosts}" + (f" ({details})" if details else "")
+
+
+def _active_chains_sentence(incidents: list[dict], active_count: int) -> str:
+    if not active_count:
+        return "No active attack chains."
+    noun = "active attack chain" if active_count == 1 else "active attack chains"
+    return f"{active_count} {noun}: " + "; ".join(_incident_phrase(incident) for incident in incidents) + "."
+
+
 def _fallback_answer(intent: Intent, tool_result: BaseModel) -> str:
-    """A simple, deterministic summary used when the LLM is unavailable or too slow to ask."""
-    data = tool_result.model_dump()
-    label = intent.value.replace("_", " ")
-    if "total" in data:
-        return f"Found {data['total']} result(s) for your {label} query."
-    if "endpoints" in data:
-        return f"Found {len(data['endpoints'])} endpoint(s) for your {label} query."
-    return f"Here is the data for your {label} query."
+    """
+    A deterministic answer built from the tool's own data, used whenever
+    the LLM's answer isn't available or can't be trusted (rate limited,
+    timed out, failed, or cited a number the data doesn't contain). Says
+    what was searched and what was found — never "Found N result(s) for
+    your … query".
+    """
+    if isinstance(tool_result, AlertListOutput):
+        subject = _capitalize(tool_result.subject) if tool_result.subject else "Matching alerts"
+        sentences = [f"{subject}: {tool_result.total}."]
+        sentences += [f"{label}: {_top_items(values)}." for label, values in list(tool_result.counts.items())[:3]]
+        return " ".join(sentences)
+
+    if isinstance(tool_result, EndpointSnapshotOutput):
+        sentences = [f"{_capitalize(tool_result.subject or 'Alerts on ' + tool_result.host_id)}: {tool_result.recent_alert_count}."]
+        activity = tool_result.counts.get("Activity types")
+        if activity:
+            sentences.append(f"Activity: {_top_items(activity, 5)}.")
+        if tool_result.logins_after_failures:
+            row = tool_result.logins_after_failures[0]
+            sentences.append(
+                f"A login succeeded after failed attempts: {row.get('user') or 'an unknown account'} from "
+                f"{row.get('source_ip') or 'an unknown source'}, after {row.get('failed_attempts_before')} failed attempts."
+            )
+        elif tool_result.compromise_incident_open:
+            sentences.append("An open Successful compromise incident on this host records a login after failed attempts.")
+        else:
+            sentences.append("No login succeeded after failed attempts.")
+        if tool_result.open_incidents:
+            sentences.append("Open incidents: " + "; ".join(_incident_phrase(i) for i in tool_result.open_incidents) + ".")
+        if tool_result.risk_score is not None:
+            level = tool_result.risk_level.value if tool_result.risk_level else "unknown"
+            sentences.append(f"Risk score {tool_result.risk_score} ({level}).")
+        return " ".join(sentences)
+
+    if isinstance(tool_result, RiskyEndpointsOutput):
+        return "Riskiest endpoints: " + ", ".join(
+            f"{e['host_id']} (risk {e['risk_score']}, {e['risk_level']})" for e in tool_result.endpoints
+        ) + "."
+
+    if isinstance(tool_result, AttackChainStatusOutput):
+        active = [i for i in tool_result.incidents if i.get("status") in ("open", "investigating")]
+        sentence = _active_chains_sentence(active, tool_result.active_count)
+        inactive = tool_result.total - tool_result.active_count
+        if inactive > 0:
+            sentence += f" {inactive} more {'is' if inactive == 1 else 'are'} resolved or false positive."
+        return sentence
+
+    if isinstance(tool_result, OverviewOutput):
+        sentences = [f"{_capitalize(tool_result.subject or 'Alerts')}: {tool_result.total_alerts}."]
+        severity = tool_result.counts.get("Severity")
+        if severity:
+            sentences.append(f"By severity: {_top_items(severity, 4)}.")
+        sentences.append(f"Critical or high: {tool_result.critical_high_total}.")
+        sentences.append(_active_chains_sentence(tool_result.active_incidents, tool_result.active_incident_count))
+        return " ".join(sentences)
+
+    return f"Here is the {intent.value.replace('_', ' ')} data."
+
+
+def _empty_result_answer(tool_result: BaseModel) -> Optional[str]:
+    """
+    The whole answer when the search found nothing: a plain sentence from
+    the scope ("No failed logins for john.doe on UBUNTU-WEB-01 in the
+    last 24 hours."), with no LLM call. None when there is data.
+    """
+    if isinstance(tool_result, AlertListOutput) and tool_result.total == 0:
+        return f"No {tool_result.subject}." if tool_result.subject else "No matching alerts."
+    if (
+        isinstance(tool_result, EndpointSnapshotOutput)
+        and tool_result.recent_alert_count == 0
+        and not tool_result.open_incidents
+        and not tool_result.successful_login_after_failures
+    ):
+        return f"No {tool_result.subject or 'alerts on ' + tool_result.host_id}, and no open incidents on it."
+    if isinstance(tool_result, AttackChainStatusOutput) and tool_result.total == 0:
+        return f"No {tool_result.subject or 'incidents'} found."
+    if isinstance(tool_result, RiskyEndpointsOutput) and not tool_result.endpoints:
+        return "No endpoints have been risk-scored yet."
+    if isinstance(tool_result, OverviewOutput) and tool_result.total_alerts == 0 and tool_result.active_incident_count == 0:
+        return f"No {tool_result.subject or 'alerts'}, and no active attack chains."
+    return None
 
 
 def _tool_error_answer(intent: Intent) -> str:
@@ -101,9 +208,9 @@ _DATA_FENCE_END = "<<<UNTRUSTED_DATA_END>>>"
 # prompt only* — InvestigateResponse.data is built separately from the
 # untouched tool_result (see investigate() below) and keeps every
 # field of every alert the evidence panel already shows today.
-_PROMPT_SAMPLE_ALERT_FIELDS = (
-    "host_id", "user", "action", "description", "severity", "source_ip", "mitre_technique", "timestamp",
-)
+# Sample rows carry only these fields; every count comes from the
+# tool's aggregations, never from the sample.
+_PROMPT_SAMPLE_ALERT_FIELDS = ("timestamp", "host_id", "user", "action", "severity", "source_ip")
 _PROMPT_ALERT_FIELD_LABELS = {
     "host_id": "host",
     "user": "user",
@@ -113,7 +220,7 @@ _PROMPT_ALERT_FIELD_LABELS = {
     "mitre_technique": "MITRE technique",
     "timestamp": "time",
 }
-_PROMPT_SAMPLE_ALERT_LIMIT = 8
+_PROMPT_SAMPLE_ALERT_LIMIT = 10
 _PROMPT_TOP_N_LIMIT = 5
 # Non-alert lists (incidents, endpoints, logins after failures) — enough
 # that "4 open incidents" are all listed, not just the first few.
@@ -136,6 +243,8 @@ _PROMPT_HIDDEN_KEYS = frozenset({
     "truncated", "count_shown", "tenant_id", "incident_id", "alert_id", "id", "session_id",
     # The raw enum; its readable category_label goes to the model instead.
     "category",
+    # Rendered once, via the scope line ("Searched <subject>.").
+    "subject",
 })
 
 # Plain-English labels for the fields the 8 tools actually return
@@ -178,10 +287,6 @@ def _slim_alert_for_prompt(alert: dict) -> dict:
     return {field: alert[field] for field in _PROMPT_SAMPLE_ALERT_FIELDS if alert.get(field) is not None}
 
 
-def _top_counts(alerts: list[dict], field: str) -> dict:
-    return dict(Counter(a[field] for a in alerts if a.get(field)).most_common(_PROMPT_TOP_N_LIMIT))
-
-
 def _format_counts(counts: dict) -> str:
     return ", ".join(f"{name} ({count})" for name, count in counts.items())
 
@@ -190,10 +295,12 @@ def _describe_alert_list(
     alerts: list[dict], total: Optional[int], label: str = "Matching alerts", order: str = "most recent"
 ) -> str:
     """
-    An alert list as a readable briefing: how many matched, which hosts/
-    users/severities dominate, and a few example alerts — the counts are
-    what lets the model answer "which host is most affected" correctly
-    without seeing all 100 records (docs/ai-llm-latency-diagnosis.md).
+    An alert list as a short briefing: the true total, then at most
+    _PROMPT_SAMPLE_ALERT_LIMIT sample rows with only time/host/user/
+    action/severity/source IP. Per-host/user/severity counts are NOT
+    derived here — they come from the tool's aggregations over the full
+    match set (rendered separately), so a 20-row sample can never be
+    mistaken for the totals.
 
     The stated total is a fact about the data, not about this prompt: the
     model may cite it, but _ANSWER_FORMAT forbids it from discussing how
@@ -204,33 +311,19 @@ def _describe_alert_list(
     if total is None:
         lines.append(f"{label}: {shown}")
     elif shown and total > shown:
-        lines.append(f"{label}: {total} in total; the {shown} {order} are summarized below")
+        lines.append(f"{label}: {total} in total; {shown} of the {order} are listed below")
     else:
-        # The tool's own count is the answer to "how many" even when it
-        # returned no alert bodies to summarize (a count-only query) —
-        # dropping it here would make a correct "3 failed logins" answer
-        # look ungrounded to _answer_appears_grounded.
         lines.append(f"{label}: {total}")
-
-    for label, field in (("Most affected endpoints", "host_id"), ("Most affected users", "user"), ("Severity breakdown", "severity")):
-        counts = _top_counts(alerts, field)
-        if counts:
-            lines.append(f"{label}: {_format_counts(counts)}")
 
     examples = alerts[:_PROMPT_SAMPLE_ALERT_LIMIT]
     if examples:
-        lines.append("Example alerts:")
+        lines.append("Sample alerts:")
         for i, alert in enumerate(examples, start=1):
             slim = _slim_alert_for_prompt(alert)
-            description = slim.pop("description", None)
             # Friendly labels, not the stored field names: an example
             # line reading "host_id=..." is an invitation to quote
             # "host_id" back at the analyst.
-            fields = " ".join(f"{_PROMPT_ALERT_FIELD_LABELS.get(key, key)}={value}" for key, value in slim.items())
-            line = f"{i}. {fields}"
-            if description:
-                line += f" — {description}"
-            lines.append(line)
+            lines.append(f"{i}. " + " ".join(f"{_PROMPT_ALERT_FIELD_LABELS.get(key, key)}={value}" for key, value in slim.items()))
     return "\n".join(lines)
 
 
@@ -238,7 +331,9 @@ def _humanize_label(key: str) -> str:
     return _PROMPT_FIELD_LABELS.get(key, key.replace("_", " ").capitalize())
 
 
-def _describe_scalar(value) -> str:
+def _describe_scalar(value, key: Optional[str] = None) -> str:
+    if key == "confidence" and isinstance(value, (int, float)):
+        return _percent(value)
     if isinstance(value, bool):
         return "yes" if value else "no"
     if isinstance(value, list):
@@ -252,7 +347,7 @@ def _describe_value(value) -> str:
     if isinstance(value, list):
         return "; ".join(
             ", ".join(
-                f"{_humanize_label(k)} {_describe_scalar(v)}"
+                f"{_humanize_label(k)} {_describe_scalar(v, k)}"
                 for k, v in item.items() if k not in _PROMPT_HIDDEN_KEYS and v is not None
             )
             if isinstance(item, dict) else str(item)
@@ -280,6 +375,9 @@ def _describe_tool_result(tool_result: BaseModel) -> str:
     # What was searched comes first: the model must state it, and must not
     # claim anything about data outside it.
     scope = data.pop("scope", None)
+    subject = data.get("subject")
+    if not scope and subject:
+        scope = f"Searched {subject}."
     if scope:
         sections.append(scope)
 
@@ -415,93 +513,94 @@ _INVESTIGATE_ANSWER_LEAD = (
 
 
 _NUMBER_PATTERN = re.compile(r"\b\d+\b")
+_MONTHS = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?"
+# Numbers that are part of a date, time, IP address or list marker are
+# not claims about the data — removed before the check.
+_UNCHECKED_NUMBERS = re.compile(
+    r"\b\d{4}-\d{2}-\d{2}(?:[t ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:z|[+-]\d{2}:?\d{2})?)?"
+    r"|\b\d{1,2}:\d{2}(?::\d{2})?\b"
+    r"|\b(?:\d{1,3}\.){3}\d{1,3}\b"
+    rf"|\b\d{{1,2}}(?:st|nd|rd|th)?\s+{_MONTHS}(?:,?\s+\d{{4}})?"
+    rf"|\b{_MONTHS}\s+\d{{1,2}}(?:st|nd|rd|th)?(?:,?\s+\d{{4}})?"
+    r"|\b(?:19|20)\d{2}\b"
+    r"|^\s*\d+[.)]\s",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
-def _answer_appears_grounded(answer: str, tool_result: BaseModel) -> bool:
+def _answer_appears_grounded(answer: str, tool_result: BaseModel, query: str = "") -> bool:
     """
-    Coarse output-side sanity check (SS-093, per SS-092 §8.2): flags
-    when the answer cites a number — a count, an id-like numeral —
-    that doesn't appear anywhere in the tool data it's supposed to be
-    grounded in. A cheap, mechanical cross-reference, not a semantic
-    check or a second LLM call: a genuinely mismatched number is a
-    coarse but real signal that the model may have drifted from "use
-    only the provided data" (e.g. under a successful prompt injection),
-    worth flagging for review even though it will also have false
-    positives (generic phrasing like "the last 24 hours"). Deliberately
-    a flag, not a block — the analyst still sees the answer either way,
-    per SS-092's recommendation not to gate on an imperfect heuristic.
+    Output-side check (SS-093, per SS-092 §8.2): every number the answer
+    cites must appear in what the model was given — the prompt's data
+    (which states the totals and counts) or the analyst's own question
+    ("top 3"). Dates, times, IP addresses and list numbering are excluded
+    first: they aren't counts, and checking them only produced false
+    alarms. A mechanical cross-reference, not a second LLM call.
 
     Checked against _prompt_data(tool_result) — what the model actually
-    saw — not the full raw tool_result: an aggregate count like
-    "bob.admin: 23 attempts" is a real, correctly-grounded citation of
-    _prompt_data's own computed summary, but "23" doesn't appear
-    anywhere in the full raw alert dump itself (it's a derived count,
-    not a stored field), which would otherwise make this flag its own
-    summarization as if it were a fabrication.
+    saw — not the raw tool_result: an aggregate like "bob.admin (23)" is
+    a real citation of the prompt's counts even though "23" isn't a
+    stored field of any alert.
     """
-    answer_numbers = set(_NUMBER_PATTERN.findall(answer))
+    answer_numbers = set(_NUMBER_PATTERN.findall(_UNCHECKED_NUMBERS.sub(" ", answer)))
     if not answer_numbers:
         return True
-
-    data_numbers = set(_NUMBER_PATTERN.findall(_prompt_data(tool_result)))
-    return answer_numbers.issubset(data_numbers)
+    known_numbers = set(_NUMBER_PATTERN.findall(_prompt_data(tool_result))) | set(_NUMBER_PATTERN.findall(query))
+    return answer_numbers.issubset(known_numbers)
 
 
 async def _generate_answer(
     query: str, intent: Intent, tool_result: BaseModel, transcript: Optional[list[dict]] = None
-) -> tuple[str, bool]:
+) -> tuple[str, Optional[FallbackReason]]:
     """
     Ask the configured LLM provider to summarize tool_result in answer
     to `query`. Bounded by INVESTIGATION_LLM_TIMEOUT_SECONDS so a slow
     or unreachable LLM can't blow the SRS's 15-second response target
-    (AC) — any failure or timeout degrades to a templated summary of
-    the same data rather than failing the request.
+    (AC) — any failure degrades to _fallback_answer's templated summary
+    of the same data rather than failing the request.
 
-    Returns (answer, is_fallback) — is_fallback is True whenever answer
-    came from _fallback_answer() rather than the LLM, so callers can
-    tell a genuine LLM response apart from a degraded one (SS-084).
+    Returns (answer, fallback_reason): None when the answer is the LLM's
+    own; otherwise why it's the templated one — rate_limited (Groq 429
+    with no retry that fit the budget), timeout, error, or ungrounded
+    (the answer cited a number that isn't in the data; there's no second
+    LLM call, the templated answer is used instead).
     """
     llm_client = groq if settings.LLM_PROVIDER == "groq" else ollama
     prompt = _build_prompt(query, tool_result, transcript or [])
+    budget = settings.INVESTIGATION_LLM_TIMEOUT_SECONDS
 
     try:
         # generate() is a blocking `requests` call — run it off the event
         # loop so it can actually be bounded by wait_for. max_output_tokens
-        # passed explicitly (rather than relying on generate()'s own
-        # default) so this call site's budget is visible here and can't
-        # silently drift if generate()'s default ever changes.
+        # passed explicitly so this call site's budget is visible here.
+        # The time budget lets the Groq client decide whether a 429's
+        # Retry-After still fits before giving up.
         answer = await asyncio.wait_for(
-            asyncio.to_thread(llm_client.generate, prompt, settings.INVESTIGATION_LLM_MAX_OUTPUT_TOKENS),
-            timeout=settings.INVESTIGATION_LLM_TIMEOUT_SECONDS,
+            asyncio.to_thread(
+                functools.partial(llm_client.generate, prompt, settings.INVESTIGATION_LLM_MAX_OUTPUT_TOKENS, time_budget_seconds=budget)
+            ),
+            timeout=budget,
         )
-        if not _answer_appears_grounded(answer, tool_result):
-            # SS-093: flag, don't block — the analyst still sees this
-            # answer (SS-083's evidence panel sits right next to it for
-            # them to cross-check), this is a signal for review, not a
-            # verdict.
-            logger.warning(
-                "LLM answer cites a number not found in the supplied tool data",
-                intent=intent.value,
-            )
-        return answer, False
+    except groq.GroqRateLimitError as e:
+        reason, detail = FallbackReason.RATE_LIMITED, str(e)
     except asyncio.TimeoutError:
-        # asyncio.wait_for's TimeoutError carries no message (str(e) == ""),
-        # so log this case explicitly instead of falling through to the
-        # generic handler below and reporting an empty, undiagnosable error.
-        logger.warning(
-            "LLM answer generation timed out, falling back to a templated summary",
-            timeout_seconds=settings.INVESTIGATION_LLM_TIMEOUT_SECONDS,
-        )
-        return _fallback_answer(intent, tool_result), True
+        # wait_for's TimeoutError carries no message, so name it here.
+        reason, detail = FallbackReason.TIMEOUT, f"no answer within {budget}s"
     except Exception as e:
-        # type(e).__name__ alongside str(e) so an exception with an empty
-        # or unhelpful message (as above) still identifies what happened.
-        logger.warning(
-            "LLM answer generation failed, falling back to a templated summary",
-            error_type=type(e).__name__,
-            error=str(e),
-        )
-        return _fallback_answer(intent, tool_result), True
+        reason, detail = FallbackReason.ERROR, f"{type(e).__name__}: {e}"
+    else:
+        if _answer_appears_grounded(answer, tool_result, query):
+            return answer, None
+        reason, detail = FallbackReason.UNGROUNDED, "LLM answer cites a number not found in the supplied tool data"
+
+    logger.warning(
+        "Investigate answer fell back to a templated summary",
+        reason=reason.value,
+        detail=detail,
+        intent=intent.value,
+        provider=settings.LLM_PROVIDER,
+    )
+    return _fallback_answer(intent, tool_result), reason
 
 
 async def _record_investigation_audit_event(
@@ -629,6 +728,7 @@ async def investigate(
             answer=_tool_error_answer(intent),
             data={},
             is_fallback=True,
+            fallback_reason=FallbackReason.DATA_ERROR,
         )
 
     # Only now, with the tool call succeeded, does this turn become the
@@ -638,7 +738,16 @@ async def investigate(
     context = await get_context(tenant_key, session_id)
     transcript = context.transcript if context is not None else []
 
-    answer, is_fallback = await _generate_answer(payload.query, intent, tool_result, transcript)
+    # Nothing found: the scope sentence IS the answer — no LLM call.
+    empty_answer = _empty_result_answer(tool_result)
+    if empty_answer is not None:
+        answer, fallback_reason = empty_answer, None
+    else:
+        answer, fallback_reason = await _generate_answer(payload.query, intent, tool_result, transcript)
+    # Tolerates the older (answer, is_fallback: bool) pair too.
+    is_fallback = bool(fallback_reason)
+    if not isinstance(fallback_reason, FallbackReason):
+        fallback_reason = FallbackReason.ERROR if fallback_reason else None
     if resolution.notice:
         answer = f"{resolution.notice}\n\n{answer}"
 
@@ -661,4 +770,5 @@ async def investigate(
         answer=answer,
         data=tool_result.model_dump(mode="json"),
         is_fallback=is_fallback,
+        fallback_reason=fallback_reason,
     )

@@ -15,8 +15,8 @@ import PageHeader from '../components/PageHeader';
 import { BotIcon, SendIcon } from '../components/icons';
 import { MarkdownAnswer } from '../components/MarkdownAnswer';
 import { api } from '../lib/api';
-import { titleCase } from '../lib/format';
-import type { InvestigateResponse } from '../lib/types';
+import { fallbackBadgeLabel, titleCase } from '../lib/format';
+import type { FallbackReason, InvestigateResponse } from '../lib/types';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -24,6 +24,7 @@ interface Message {
   intent?: string;
   data?: Record<string, unknown>;
   isFallback?: boolean;
+  fallbackReason?: FallbackReason | null;
 }
 
 const SUGGESTED_PROMPTS = ['Show failed logins', 'Highest risk endpoint', 'Active incidents', 'Attack chain summary'];
@@ -63,6 +64,7 @@ export default function Investigate() {
           intent: response.data.intent,
           data: response.data.data,
           isFallback: response.data.is_fallback,
+          fallbackReason: response.data.fallback_reason,
         },
       ]);
     } catch {
@@ -136,7 +138,7 @@ export default function Investigate() {
                     )}
                     {message.isFallback && (
                       <span className="rounded-full border border-amber-700/40 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-400">
-                        Automated summary
+                        {fallbackBadgeLabel(message.fallbackReason)}
                       </span>
                     )}
                     {message.data && Object.keys(message.data).length > 0 && (
