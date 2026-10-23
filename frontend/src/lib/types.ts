@@ -75,15 +75,31 @@ export const ALLOWED_TRANSITIONS: Record<IncidentStatus, IncidentStatus[]> = {
   false_positive: [],
 };
 
+// Correlation-engine chain patterns (backend core/enums.py CorrelationPattern).
+export type CorrelationPattern =
+  | 'credential_brute_force'
+  | 'successful_compromise'
+  | 'recon_to_exploitation'
+  | 'privilege_escalation'
+  | 'data_exfiltration'
+  | 'lateral_movement';
+
 export interface Incident {
   id: string;
   tenant_id: string;
   status: IncidentStatus;
   alert_ids: string[];
   assigned_analyst_id: string | null;
-  // SS-094: the detected chain's confidence at creation/last merge —
-  // null for a manually-created incident, which has no detected chain.
+  // SS-094: the detected chain's pattern and confidence at creation/last
+  // merge — null for a manually-created incident, which has no detected chain.
+  category: CorrelationPattern | null;
   confidence: number | null;
+  // Read-only, derived server-side from the linked alerts on every read:
+  // hosts ordered by alert count (most first, CloudLens resources
+  // excluded); severity is the highest linked alert severity, null when
+  // none of the alerts resolve.
+  hosts: string[];
+  severity: Severity | null;
   // SS-106: free-form analyst-authored labels.
   tags: string[];
   created_at: string;

@@ -163,8 +163,14 @@ The token embeds `tenant_id`, `user_id`, and `role` claims and expires per `sett
 
 **Response 201**
 ```json
-{ "id": "...", "tenant_id": "...", "status": "open", "alert_ids": ["alert-1", "alert-2"], "assigned_analyst_id": null, "created_at": "...", "updated_at": "..." }
+{ "id": "...", "tenant_id": "...", "status": "open", "alert_ids": ["alert-1", "alert-2"], "assigned_analyst_id": null, "category": null, "confidence": null, "tags": [], "hosts": ["WIN10-FIN-07"], "severity": "high", "created_at": "...", "updated_at": "..." }
 ```
+
+Every endpoint that returns an incident (create, list, detail, transitions, assign, tags, alert linking) includes two **read-only, computed** fields, derived from the linked alerts on each read by `services/incident_summary.py` (incidents store neither, so there's no migration):
+- `hosts` — distinct `host_id`s of the linked alerts, most alerts first (ties by name). CloudLens alerts are excluded, since their `host_id` is a cloud resource id (same rule as `services/incident_evidence.py`).
+- `severity` — the highest linked alert severity (`critical` > `high` > `medium` > `low`); `null` when none of the alert ids resolve, for example after ILM retention pruned them.
+
+The list endpoint resolves the alerts for the whole page in **one** batched OpenSearch lookup (`get_alerts_by_ids`), not one per incident. If that lookup fails, incidents still return, with `hosts: []` and `severity: null`.
 
 **Error responses**
 - `403` — authenticated role is below `analyst` (`InsufficientRoleError`).

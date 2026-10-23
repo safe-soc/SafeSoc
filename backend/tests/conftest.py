@@ -80,6 +80,23 @@ def _no_outbound_http(monkeypatch) -> None:
     monkeypatch.setattr("requests.adapters.HTTPAdapter.send", _blocked)
 
 
+@pytest.fixture(autouse=True)
+def _mock_incident_summary_lookup(monkeypatch) -> AsyncMock:
+    """
+    Every incident response now carries hosts/severity derived from its
+    linked alerts (services/incident_summary.py), which means one
+    OpenSearch lookup per incident request. opensearch-py doesn't go
+    through `requests`, so _no_outbound_http doesn't catch it: unmocked,
+    every test touching an incident endpoint would query whatever
+    OpenSearch answers on localhost:9200 (a developer's live stack) or
+    wait on a connection failure in CI. Defaults to "no alerts resolve";
+    tests of the summary itself override this with their own alerts.
+    """
+    mock = AsyncMock(return_value=[])
+    monkeypatch.setattr("app.services.incident_summary.get_alerts_by_ids", mock)
+    return mock
+
+
 @pytest.fixture
 def client() -> TestClient:
     """FastAPI TestClient wrapping the SafeSOC app, for HTTP-level endpoint tests."""

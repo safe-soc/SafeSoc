@@ -3,6 +3,8 @@
  * Small, dependency-free formatters shared across pages/widgets.
  */
 
+import type { CorrelationPattern } from './types';
+
 export function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString();
 }
@@ -34,4 +36,25 @@ export function formatCompactNumber(value: number): string {
 
 export function titleCase(value: string): string {
   return value.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+const CATEGORY_LABELS: Record<CorrelationPattern, string> = {
+  credential_brute_force: 'Credential brute force',
+  successful_compromise: 'Successful compromise',
+  recon_to_exploitation: 'Recon to exploitation',
+  privilege_escalation: 'Privilege escalation',
+  data_exfiltration: 'Data exfiltration',
+  lateral_movement: 'Lateral movement',
+};
+
+/** Human label for an incident's detected chain; a null category means it was opened manually. */
+export function categoryLabel(category: CorrelationPattern | null): string {
+  if (category === null) return 'Manual incident';
+  return CATEGORY_LABELS[category] ?? titleCase(category);
+}
+
+/** First (most-alerted) host, plus " +N" for the rest; "—" when none. */
+export function hostsLabel(hosts: string[]): string {
+  if (hosts.length === 0) return '—';
+  return hosts.length === 1 ? hosts[0] : `${hosts[0]} +${hosts.length - 1}`;
 }
