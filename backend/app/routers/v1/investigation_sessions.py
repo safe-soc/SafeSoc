@@ -42,6 +42,7 @@ from app.schemas.investigation_session import (
     UpdateFindingRequest,
 )
 from app.services import investigation_session as investigation_session_service
+from app.services.incidents import mark_investigating_on_analyst_action
 
 router = APIRouter(prefix="/api/v1/incidents/{incident_id}/investigation", tags=["investigation-sessions"])
 
@@ -79,6 +80,17 @@ def _note_response(note: InvestigationNote) -> InvestigationNoteResponse:
     return InvestigationNoteResponse(id=note.id, author_user_id=note.author_user_id, body=note.body, created_at=note.created_at)
 
 
+async def _mark_investigating(db: AsyncSession, current_user: CurrentUser, incident_id: uuid.UUID) -> None:
+    """
+    Every mutation below is analyst work on the incident, so an OPEN
+    incident moves to INVESTIGATING once it succeeds. Done here in the
+    routes, not in investigation_session's service functions, because
+    SOAR automation calls create_session/create_action with its system
+    actor and must never trigger this.
+    """
+    await mark_investigating_on_analyst_action(db, current_user.tenant_id, incident_id, current_user.user_id)
+
+
 @router.post("/sessions", response_model=InvestigationSessionSummary, status_code=201)
 async def start_session(
     incident_id: uuid.UUID,
@@ -87,6 +99,7 @@ async def start_session(
 ):
     """Start a fresh investigation session for this incident — never inherits a prior session's findings/turns/notes."""
     session = await investigation_session_service.create_session(db, current_user.tenant_id, incident_id, current_user.user_id)
+    await _mark_investigating(db, current_user, incident_id)
     return _session_summary(session)
 
 
@@ -138,6 +151,7 @@ async def ask_question(
     timeout/failure (is_fallback=True), never a failed request.
     """
     turn = await investigation_session_service.ask_question(db, current_user.tenant_id, incident_id, session_id, payload.question, current_user.user_id)
+    await _mark_investigating(db, current_user, incident_id)
     return AskQuestionResponse(turn=_turn_response(turn))
 
 
@@ -153,6 +167,7 @@ async def create_finding(
     finding = await investigation_session_service.create_finding(
         db, current_user.tenant_id, incident_id, session_id, payload.text, payload.category, current_user.user_id
     )
+    await _mark_investigating(db, current_user, incident_id)
     return _finding_response(finding)
 
 
@@ -169,6 +184,7 @@ async def update_finding(
     finding = await investigation_session_service.update_finding_category(
         db, current_user.tenant_id, incident_id, session_id, finding_id, payload.category, current_user.user_id
     )
+    await _mark_investigating(db, current_user, incident_id)
     return _finding_response(finding)
 
 
@@ -182,6 +198,7 @@ async def create_action(
 ):
     """Record a follow-up action (something to DO) — distinct from a finding's open_question (something not yet KNOWN)."""
     action = await investigation_session_service.create_action(db, current_user.tenant_id, incident_id, session_id, payload.description, current_user.user_id)
+    await _mark_investigating(db, current_user, incident_id)
     return _action_response(action)
 
 
@@ -197,6 +214,7 @@ async def update_action(
     action = await investigation_session_service.update_action_status(
         db, current_user.tenant_id, incident_id, session_id, action_id, payload.status, current_user.user_id
     )
+    await _mark_investigating(db, current_user, incident_id)
     return _action_response(action)
 
 
@@ -210,4 +228,5 @@ async def add_note(
 ):
     """Append a free-form analyst note to this session."""
     note = await investigation_session_service.create_note(db, current_user.tenant_id, incident_id, session_id, payload.body, current_user.user_id)
+    await _mark_investigating(db, current_user, incident_id)
     return _note_response(note)

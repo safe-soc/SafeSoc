@@ -49,6 +49,7 @@ from app.services.incidents import (
     link_alerts,
     list_incidents,
     list_notes,
+    mark_investigating_on_analyst_action,
     set_tags,
     transition_incident,
 )
@@ -72,6 +73,18 @@ def _to_response(incident: Incident, summary: IncidentSummary) -> IncidentRespon
         hosts=summary.hosts,
         severity=summary.severity,
     )
+
+
+async def _after_analyst_action(db: AsyncSession, current_user: CurrentUser, incident: Incident) -> Incident:
+    """
+    An analyst just changed this incident: move it OPEN -> INVESTIGATING
+    and return it as it now stands. Route handlers only — see
+    services/incidents.py::mark_investigating_on_analyst_action for why
+    the service functions themselves (shared with SOAR) never do this.
+    """
+    if await mark_investigating_on_analyst_action(db, current_user.tenant_id, incident.id, current_user.user_id):
+        return await get_incident(db, current_user.tenant_id, incident.id)
+    return incident
 
 
 async def _respond(incident: Incident) -> IncidentResponse:
@@ -162,6 +175,7 @@ async def assign(
     incident = await assign_incident(
         db, current_user.tenant_id, incident_id, payload.assignee_user_id, actor_user_id=current_user.user_id
     )
+    incident = await _after_analyst_action(db, current_user, incident)
     return await _respond(incident)
 
 
@@ -174,6 +188,7 @@ async def set_tags_route(
 ):
     """Replace an incident's free-form tags (SS-106). Audit-logged; visible in the SS-099 timeline."""
     incident = await set_tags(db, current_user.tenant_id, incident_id, payload.tags, actor_user_id=current_user.user_id)
+    incident = await _after_analyst_action(db, current_user, incident)
     return await _respond(incident)
 
 
@@ -196,6 +211,7 @@ async def link_alert_route(
         incident, accepted, rejected = await link_alerts(
             db, current_user.tenant_id, incident_id, payload.alert_ids, actor_user_id=current_user.user_id
         )
+        incident = await _after_analyst_action(db, current_user, incident)
         response = await _respond(incident)
         response.accepted_alert_ids = accepted
         response.rejected_alert_ids = rejected
@@ -204,6 +220,7 @@ async def link_alert_route(
     incident = await link_alert(
         db, current_user.tenant_id, incident_id, payload.alert_id, actor_user_id=current_user.user_id
     )
+    incident = await _after_analyst_action(db, current_user, incident)
     return await _respond(incident)
 
 
@@ -216,6 +233,7 @@ async def add_note_route(
 ):
     """Append an immutable, timestamped analyst note to an incident."""
     note = await add_note(db, current_user.tenant_id, incident_id, current_user.user_id, payload.body)
+    await mark_investigating_on_analyst_action(db, current_user.tenant_id, incident_id, current_user.user_id)
     return _note_to_response(note)
 
 

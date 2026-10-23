@@ -54,7 +54,16 @@ function FindingBadge({ category }: { category: FindingCategory }) {
   );
 }
 
-export default function IncidentInvestigationPanel({ incidentId }: { incidentId: string }) {
+export default function IncidentInvestigationPanel({
+  incidentId,
+  onActivity,
+}: {
+  incidentId: string;
+  // Called after every successful mutation here. Each one is analyst
+  // work that can move an OPEN incident to INVESTIGATING server-side,
+  // so the page re-fetches the incident (status, lifecycle) and timeline.
+  onActivity?: () => void;
+}) {
   const [sessions, setSessions] = useState<InvestigationSessionSummary[] | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [detail, setDetail] = useState<InvestigationSessionDetail | null>(null);
@@ -115,6 +124,7 @@ export default function IncidentInvestigationPanel({ incidentId }: { incidentId:
       const response = await api.post<InvestigationSessionSummary>(`/api/v1/incidents/${incidentId}/investigation/sessions`);
       setSessions((prev) => [response.data, ...(prev ?? [])]);
       setActiveSessionId(response.data.id);
+      onActivity?.();
     } catch {
       setError('Failed to start an investigation session.');
     } finally {
@@ -132,6 +142,7 @@ export default function IncidentInvestigationPanel({ incidentId }: { incidentId:
       await api.post<AskQuestionResponse>(`/api/v1/incidents/${incidentId}/investigation/sessions/${activeSessionId}/ask`, { question: trimmed });
       setQuestion('');
       loadDetail();
+      onActivity?.();
     } catch {
       setError('Failed to reach the investigation assistant.');
     } finally {
@@ -148,6 +159,7 @@ export default function IncidentInvestigationPanel({ incidentId }: { incidentId:
       await api.post(`/api/v1/incidents/${incidentId}/investigation/sessions/${activeSessionId}/notes`, { body: trimmed });
       setNoteBody('');
       loadDetail();
+      onActivity?.();
     } catch {
       setError('Failed to add that note.');
     } finally {
@@ -164,6 +176,7 @@ export default function IncidentInvestigationPanel({ incidentId }: { incidentId:
       await api.post(`/api/v1/incidents/${incidentId}/investigation/sessions/${activeSessionId}/findings`, { text: trimmed, category: findingCategory });
       setFindingText('');
       loadDetail();
+      onActivity?.();
     } catch {
       setError('Failed to add that finding.');
     } finally {
@@ -177,6 +190,7 @@ export default function IncidentInvestigationPanel({ incidentId }: { incidentId:
     try {
       await api.patch(`/api/v1/incidents/${incidentId}/investigation/sessions/${activeSessionId}/findings/${finding.id}`, { category });
       loadDetail();
+      onActivity?.();
     } catch {
       setError('Failed to update that finding.');
     }
@@ -191,6 +205,7 @@ export default function IncidentInvestigationPanel({ incidentId }: { incidentId:
       await api.post(`/api/v1/incidents/${incidentId}/investigation/sessions/${activeSessionId}/actions`, { description: trimmed });
       setActionDescription('');
       loadDetail();
+      onActivity?.();
     } catch {
       setError('Failed to add that action.');
     } finally {
@@ -204,6 +219,7 @@ export default function IncidentInvestigationPanel({ incidentId }: { incidentId:
     try {
       await api.patch(`/api/v1/incidents/${incidentId}/investigation/sessions/${activeSessionId}/actions/${action.id}`, { status });
       loadDetail();
+      onActivity?.();
     } catch {
       setError('Failed to update that action.');
     }
@@ -444,7 +460,7 @@ export default function IncidentInvestigationPanel({ incidentId }: { incidentId:
               <form onSubmit={handleAddAction} className="mt-2.5 flex gap-2">
                 <input
                   type="text"
-                  placeholder="e.g. Pull DNS logs for DEMO-CRITICAL-01"
+                  placeholder="e.g. Pull DNS logs for WIN10-FIN-07"
                   value={actionDescription}
                   onChange={(e) => setActionDescription(e.target.value)}
                   className={inputClasses}
@@ -460,12 +476,15 @@ export default function IncidentInvestigationPanel({ incidentId }: { incidentId:
             </div>
           </details>
 
-          {/* Analyst notes */}
+          {/* Session notes (scratch, per session) */}
           <details className="group">
             <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-300">
-              Analyst Notes {detail.notes.length > 0 && `(${detail.notes.length})`}
+              Session notes {detail.notes.length > 0 && `(${detail.notes.length})`}
             </summary>
             <div className="mt-2">
+              <p className="mb-2 text-xs text-slate-500">
+                Scratch notes for this investigation session — not shown in the timeline or report.
+              </p>
               {detail.notes.length === 0 ? (
                 <p className="text-sm text-slate-500">No notes yet.</p>
               ) : (
@@ -483,7 +502,7 @@ export default function IncidentInvestigationPanel({ incidentId }: { incidentId:
               <form onSubmit={handleAddNote} className="mt-2.5 flex gap-2">
                 <input
                   type="text"
-                  placeholder="Add an analyst note"
+                  placeholder="Add a session note"
                   value={noteBody}
                   onChange={(e) => setNoteBody(e.target.value)}
                   className={inputClasses}

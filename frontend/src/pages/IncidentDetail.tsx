@@ -105,6 +105,20 @@ export default function IncidentDetail() {
       .catch(() => undefined);
   }, [incidentId]);
 
+  // After an analyst action that can also move an OPEN incident to
+  // INVESTIGATING server-side (case note, tag, alert link, any
+  // investigation-session step): re-fetch the incident itself, not
+  // just the timeline, so the status badge and lifecycle stepper
+  // follow without a manual refresh. Best-effort, like refreshTimeline.
+  const refreshIncident = useCallback(() => {
+    if (!incidentId) return;
+    api
+      .get<Incident>(`/api/v1/incidents/${incidentId}`)
+      .then((response) => setIncident(response.data))
+      .catch(() => undefined);
+    refreshTimeline();
+  }, [incidentId, refreshTimeline]);
+
   useEffect(() => {
     fetchAlertLookup().then(setLookup).catch(() => undefined);
   }, []);
@@ -138,7 +152,7 @@ export default function IncidentDetail() {
       });
       setIncident(response.data);
       setNewTag('');
-      refreshTimeline();
+      refreshIncident();
     } catch {
       setActionError('Failed to add that tag.');
     }
@@ -152,7 +166,7 @@ export default function IncidentDetail() {
         tags: incident.tags.filter((t) => t !== tag),
       });
       setIncident(response.data);
-      refreshTimeline();
+      refreshIncident();
     } catch {
       setActionError('Failed to remove that tag.');
     }
@@ -189,7 +203,7 @@ export default function IncidentDetail() {
       const response = await api.post<Incident>(`/api/v1/incidents/${incidentId}/alerts`, payload);
       setIncident(response.data);
       setNewAlertId('');
-      refreshTimeline();
+      refreshIncident();
     } catch {
       setActionError('Failed to link that alert.');
     } finally {
@@ -208,7 +222,7 @@ export default function IncidentDetail() {
       });
       setNotes((prev) => [...prev, response.data]);
       setNewNoteBody('');
-      refreshTimeline();
+      refreshIncident();
     } catch {
       setActionError('Failed to add that note.');
     } finally {
@@ -260,6 +274,15 @@ export default function IncidentDetail() {
           actions={<GenerateReportButton scope="incident" id={incident.id} />}
         />
         <div className="mt-3 flex flex-wrap items-center gap-2">
+          {incident.status === 'open' && (
+            <button
+              type="button"
+              onClick={() => handleTransition('investigating')}
+              className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-blue-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+            >
+              Start investigating
+            </button>
+          )}
           {incident.severity && <LevelBadge level={incident.severity} />}
           <StatusBadge status={incident.status} />
           {incident.confidence != null && (
@@ -315,7 +338,7 @@ export default function IncidentDetail() {
       </section>
 
       {/* Investigation session — persistent, incident-scoped Q&A/findings/actions/notes */}
-      {incidentId && <IncidentInvestigationPanel incidentId={incidentId} />}
+      {incidentId && <IncidentInvestigationPanel incidentId={incidentId} onActivity={refreshIncident} />}
 
       {/* Lifecycle */}
       <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
@@ -502,7 +525,10 @@ export default function IncidentDetail() {
 
       {/* Notes */}
       <section className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
-        <h2 className="text-sm font-semibold text-slate-200">Investigation Notes</h2>
+        <h2 className="text-sm font-semibold text-slate-200">Case notes</h2>
+        <p className="mt-1 text-xs text-slate-500">
+          Permanent notes on this incident — shown in the timeline and the report, and used by the AI summary.
+        </p>
         {notes.length === 0 ? (
           <p className="mt-3 text-sm text-slate-500">No notes yet — document findings as you investigate.</p>
         ) : (
@@ -527,7 +553,7 @@ export default function IncidentDetail() {
           <input
             id="newNoteBody"
             type="text"
-            placeholder="Add an investigation note"
+            placeholder="Add a case note"
             value={newNoteBody}
             onChange={(e) => setNewNoteBody(e.target.value)}
             className={inputClasses}
