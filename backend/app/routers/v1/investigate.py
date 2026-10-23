@@ -329,7 +329,7 @@ def _build_prompt(query: str, tool_result: BaseModel, transcript: list[dict]) ->
 # answer, so re-listing them in prose is pure duplication.
 _INVESTIGATE_ANSWER_LEAD = (
     "Lead with the answer itself, e.g. \"20 failed logins in the last 24 hours, mostly on "
-    "DESKTOP-004 and DEMO-INCIDENT-ACTIVE (6 each).\" An evidence table listing the raw "
+    "DESKTOP-004 and WIN10-FIN-07 (6 each).\" An evidence table listing the raw "
     "alerts is already shown to the analyst directly below your answer — do not repeat "
     "every alert, or every field of one, in the text.\n\n"
 )

@@ -79,6 +79,24 @@ async def test_ensure_demo_tenant_is_idempotent_when_it_already_exists(monkeypat
     assert session.added == []
 
 
+# ── Demo constants ───────────────────────────────────────────────
+
+def test_demo_hosts_use_realistic_names():
+    """The dashboard shows these host names — they shouldn't look staged."""
+    assert demo.IN_PROGRESS_HOST == "WIN10-FIN-07"
+    assert demo.RESOLVED_HOST == "UBUNTU-WEB-01"
+    assert "DEMO" not in demo.IN_PROGRESS_HOST
+    assert "DEMO" not in demo.RESOLVED_HOST
+
+
+def test_wait_for_incident_with_alert_defaults_to_a_60_second_timeout():
+    """The worker drains the history batch's queued tasks first, so 15s was too short for the second chain."""
+    import inspect
+
+    default = inspect.signature(demo._wait_for_incident_with_alert).parameters["timeout_seconds"].default
+    assert default == 60.0
+
+
 # ── HTTP helpers (register/login/incidents) ─────────────────────
 
 def test_register_demo_user_treats_409_as_success(monkeypatch):
@@ -201,3 +219,21 @@ def test_send_history_generates_the_configured_event_count_within_the_window(mon
     for log in captured["logs"]:
         ts = datetime.fromisoformat(log["timestamp"])
         assert earliest_allowed <= ts <= now + timedelta(minutes=1)
+
+
+def test_send_history_mixes_log_types(monkeypatch):
+    """generate_log defaults to "authentication"; the history must not be all auth logs."""
+    captured = {}
+
+    def fake_send_logs(url, logs, token=None):
+        captured["logs"] = logs
+        return {"accepted": len(logs), "rejected": 0, "alert_ids": []}
+
+    monkeypatch.setattr(demo, "send_logs", fake_send_logs)
+
+    demo._send_history("http://api.test/api/v1/ingest", "my-token")
+
+    log_types = {log["log_type"] for log in captured["logs"]}
+    assert len(log_types) > 1
+    assert log_types <= set(demo.HISTORY_LOG_TYPES)
+    assert "privilege" not in log_types
