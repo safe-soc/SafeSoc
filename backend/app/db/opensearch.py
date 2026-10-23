@@ -3,6 +3,7 @@ SafeSOC — OpenSearch Client
 Connection management, index setup, bulk writes, and search queries.
 """
 
+import ipaddress
 from datetime import datetime
 from typing import Optional
 
@@ -211,6 +212,93 @@ async def update_alert_anomaly_score(alert_id: str, timestamp: datetime, anomaly
         return False
 
 
+# Free-text alert search (GET /api/v1/alerts?q=). Keyword fields are
+# matched as a case-insensitive substring; description is analyzed text,
+# so it gets a plain `match`. IP fields are `ip`-typed and can't be
+# substring-matched, so they're only queried when q is an IP, a CIDR, or
+# a dotted prefix like "198.51.100" (turned into a CIDR).
+SEARCH_KEYWORD_FIELDS = ("host_id", "user", "action", "rule_id", "mitre_technique")
+SEARCH_IP_FIELDS = ("source_ip", "destination_ip")
+SEARCH_QUERY_MAX_LENGTH = 200
+
+
+def _escape_wildcard(value: str) -> str:
+    """Escape the wildcard query's own metacharacters so user input is always literal."""
+    return value.replace("\\", "\\\\").replace("*", "\\*").replace("?", "\\?")
+
+
+def _ip_search_term(q: str) -> Optional[str]:
+    """An IP or CIDR usable in a `term` query on an ip field, or None if q isn't IP-shaped."""
+    try:
+        return str(ipaddress.ip_address(q))
+    except ValueError:
+        pass
+    if "/" in q:
+        try:
+            return str(ipaddress.ip_network(q, strict=False))
+        except ValueError:
+            return None
+    # Dotted IPv4 prefix: "198.51.100" or "198.51.100." -> 198.51.100.0/24.
+    octets = q.rstrip(".").split(".")
+    if "." in q and 1 <= len(octets) <= 3 and all(o.isdigit() and int(o) <= 255 for o in octets):
+        return f"{'.'.join(octets + ['0'] * (4 - len(octets)))}/{8 * len(octets)}"
+    return None
+
+
+def build_alert_search_clause(q: str) -> Optional[dict]:
+    """
+    The `q` part of the alert search as a bool/should clause, or None
+    for a blank q. User input only ever reaches OpenSearch as a literal
+    value (escaped wildcard pattern, `match` text, or a parsed IP) —
+    never through query_string syntax, so characters like `"`, `:`,
+    `(`, `*` or a backslash can neither break nor rewrite the query.
+    """
+    q = q.strip()[:SEARCH_QUERY_MAX_LENGTH]
+    if not q:
+        return None
+
+    pattern = f"*{_escape_wildcard(q)}*"
+    should: list[dict] = [
+        {"wildcard": {field: {"value": pattern, "case_insensitive": True}}} for field in SEARCH_KEYWORD_FIELDS
+    ]
+    should.append({"match": {"description": {"query": q, "operator": "and"}}})
+    ip_term = _ip_search_term(q)
+    if ip_term:
+        should.extend({"term": {field: ip_term}} for field in SEARCH_IP_FIELDS)
+    return {"bool": {"should": should, "minimum_should_match": 1}}
+
+
+# Severity rank for sort_by_severity: critical first. A script sort,
+# because severity is a keyword (alphabetical order would be wrong).
+_SEVERITY_SORT_SCRIPT = {
+    "_script": {
+        "type": "number",
+        "order": "desc",
+        "script": {
+            "lang": "painless",
+            "source": "doc['severity'].size() == 0 ? 0 : params.rank.getOrDefault(doc['severity'].value, 0)",
+            "params": {"rank": {"critical": 4, "high": 3, "medium": 2, "low": 1}},
+        },
+    }
+}
+
+# Fields search_alerts can return per-value counts for (aggregate_by).
+COUNTABLE_ALERT_FIELDS = frozenset({"severity", "log_type", "action", "host_id", "user", "source_ip", "destination_ip"})
+
+
+def _time_range_filter(timerange_hours: int, start: Optional[str], end: Optional[str]) -> dict:
+    """
+    A bounded [start, end) window when start is given (e.g. "yesterday"
+    is [yesterday 00:00, today 00:00) UTC), otherwise the trailing
+    timerange_hours. end defaults to now.
+    """
+    if start:
+        bounds = {"gte": start}
+        bounds["lt" if end else "lte"] = end or "now"
+        return {"range": {"timestamp": bounds}}
+    return {"range": {"timestamp": {"gte": f"now-{timerange_hours}h", "lte": "now"}}}
+
+
 async def search_alerts(
     tenant_id: str,
     severity: Optional[str] = None,
@@ -223,17 +311,44 @@ async def search_alerts(
     timerange_hours: int = 24,
     page: int = 1,
     size: int = 50,
+    q: Optional[str] = None,
+    alert_ids_include: Optional[list[str]] = None,
+    alert_ids_exclude: Optional[list[str]] = None,
+    ip: Optional[str] = None,
+    severities: Optional[list[str]] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    sort_by_severity: bool = False,
+    aggregate_by: Optional[list[str]] = None,
+    aggregate_size: int = 10,
 ) -> dict:
     """
     Search alerts with mandatory tenant_id filter.
     Returns paginated results with total count.
+
+    `q` is a free-text search (see build_alert_search_clause), ANDed
+    with every other filter. alert_ids_include/exclude restrict the
+    results by id (the Alerts page's triage filter); an empty include
+    list means nothing can match.
+
+    `ip` matches source_ip OR destination_ip. `severities` matches any
+    of several severities. `start`/`end` (ISO) select a bounded window
+    instead of the trailing timerange_hours. `sort_by_severity` orders
+    critical -> low, then newest. `aggregate_by` adds per-value counts
+    for those fields over ALL matches (not just this page), returned as
+    result["counts"][field] = {value: count}, in the same query.
     """
+    if alert_ids_include is not None and not alert_ids_include:
+        return {"total": 0, "page": page, "size": size, "pages": 0, "alerts": [], "counts": {}}
+
     client = get_client()
 
     must_filters = [{"term": {"tenant_id": tenant_id}}]
 
     if severity:
         must_filters.append({"term": {"severity": severity}})
+    if severities:
+        must_filters.append({"terms": {"severity": list(severities)}})
     if log_type:
         must_filters.append({"term": {"log_type": log_type}})
     if source:
@@ -246,41 +361,91 @@ async def search_alerts(
         must_filters.append({"term": {"user": user}})
     if source_ip:
         must_filters.append({"term": {"source_ip": source_ip}})
+    if ip:
+        must_filters.append({
+            "bool": {"should": [{"term": {"source_ip": ip}}, {"term": {"destination_ip": ip}}], "minimum_should_match": 1}
+        })
+    if alert_ids_include is not None:
+        must_filters.append({"terms": {"alert_id": alert_ids_include}})
+    search_clause = build_alert_search_clause(q) if q else None
+    if search_clause:
+        must_filters.append(search_clause)
 
-    range_filter = {
-        "range": {
-            "timestamp": {
-                "gte": f"now-{timerange_hours}h",
-                "lte": "now",
-            }
-        }
-    }
+    sort = [_SEVERITY_SORT_SCRIPT] if sort_by_severity else []
+    sort.append({"timestamp": {"order": "desc"}})
 
     query = {
         "query": {
             "bool": {
                 "must": must_filters,
-                "filter": [range_filter],
+                "filter": [_time_range_filter(timerange_hours, start, end)],
+                "must_not": [{"terms": {"alert_id": alert_ids_exclude}}] if alert_ids_exclude else [],
             }
         },
-        "sort": [{"timestamp": {"order": "desc"}}],
+        "sort": sort,
         "from": (page - 1) * size,
         "size": size,
         "track_total_hits": True,
     }
+    fields = [field for field in (aggregate_by or []) if field in COUNTABLE_ALERT_FIELDS]
+    if fields:
+        query["aggs"] = {f"by_{field}": {"terms": {"field": field, "size": aggregate_size}} for field in fields}
 
     # Search across all monthly indices
     response = client.search(index="safesoc-alerts-*", body=query)
 
     total = response["hits"]["total"]["value"]
     hits = [hit["_source"] for hit in response["hits"]["hits"]]
+    aggs = response.get("aggregations", {})
+    counts = {
+        field: {str(bucket["key"]): bucket["doc_count"] for bucket in aggs.get(f"by_{field}", {}).get("buckets", [])}
+        for field in fields
+    }
 
     return {
         "total": total,
         "page": page,
         "size": size,
-        "pages": (total + size - 1) // size,
+        # size=0 is a counts-only query (aggregate_by), not a page.
+        "pages": (total + size - 1) // size if size else 0,
         "alerts": hits,
+        "counts": counts,
+    }
+
+
+async def get_alert_entity_terms(tenant_id: str, lookback_days: int = 30, size: int = 500) -> dict[str, list[str]]:
+    """
+    Distinct host_id and user values in this tenant's recent alerts,
+    most frequent first — one size:0 search with two terms aggregations,
+    not a document scan. Feeds the Investigate chat's known-entity
+    matching (services/investigation.py::get_known_entities), which
+    caches the result. "unknown" users are dropped.
+    """
+    client = get_client()
+    response = client.search(
+        index="safesoc-alerts-*",
+        body={
+            "query": {
+                "bool": {
+                    "must": [{"term": {"tenant_id": tenant_id}}],
+                    "filter": [{"range": {"timestamp": {"gte": f"now-{lookback_days}d", "lte": "now"}}}],
+                }
+            },
+            "size": 0,
+            "aggs": {
+                "hosts": {"terms": {"field": "host_id", "size": size}},
+                "users": {"terms": {"field": "user", "size": size}},
+            },
+        },
+    )
+    aggs = response.get("aggregations", {})
+
+    def keys(name: str) -> list[str]:
+        return [str(bucket["key"]) for bucket in aggs.get(name, {}).get("buckets", []) if bucket.get("key")]
+
+    return {
+        "host_id": keys("hosts"),
+        "user": [user for user in keys("users") if user.lower() != "unknown"],
     }
 
 

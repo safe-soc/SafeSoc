@@ -40,6 +40,21 @@ class Severity(str, Enum):
     CRITICAL = "critical"
 
 
+class DismissReason(str, Enum):
+    """Why an analyst dismissed an alert (stored as text on alert_annotations.dismiss_reason)."""
+    FALSE_POSITIVE = "false_positive"
+    EXPECTED_ACTIVITY = "expected_activity"
+    DUPLICATE = "duplicate"
+    OTHER = "other"
+
+
+class TriageStatus(str, Enum):
+    """Alerts-page triage filter. An alert with no annotation row is untriaged."""
+    UNTRIAGED = "untriaged"
+    ACKNOWLEDGED = "acknowledged"
+    DISMISSED = "dismissed"
+
+
 class IncidentStatus(str, Enum):
     """Incident lifecycle states."""
     OPEN = "open"
@@ -144,9 +159,23 @@ class Intent(str, Enum):
     CLOUD_EVENTS = "cloud_events"
     RISKY_ENDPOINTS = "risky_endpoints"
     ATTACK_CHAIN_STATUS = "attack_chain_status"
+    # "Anything suspicious today?" / "give me a summary" — a tenant-wide
+    # overview. Answered with the TOP_ALERTS tool until it has its own.
+    OVERVIEW = "overview"
     # Fallback for queries that don't confidently match any of the 8
     # supported intents (SS-044 AC) — never silently guessed as one.
     UNKNOWN = "unknown"
+
+
+class QueryResolution(str, Enum):
+    """How the Investigate chat handles a query (services/investigation.py::resolve_query)."""
+    TOOL = "tool"                      # call the intent's MCP tool
+    UNKNOWN = "unknown"                # unclassified and not a follow-up: help text
+    NOISE = "noise"                    # "hi", "?", "thanks" — no topic at all
+    CLARIFY = "clarify"                # intent known, a required parameter isn't
+    ACTION_REQUEST = "action_request"  # "block / isolate / disable…" — chat can't act
+    THREAT_INTEL = "threat_intel"      # "check on VirusTotal" with no IP to look up
+    REFUSAL = "refusal"                # prompt injection / cross-tenant phrasing
 
 
 class ComplianceStatus(str, Enum):

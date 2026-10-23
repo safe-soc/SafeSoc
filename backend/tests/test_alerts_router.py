@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.core.enums import UserRole
+from app.core.enums import DismissReason, TriageStatus, UserRole
 from app.db.postgresql import get_db
 from app.main import app
 from app.models.alert_annotation import AlertAnnotation
@@ -237,10 +237,12 @@ def test_dismiss_requires_analyst_role(client, db_session, make_auth_headers):
 def test_dismiss_returns_200_with_dismissed_true(client, db_session, make_auth_headers):
     headers = make_auth_headers(role=UserRole.ANALYST)
 
-    response = client.post("/api/v1/alerts/a1/dismiss", headers=headers)
+    response = client.post("/api/v1/alerts/a1/dismiss", json={"reason": "false_positive"}, headers=headers)
 
     assert response.status_code == 200
     assert response.json()["dismissed"] is True
+    assert response.json()["dismiss_reason"] == "false_positive"
+    assert response.json()["dismiss_note"] is None
 
 
 def test_acknowledge_is_reflected_on_the_next_get_alerts_call(client, db_session, make_auth_headers, monkeypatch):
@@ -257,3 +259,163 @@ def test_acknowledge_is_reflected_on_the_next_get_alerts_call(client, db_session
 
     get_response = client.get("/api/v1/alerts", headers=headers)
     assert get_response.json()["alerts"][0]["acknowledged"] is True
+
+
+# ── Dismiss with reason / restore ────────────────────────────────────
+
+@pytest.mark.parametrize("body", [
+    None,
+    {},
+    {"reason": "bored"},
+    {"reason": "other"},
+    {"reason": "other", "note": "   "},
+    {"reason": "false_positive", "note": "x" * 501},
+])
+def test_dismiss_rejects_a_missing_or_invalid_reason(client, db_session, make_auth_headers, body):
+    headers = make_auth_headers(role=UserRole.ANALYST)
+
+    response = client.post("/api/v1/alerts/a1/dismiss", json=body, headers=headers)
+
+    assert response.status_code == 422
+    assert db_session.existing_annotations == []
+
+
+@pytest.mark.parametrize("reason", ["false_positive", "expected_activity", "duplicate"])
+def test_dismiss_accepts_each_reason_without_a_note(client, db_session, make_auth_headers, reason):
+    headers = make_auth_headers(role=UserRole.ANALYST)
+
+    response = client.post("/api/v1/alerts/a1/dismiss", json={"reason": reason}, headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["dismiss_reason"] == reason
+
+
+def test_dismiss_with_other_and_a_note_returns_both(client, db_session, make_auth_headers):
+    headers = make_auth_headers(role=UserRole.ANALYST)
+
+    response = client.post(
+        "/api/v1/alerts/a1/dismiss", json={"reason": "other", "note": "  Red-team exercise  "}, headers=headers
+    )
+
+    assert response.status_code == 200
+    assert response.json()["dismiss_reason"] == "other"
+    assert response.json()["dismiss_note"] == "Red-team exercise"
+
+
+def test_restore_requires_analyst_role(client, db_session, make_auth_headers):
+    headers = make_auth_headers(role=UserRole.VIEWER)
+
+    response = client.post("/api/v1/alerts/a1/restore", headers=headers)
+
+    assert response.status_code == 403
+
+
+def test_restore_clears_the_dismissal(client, db_session, make_auth_headers):
+    headers = make_auth_headers(role=UserRole.ANALYST)
+    client.post("/api/v1/alerts/a1/dismiss", json={"reason": "other", "note": "Test"}, headers=headers)
+
+    response = client.post("/api/v1/alerts/a1/restore", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["dismissed"] is False
+    assert body["dismiss_reason"] is None
+    assert body["dismiss_note"] is None
+
+
+def test_dismiss_and_restore_are_audit_logged(client, db_session, make_auth_headers, monkeypatch):
+    record = AsyncMock()
+    monkeypatch.setattr("app.services.alert_annotations.record_event", record)
+    headers = make_auth_headers(role=UserRole.ANALYST)
+
+    client.post("/api/v1/alerts/a1/dismiss", json={"reason": "duplicate"}, headers=headers)
+    client.post("/api/v1/alerts/a1/restore", headers=headers)
+
+    actions = [(c.kwargs["action"], c.kwargs["details"]) for c in record.call_args_list]
+    assert actions == [
+        ("alert.dismissed", {"reason": "duplicate", "note": None}),
+        ("alert.restored", {"previous_reason": "duplicate", "previous_note": None}),
+    ]
+
+
+def test_get_alerts_merges_the_dismiss_reason_and_note(client, db_session, make_auth_headers, monkeypatch):
+    tenant_id = uuid.uuid4()
+    db_session.existing_annotations = [
+        AlertAnnotation(
+            id=uuid.uuid4(), tenant_id=tenant_id, alert_id="a1", acknowledged=False, dismissed=True,
+            dismiss_reason=DismissReason.OTHER, dismiss_note="Pen-test", updated_by_user_id=uuid.uuid4(),
+        )
+    ]
+    monkeypatch.setattr(
+        "app.routers.v1.alerts.search_alerts",
+        AsyncMock(return_value={"total": 1, "page": 1, "size": 50, "pages": 1, "alerts": [{"alert_id": "a1"}]}),
+    )
+    headers = make_auth_headers(tenant_id=tenant_id, role=UserRole.VIEWER)
+
+    alert = client.get("/api/v1/alerts", headers=headers).json()["alerts"][0]
+
+    assert alert["dismiss_reason"] == "other"
+    assert alert["dismiss_note"] == "Pen-test"
+
+
+# ── GET /api/v1/alerts?q=&triage= ────────────────────────────────────
+
+_EMPTY_PAGE = {"total": 0, "page": 1, "size": 50, "pages": 0, "alerts": []}
+
+
+def test_get_alerts_passes_q_through_scoped_to_the_token_tenant(client, db_session, make_auth_headers, monkeypatch):
+    tenant_id = uuid.uuid4()
+    search = AsyncMock(return_value=_EMPTY_PAGE)
+    monkeypatch.setattr("app.routers.v1.alerts.search_alerts", search)
+    headers = make_auth_headers(tenant_id=tenant_id, role=UserRole.VIEWER)
+
+    response = client.get("/api/v1/alerts", params={"q": "WIN10", "severity": "high"}, headers=headers)
+
+    assert response.status_code == 200
+    kwargs = search.call_args.kwargs
+    assert kwargs["tenant_id"] == str(tenant_id)
+    assert kwargs["q"] == "WIN10"
+    assert kwargs["severity"] == "high"
+    assert kwargs["alert_ids_include"] is None and kwargs["alert_ids_exclude"] is None
+
+
+def test_get_alerts_rejects_an_overlong_q(client, db_session, make_auth_headers, monkeypatch):
+    monkeypatch.setattr("app.routers.v1.alerts.search_alerts", AsyncMock(return_value=_EMPTY_PAGE))
+    headers = make_auth_headers(role=UserRole.VIEWER)
+
+    response = client.get("/api/v1/alerts", params={"q": "a" * 201}, headers=headers)
+
+    assert response.status_code == 422
+
+
+def test_get_alerts_rejects_an_unknown_triage_value(client, db_session, make_auth_headers, monkeypatch):
+    monkeypatch.setattr("app.routers.v1.alerts.search_alerts", AsyncMock(return_value=_EMPTY_PAGE))
+    headers = make_auth_headers(role=UserRole.VIEWER)
+
+    response = client.get("/api/v1/alerts", params={"triage": "maybe"}, headers=headers)
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("triage, include, exclude", [
+    ("dismissed", ["a1"], None),
+    ("acknowledged", ["a1"], None),
+    ("untriaged", None, ["a1"]),
+])
+def test_get_alerts_turns_the_triage_filter_into_id_filters(
+    client, db_session, make_auth_headers, monkeypatch, triage, include, exclude
+):
+    tenant_id = uuid.uuid4()
+    lookup = AsyncMock(return_value=(include, exclude))
+    monkeypatch.setattr("app.routers.v1.alerts.get_alert_ids_for_triage_status", lookup)
+    search = AsyncMock(return_value=_EMPTY_PAGE)
+    monkeypatch.setattr("app.routers.v1.alerts.search_alerts", search)
+    headers = make_auth_headers(tenant_id=tenant_id, role=UserRole.VIEWER)
+
+    response = client.get("/api/v1/alerts", params={"triage": triage}, headers=headers)
+
+    assert response.status_code == 200
+    assert lookup.call_args.args[1] == tenant_id
+    assert lookup.call_args.args[2] == TriageStatus(triage)
+    assert search.call_args.kwargs["alert_ids_include"] == include
+    assert search.call_args.kwargs["alert_ids_exclude"] == exclude

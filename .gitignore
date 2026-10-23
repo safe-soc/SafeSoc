@@ -4,6 +4,7 @@
 !.env.example
 *.pem
 *.key
+.scratch_token.txt
 
 # ── Python ─────────────────────────────────────────
 __pycache__/
@@ -56,3 +57,6 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# ── Claude Code (personal/local settings) ──────────
+.claude/settings.local.json

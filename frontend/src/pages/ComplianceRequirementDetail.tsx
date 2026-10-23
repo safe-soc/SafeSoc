@@ -19,7 +19,8 @@ import EmptyState from '../components/EmptyState';
 import Spinner from '../components/Spinner';
 import { ChevronLeftIcon } from '../components/icons';
 import { api } from '../lib/api';
-import { formatDateTime, titleCase } from '../lib/format';
+import { titleCase } from '../lib/format';
+import Timestamp from '../components/Timestamp';
 import type { ComplianceRequirementDetail as ComplianceRequirementDetailType } from '../lib/types';
 
 const FRAMEWORK_LABELS: Record<string, string> = {
@@ -122,7 +123,7 @@ export default function ComplianceRequirementDetail() {
         <div className="rounded-xl border border-blue-800/40 bg-blue-500/5 p-5 shadow-sm shadow-black/20">
           <div className="flex items-center justify-between">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-blue-300/80">SafeSOC Evidence</h2>
-            <span className="text-xs text-slate-500">as of {formatDateTime(detail.last_evaluated)}</span>
+            <span className="text-xs text-slate-500">as of <Timestamp iso={detail.last_evaluated} /></span>
           </div>
           <p className="mt-3 text-sm leading-relaxed text-slate-200">{detail.evidence_summary}</p>
           <p className="mt-1 text-xs text-slate-500">What SafeSOC can observe: {detail.what_safesoc_can_observe}</p>
@@ -177,7 +178,7 @@ export default function ComplianceRequirementDetail() {
                     </span>
                     <span className="flex items-center gap-2">
                       <StatusBadge status={incident.status} />
-                      <span className="text-xs text-slate-600">{formatDateTime(incident.created_at)}</span>
+                      <Timestamp iso={incident.created_at} className="text-xs text-slate-600" />
                     </span>
                   </Link>
                 </li>
@@ -200,7 +201,7 @@ export default function ComplianceRequirementDetail() {
                     className="flex items-center justify-between rounded-lg border border-slate-800/80 bg-slate-950/50 px-3 py-2 text-sm transition-colors hover:border-blue-700/60 hover:bg-slate-900"
                   >
                     <span className="font-mono text-xs text-slate-400">Session {investigation.session_id.slice(0, 8)}</span>
-                    <span className="text-xs text-slate-600">{formatDateTime(investigation.created_at)}</span>
+                    <Timestamp iso={investigation.created_at} className="text-xs text-slate-600" />
                   </Link>
                 </li>
               ))}

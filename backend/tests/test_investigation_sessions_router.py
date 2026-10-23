@@ -48,6 +48,19 @@ def db_session():
     app.dependency_overrides.pop(get_db, None)
 
 
+@pytest.fixture(autouse=True)
+def _mock_mark_investigating(monkeypatch):
+    """
+    Mutation routes also move an OPEN incident to INVESTIGATING, which
+    reads the incident from the DB — not reachable through this file's
+    query-refusing fake session. That behavior is covered end-to-end in
+    test_auto_investigating.py.
+    """
+    mock = AsyncMock(return_value=False)
+    monkeypatch.setattr(router_module, "mark_investigating_on_analyst_action", mock)
+    return mock
+
+
 def _session_row(incident_id=None, created_by=None):
     return InvestigationSession(id=uuid.uuid4(), incident_id=incident_id or uuid.uuid4(), created_by_user_id=created_by or uuid.uuid4(), created_at=datetime.now(timezone.utc))
 

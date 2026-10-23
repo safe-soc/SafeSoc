@@ -29,7 +29,8 @@ import AttackChainGraphView from '../components/AttackChainGraphView';
 import Spinner from '../components/Spinner';
 import { api } from '../lib/api';
 import { fetchAlertLookup, type AlertLookup } from '../lib/alertLookup';
-import { formatDateTime, formatRelativeTime } from '../lib/format';
+import { incidentTitle } from '../lib/format';
+import Timestamp from '../components/Timestamp';
 import {
   ALLOWED_TRANSITIONS,
   type Incident,
@@ -105,6 +106,20 @@ export default function IncidentDetail() {
       .catch(() => undefined);
   }, [incidentId]);
 
+  // After an analyst action that can also move an OPEN incident to
+  // INVESTIGATING server-side (case note, tag, alert link, any
+  // investigation-session step): re-fetch the incident itself, not
+  // just the timeline, so the status badge and lifecycle stepper
+  // follow without a manual refresh. Best-effort, like refreshTimeline.
+  const refreshIncident = useCallback(() => {
+    if (!incidentId) return;
+    api
+      .get<Incident>(`/api/v1/incidents/${incidentId}`)
+      .then((response) => setIncident(response.data))
+      .catch(() => undefined);
+    refreshTimeline();
+  }, [incidentId, refreshTimeline]);
+
   useEffect(() => {
     fetchAlertLookup().then(setLookup).catch(() => undefined);
   }, []);
@@ -138,7 +153,7 @@ export default function IncidentDetail() {
       });
       setIncident(response.data);
       setNewTag('');
-      refreshTimeline();
+      refreshIncident();
     } catch {
       setActionError('Failed to add that tag.');
     }
@@ -152,7 +167,7 @@ export default function IncidentDetail() {
         tags: incident.tags.filter((t) => t !== tag),
       });
       setIncident(response.data);
-      refreshTimeline();
+      refreshIncident();
     } catch {
       setActionError('Failed to remove that tag.');
     }
@@ -189,7 +204,7 @@ export default function IncidentDetail() {
       const response = await api.post<Incident>(`/api/v1/incidents/${incidentId}/alerts`, payload);
       setIncident(response.data);
       setNewAlertId('');
-      refreshTimeline();
+      refreshIncident();
     } catch {
       setActionError('Failed to link that alert.');
     } finally {
@@ -208,7 +223,7 @@ export default function IncidentDetail() {
       });
       setNotes((prev) => [...prev, response.data]);
       setNewNoteBody('');
-      refreshTimeline();
+      refreshIncident();
     } catch {
       setActionError('Failed to add that note.');
     } finally {
@@ -247,22 +262,37 @@ export default function IncidentDetail() {
 
       <div className="mt-2">
         <PageHeader
-          title={`Incident ${incident.id.slice(0, 8)}`}
+          title={incidentTitle(incident)}
           description={
             <>
-              Created {formatDateTime(incident.created_at)} · Updated {formatRelativeTime(incident.updated_at)}
+              Incident{' '}
+              <span className="select-all font-mono text-slate-300" title={incident.id}>
+                {incident.id.slice(0, 8)}
+              </span>{' '}
+              · Created <Timestamp iso={incident.created_at} /> · Updated{' '}
+              <Timestamp iso={incident.updated_at} format="relative" />
             </>
           }
-          actions={
-            <div className="flex items-center gap-3">
-              {incident.confidence != null && (
-                <span className="text-xs text-slate-500">{Math.round(incident.confidence * 100)}% confidence</span>
-              )}
-              <StatusBadge status={incident.status} />
-              <GenerateReportButton scope="incident" id={incident.id} />
-            </div>
-          }
+          actions={<GenerateReportButton scope="incident" id={incident.id} />}
         />
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {incident.status === 'open' && (
+            <button
+              type="button"
+              onClick={() => handleTransition('investigating')}
+              className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-blue-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+            >
+              Start investigating
+            </button>
+          )}
+          {incident.severity && <LevelBadge level={incident.severity} />}
+          <StatusBadge status={incident.status} />
+          {incident.confidence != null && (
+            <span className="inline-flex items-center rounded-full bg-violet-500/10 px-2.5 py-0.5 text-xs font-medium tabular-nums text-violet-300 ring-1 ring-inset ring-violet-500/30">
+              {Math.round(incident.confidence * 100)}% confidence
+            </span>
+          )}
+        </div>
       </div>
 
       {actionError && <p className="mt-3 text-sm text-red-400">{actionError}</p>}
@@ -310,7 +340,7 @@ export default function IncidentDetail() {
       </section>
 
       {/* Investigation session — persistent, incident-scoped Q&A/findings/actions/notes */}
-      {incidentId && <IncidentInvestigationPanel incidentId={incidentId} />}
+      {incidentId && <IncidentInvestigationPanel incidentId={incidentId} onActivity={refreshIncident} />}
 
       {/* Lifecycle */}
       <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
@@ -497,7 +527,10 @@ export default function IncidentDetail() {
 
       {/* Notes */}
       <section className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
-        <h2 className="text-sm font-semibold text-slate-200">Investigation Notes</h2>
+        <h2 className="text-sm font-semibold text-slate-200">Case notes</h2>
+        <p className="mt-1 text-xs text-slate-500">
+          Permanent notes on this incident — shown in the timeline and the report, and used by the AI summary.
+        </p>
         {notes.length === 0 ? (
           <p className="mt-3 text-sm text-slate-500">No notes yet — document findings as you investigate.</p>
         ) : (
@@ -510,8 +543,8 @@ export default function IncidentDetail() {
                 </div>
                 <div className="flex-1 rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
                   <p className="text-sm text-slate-200">{note.body}</p>
-                  <p className="mt-1.5 text-xs text-slate-500" title={formatDateTime(note.created_at)}>
-                    {formatRelativeTime(note.created_at)}
+                  <p className="mt-1.5 text-xs text-slate-500">
+                    <Timestamp iso={note.created_at} format="relative" />
                   </p>
                 </div>
               </li>
@@ -522,7 +555,7 @@ export default function IncidentDetail() {
           <input
             id="newNoteBody"
             type="text"
-            placeholder="Add an investigation note"
+            placeholder="Add a case note"
             value={newNoteBody}
             onChange={(e) => setNewNoteBody(e.target.value)}
             className={inputClasses}

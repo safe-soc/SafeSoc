@@ -67,9 +67,12 @@ DEMO_PASSWORD = "SafeSOC-Demo-2026!"
 
 HISTORY_DAYS = 14
 HISTORY_EVENT_COUNT = 150
+# Weighted toward authentication, like real telemetry. No "privilege":
+# generate_log has no privilege actions (it would fall back to auth ones).
+HISTORY_LOG_TYPES = ["authentication", "authentication", "network", "process", "file"]
 
-IN_PROGRESS_HOST = "DEMO-INCIDENT-ACTIVE"
-RESOLVED_HOST = "DEMO-INCIDENT-RESOLVED"
+IN_PROGRESS_HOST = "WIN10-FIN-07"
+RESOLVED_HOST = "UBUNTU-WEB-01"
 
 
 async def _ensure_demo_tenant() -> None:
@@ -104,11 +107,23 @@ def _login(api_base: str) -> str:
 
 
 def _send_history(ingest_url: str, token: str) -> int:
-    """Realistic-looking alert history spread across the trailing HISTORY_DAYS, mostly low/medium severity."""
+    """
+    Realistic-looking alert history spread across the trailing HISTORY_DAYS,
+    mostly low/medium severity, with a mix of log types.
+
+    No per-host caps are needed to stop these random events from forming
+    spurious attack chains: correlation windows are ordered by event time
+    (commit 6cd8e9e), and these events are backdated across HISTORY_DAYS,
+    so they fall outside the 60-minute correlation window of each other
+    and of the live chains sent afterwards.
+    """
     logs = []
     now = datetime.now(timezone.utc)
     for _ in range(HISTORY_EVENT_COUNT):
-        log = generate_log(severity=random.choice(["low", "low", "low", "medium", "high"]))
+        log = generate_log(
+            log_type=random.choice(HISTORY_LOG_TYPES),
+            severity=random.choice(["low", "low", "low", "medium", "high"]),
+        )
         log["timestamp"] = (now - timedelta(minutes=random.randint(0, HISTORY_DAYS * 24 * 60))).isoformat()
         logs.append(log)
 
@@ -128,7 +143,7 @@ def _list_incidents(api_base: str, token: str) -> list[dict]:
 
 
 def _wait_for_incident_with_alert(
-    api_base: str, token: str, alert_ids: list[str], *, timeout_seconds: float = 15.0
+    api_base: str, token: str, alert_ids: list[str], *, timeout_seconds: float = 60.0
 ) -> Optional[str]:
     """
     Correlation runs asynchronously (a Celery task per ingested alert) —
@@ -194,7 +209,10 @@ def main():
     if in_progress_id:
         print(f"  Incident {in_progress_id} created — left open (in progress)")
     else:
-        print("  WARNING: no incident detected within the timeout — is the correlation worker running?")
+        print(
+            "  WARNING: no incident detected within 60s — is the correlation worker running? "
+            "(check `docker compose logs worker`)"
+        )
 
     print(f"Sending a resolved attack chain (host: {RESOLVED_HOST})...")
     sent = send_logs(ingest_url, SCENARIOS["successful_compromise"](RESOLVED_HOST), token=token)
@@ -204,7 +222,10 @@ def main():
         _transition(args.api_base, token, resolved_id, "resolved")
         print(f"  Incident {resolved_id} created and resolved")
     else:
-        print("  WARNING: no incident detected within the timeout — is the correlation worker running?")
+        print(
+            "  WARNING: no incident detected within 60s — is the correlation worker running? "
+            "(check `docker compose logs worker`)"
+        )
 
     print("\nDemo tenant ready.")
     print(f"  Tenant ID: {DEMO_TENANT_ID}")

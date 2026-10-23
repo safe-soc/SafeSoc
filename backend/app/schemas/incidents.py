@@ -10,7 +10,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.core.enums import CorrelationPattern, IncidentStatus
+from app.core.enums import CorrelationPattern, IncidentStatus, Severity
 
 
 class IncidentCreateRequest(BaseModel):
@@ -58,6 +58,13 @@ class IncidentResponse(BaseModel):
     tags: list[str]
     created_at: datetime
     updated_at: datetime
+    # Read-only, derived from the linked alerts on every read
+    # (services/incident_summary.py) — incidents store neither. `hosts`
+    # is ordered by alert count, most first, and excludes CloudLens
+    # resource ids; `severity` is the highest linked alert severity,
+    # null when none of the alerts resolve.
+    hosts: list[str] = Field(default_factory=list)
+    severity: Optional[Severity] = None
     # SS-108: populated only by the bulk alert-link endpoint's batch
     # path (AlertLinkRequest.alert_ids); null for every other
     # IncidentResponse-returning endpoint, including single-alert

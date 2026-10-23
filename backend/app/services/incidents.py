@@ -297,6 +297,40 @@ async def transition_incident(
     return incident
 
 
+async def mark_investigating_on_analyst_action(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    incident_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+) -> bool:
+    """
+    Move an OPEN incident to INVESTIGATING because an analyst just worked
+    on it (a note, tag, link, assignment, or investigation-session step).
+    Returns True if it moved. Any other status is left alone — this never
+    reopens a resolved/false-positive incident.
+
+    Called only from the HTTP route handlers, after the analyst's action
+    succeeded — never from the service functions themselves, which SOAR
+    automation also calls with its system actor (services/soar_execution.py);
+    otherwise every auto-triaged incident would jump to INVESTIGATING on
+    detection.
+
+    A concurrent request may already have moved it between the status
+    check and the transition; that InvalidStateTransitionError is the
+    outcome we wanted anyway, so it's swallowed and reported as False.
+    """
+    incident = await get_incident(db, tenant_id, incident_id)
+    if incident.status != IncidentStatus.OPEN:
+        return False
+    try:
+        await transition_incident(
+            db, tenant_id, incident_id, IncidentStatus.INVESTIGATING, changed_by_user_id=actor_user_id
+        )
+    except InvalidStateTransitionError:
+        return False
+    return True
+
+
 async def assign_incident(
     db: AsyncSession,
     tenant_id: uuid.UUID,

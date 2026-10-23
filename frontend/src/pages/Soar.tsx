@@ -21,7 +21,8 @@ import SoarStatusBadge from '../components/SoarStatusBadge';
 import Spinner from '../components/Spinner';
 import { AlertIcon, CheckIcon, SoarIcon, TrendingIcon } from '../components/icons';
 import { api } from '../lib/api';
-import { formatDateTime, formatRelativeTime, titleCase } from '../lib/format';
+import { titleCase } from '../lib/format';
+import Timestamp from '../components/Timestamp';
 import { describeTarget, formatActionType } from '../lib/soarLabels';
 import type { PlaybookResponse, SoarActionExecution, SoarPlaybookRunDetail } from '../lib/types';
 
@@ -144,7 +145,7 @@ export default function Soar() {
                   <Link to={`/incidents/${run.incident_id}`} className="text-xs text-blue-400 hover:underline">
                     View incident
                   </Link>
-                  <span className="text-xs text-slate-600">{formatRelativeTime(action.created_at)}</span>
+                  <Timestamp iso={action.created_at} format="relative" className="text-xs text-slate-600" />
                 </div>
                 <button
                   type="button"
@@ -181,7 +182,7 @@ export default function Soar() {
                     <SoarStatusBadge status={run.status} />
                   </div>
                   <p className="mt-1 text-xs text-slate-500">
-                    {run.actions.length} action{run.actions.length === 1 ? '' : 's'} · {formatRelativeTime(run.created_at)}
+                    {run.actions.length} action{run.actions.length === 1 ? '' : 's'} · <Timestamp iso={run.created_at} format="relative" />
                   </p>
                 </li>
               ))}
@@ -211,7 +212,7 @@ export default function Soar() {
                   </div>
                   <div className="flex items-center gap-2">
                     <SoarStatusBadge status={action.status} />
-                    <span className="text-xs text-slate-600">{formatRelativeTime(mostRecentTimestamp(action))}</span>
+                    <Timestamp iso={mostRecentTimestamp(action)} format="relative" className="text-xs text-slate-600" />
                   </div>
                 </li>
               ))}
@@ -259,8 +260,8 @@ export default function Soar() {
                       <SoarStatusBadge status={run.status} />
                     </td>
                     <td className="px-4 py-2.5 text-slate-400">{run.actions.length}</td>
-                    <td className="px-4 py-2.5 whitespace-nowrap text-slate-500">{run.started_at ? formatDateTime(run.started_at) : '—'}</td>
-                    <td className="px-4 py-2.5 whitespace-nowrap text-slate-500">{run.completed_at ? formatDateTime(run.completed_at) : '—'}</td>
+                    <td className="px-4 py-2.5 whitespace-nowrap text-slate-500"><Timestamp iso={run.started_at} /></td>
+                    <td className="px-4 py-2.5 whitespace-nowrap text-slate-500"><Timestamp iso={run.completed_at} /></td>
                   </tr>
                 ))
               )}

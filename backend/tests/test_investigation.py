@@ -2,16 +2,19 @@
 SafeSOC — Investigation Service Tests
 """
 
+from datetime import datetime, timezone
+
 import pytest
 
 from app.core.config import settings
-from app.core.enums import Intent
+from app.core.enums import Intent, QueryResolution
 from app.services import investigation
 from app.services.investigation import (
     INTENT_CLASSIFICATION_ACCURACY_THRESHOLD,
     MAX_TRANSCRIPT_TURNS,
     append_turn,
     classify_intent,
+    commit_context,
     get_context,
     resolve_query,
     save_context,
@@ -92,6 +95,11 @@ _LABELED_QUERIES: list[tuple[str, Intent]] = [
     ("What open incidents do we have?", Intent.ATTACK_CHAIN_STATUS),
     ("Is a compromise in progress on any host?", Intent.ATTACK_CHAIN_STATUS),
     ("Are we currently under attack?", Intent.ATTACK_CHAIN_STATUS),
+    # Intent.OVERVIEW
+    ("Anything suspicious today?", Intent.OVERVIEW),
+    ("Give me a summary of the last hour", Intent.OVERVIEW),
+    ("What's going on in our environment?", Intent.OVERVIEW),
+    ("I need a status report for the morning standup", Intent.OVERVIEW),
     # Harder cases: novel phrasing that doesn't hit the classifier's
     # keyword lists directly. Included deliberately so the accuracy
     # threshold is measured honestly rather than trivially satisfied —
@@ -204,27 +212,40 @@ async def test_sessions_are_isolated_per_tenant(fake_redis):
     assert await get_context("tenant-b", "session-1") is None
 
 
+async def _turn(query: str, session_id: str = "session-1", tenant_id: str = "tenant-a"):
+    """
+    One chat turn the way the router runs it: resolve, then commit the
+    context only if the turn would call a tool (i.e. the tool succeeded).
+    Returns (intent, params) for the existing assertions.
+    """
+    resolution = await resolve_query(tenant_id, session_id, query)
+    if resolution.kind == QueryResolution.TOOL:
+        await commit_context(tenant_id, session_id, resolution.intent, resolution.params)
+    return resolution.intent, resolution.params
+
+
 # ── SS-046 AC: a two-turn conversation resolves the second query using
 # context from the first ("show failed logins for host X" -> "what about
 # yesterday?") ──
 
 @pytest.mark.asyncio
 async def test_follow_up_query_inherits_intent_and_host_id_from_the_first_turn(fake_redis):
-    intent1, params1 = await resolve_query("tenant-a", "session-1", "Show failed logins for host DESKTOP-042")
+    intent1, params1 = await _turn("Show failed logins for host DESKTOP-042")
     assert intent1 == Intent.AUTH_FAILURES
     assert params1 == {"host_id": "DESKTOP-042"}
 
-    intent2, params2 = await resolve_query("tenant-a", "session-1", "What about yesterday?")
+    intent2, params2 = await _turn("What about yesterday?")
 
     assert intent2 == Intent.AUTH_FAILURES
-    assert params2 == {"host_id": "DESKTOP-042"}
+    assert params2["host_id"] == "DESKTOP-042"
+    assert {"start", "end"} <= params2.keys()
 
 
 @pytest.mark.asyncio
 async def test_a_query_that_classifies_on_its_own_is_treated_as_a_fresh_turn(fake_redis):
-    await resolve_query("tenant-a", "session-1", "Show failed logins for host DESKTOP-042")
+    await _turn("Show failed logins for host DESKTOP-042")
 
-    intent, params = await resolve_query("tenant-a", "session-1", "Which endpoints are riskiest right now?")
+    intent, params = await _turn("Which endpoints are riskiest right now?")
 
     assert intent == Intent.RISKY_ENDPOINTS
     assert params == {}
@@ -232,7 +253,7 @@ async def test_a_query_that_classifies_on_its_own_is_treated_as_a_fresh_turn(fak
 
 @pytest.mark.asyncio
 async def test_a_follow_up_with_no_prior_session_stays_unknown(fake_redis):
-    intent, params = await resolve_query("tenant-a", "brand-new-session", "What about yesterday?")
+    intent, params = await _turn(session_id="brand-new-session", query="What about yesterday?")
 
     assert intent == Intent.UNKNOWN
     assert params == {}
@@ -241,17 +262,17 @@ async def test_a_follow_up_with_no_prior_session_stays_unknown(fake_redis):
 @pytest.mark.asyncio
 async def test_resolve_query_refreshes_the_session_for_further_follow_ups(fake_redis):
     """A chain of 3 follow-ups keeps resolving to the same subject."""
-    await resolve_query("tenant-a", "session-1", "Show failed logins for host DESKTOP-042")
-    await resolve_query("tenant-a", "session-1", "What about yesterday?")
-    intent, params = await resolve_query("tenant-a", "session-1", "and the day before?")
+    await _turn("Show failed logins for host DESKTOP-042")
+    await _turn("What about yesterday?")
+    intent, params = await _turn("and the day before?")
 
     assert intent == Intent.AUTH_FAILURES
-    assert params == {"host_id": "DESKTOP-042"}
+    assert params["host_id"] == "DESKTOP-042"
 
 
 @pytest.mark.asyncio
 async def test_a_fresh_turn_naming_no_host_has_empty_params(fake_redis):
-    intent, params = await resolve_query("tenant-a", "session-1", "Which endpoints are riskiest right now?")
+    intent, params = await _turn("Which endpoints are riskiest right now?")
 
     assert intent == Intent.RISKY_ENDPOINTS
     assert params == {}
@@ -275,10 +296,10 @@ async def test_a_fresh_turn_naming_no_host_has_empty_params(fake_redis):
 @pytest.mark.asyncio
 async def test_a_greeting_after_a_real_query_does_not_inherit_the_previous_intent(fake_redis):
     """The exact live reproduction: a real query, then a bare greeting."""
-    intent1, _ = await resolve_query("tenant-a", "session-1", "Which user has the most amount of failed logins?")
+    intent1, _ = await _turn("Which user has the most amount of failed logins?")
     assert intent1 == Intent.AUTH_FAILURES  # sanity check: matches what was actually observed live
 
-    intent2, params2 = await resolve_query("tenant-a", "session-1", "Hello")
+    intent2, params2 = await _turn("Hello")
 
     assert intent2 == Intent.UNKNOWN
     assert params2 == {}
@@ -286,10 +307,10 @@ async def test_a_greeting_after_a_real_query_does_not_inherit_the_previous_inten
 
 @pytest.mark.asyncio
 async def test_common_conversational_noise_never_inherits_context(fake_redis):
-    await resolve_query("tenant-a", "session-1", "Show failed logins for host DESKTOP-042")
+    await _turn("Show failed logins for host DESKTOP-042")
 
     for noise in ["hi", "hey", "thanks", "thank you", "ok", "okay", "bye", "Hello!"]:
-        intent, params = await resolve_query("tenant-a", "session-1", noise)
+        intent, params = await _turn(noise)
         assert intent == Intent.UNKNOWN, f"{noise!r} incorrectly inherited context"
         assert params == {}
 
@@ -300,24 +321,24 @@ async def test_a_greeting_does_not_clobber_saved_context_for_a_later_real_follow
     A greeting sent mid-conversation shouldn't erase the ability for a
     *later*, genuine follow-up to still resolve against the real topic.
     """
-    await resolve_query("tenant-a", "session-1", "Show failed logins for host DESKTOP-042")
-    await resolve_query("tenant-a", "session-1", "Hello")
+    await _turn("Show failed logins for host DESKTOP-042")
+    await _turn("Hello")
 
-    intent, params = await resolve_query("tenant-a", "session-1", "What about yesterday?")
+    intent, params = await _turn("What about yesterday?")
 
     assert intent == Intent.AUTH_FAILURES
-    assert params == {"host_id": "DESKTOP-042"}
+    assert params["host_id"] == "DESKTOP-042"
 
 
 @pytest.mark.asyncio
 async def test_a_genuine_topic_less_follow_up_still_inherits_context_as_before(fake_redis):
     """Non-regression: SS-046's own worked example must keep working."""
-    await resolve_query("tenant-a", "session-1", "Show failed logins for host DESKTOP-042")
+    await _turn("Show failed logins for host DESKTOP-042")
 
-    intent, params = await resolve_query("tenant-a", "session-1", "What about yesterday?")
+    intent, params = await _turn("What about yesterday?")
 
     assert intent == Intent.AUTH_FAILURES
-    assert params == {"host_id": "DESKTOP-042"}
+    assert params["host_id"] == "DESKTOP-042"
 
 
 # ── SS-089: broader follow-up entity extraction ────────────────────
@@ -329,8 +350,8 @@ def test_extract_entities_finds_an_ip_address():
 def test_extract_entities_finds_a_named_user():
     assert investigation._extract_entities("Show activity for user admin") == {"user": "admin"}
     # This phrasing also names a relative-time phrase ("today") — both are legitimately extracted.
-    assert investigation._extract_entities("What did user john.doe do today?") == {
-        "user": "john.doe", "timerange_hours": 24
+    assert investigation._extract_entities("What did user john.doe do today?", now=datetime(2026, 10, 22, 15, 30, tzinfo=timezone.utc)) == {
+        "user": "john.doe", "timerange_hours": 24, "start": "2026-10-22T00:00:00Z"
     }
 
 
@@ -356,8 +377,13 @@ def test_extract_entities_does_not_match_severity_inside_a_longer_word():
 
 def test_extract_entities_finds_a_relative_time_phrase():
     assert investigation._extract_entities("Show failed logins from the last hour") == {"timerange_hours": 1}
-    assert investigation._extract_entities("What happened today?") == {"timerange_hours": 24}
-    assert investigation._extract_entities("Anything this week?") == {"timerange_hours": 24 * 7}
+    assert investigation._extract_entities("What happened today?", now=datetime(2026, 10, 22, 15, 30, tzinfo=timezone.utc)) == {
+        "timerange_hours": 24, "start": "2026-10-22T00:00:00Z"
+    }
+    # 22 Oct 2026 is a Thursday; the week starts Monday 19 Oct (UTC).
+    assert investigation._extract_entities("Anything this week?", now=datetime(2026, 10, 22, 15, 30, tzinfo=timezone.utc)) == {
+        "timerange_hours": 24 * 7, "start": "2026-10-19T00:00:00Z"
+    }
 
 
 def test_extract_entities_finds_a_numeric_relative_time_phrase():
@@ -365,13 +391,15 @@ def test_extract_entities_finds_a_numeric_relative_time_phrase():
     assert investigation._extract_entities("What happened in the past 12 hours?") == {"timerange_hours": 12}
 
 
-def test_extract_entities_does_not_resolve_yesterday():
+def test_extract_entities_resolves_yesterday_to_a_bounded_utc_window():
     """
-    'yesterday' doesn't map onto timerange_hours' "last N hours from
-    now" semantics without silently including today too — it must stay
-    unresolved rather than become a wrong guess.
+    'yesterday' is a bounded window [yesterday 00:00, today 00:00) UTC,
+    passed as start/end. timerange_hours covers the whole window (48h)
+    until the tools honour start/end, so nothing is cut short.
     """
-    assert investigation._extract_entities("What about yesterday?") == {}
+    assert investigation._extract_entities("What about yesterday?", now=datetime(2026, 10, 22, 15, 30, tzinfo=timezone.utc)) == {
+        "timerange_hours": 48, "start": "2026-10-21T00:00:00Z", "end": "2026-10-22T00:00:00Z",
+    }
 
 
 def test_extract_entities_returns_empty_for_a_query_naming_no_entities():
@@ -380,7 +408,7 @@ def test_extract_entities_returns_empty_for_a_query_naming_no_entities():
 
 @pytest.mark.asyncio
 async def test_a_fresh_turn_naming_an_ip_captures_it(fake_redis):
-    intent, params = await resolve_query("tenant-a", "session-1", "What activity came from IP 45.33.32.156?")
+    intent, params = await _turn("What activity came from IP 45.33.32.156?")
 
     assert intent == Intent.IP_ACTIVITY
     assert params["ip"] == "45.33.32.156"
@@ -388,7 +416,7 @@ async def test_a_fresh_turn_naming_an_ip_captures_it(fake_redis):
 
 @pytest.mark.asyncio
 async def test_a_fresh_turn_naming_a_severity_captures_it(fake_redis):
-    intent, params = await resolve_query("tenant-a", "session-1", "Show me the most critical alerts")
+    intent, params = await _turn("Show me the most critical alerts")
 
     assert intent == Intent.TOP_ALERTS
     assert params == {"severity": "critical"}
@@ -396,9 +424,9 @@ async def test_a_fresh_turn_naming_a_severity_captures_it(fake_redis):
 
 @pytest.mark.asyncio
 async def test_a_follow_up_naming_a_new_severity_overrides_the_inherited_one(fake_redis):
-    await resolve_query("tenant-a", "session-1", "Show me the most critical alerts")
+    await _turn("Show me the most critical alerts")
 
-    intent, params = await resolve_query("tenant-a", "session-1", "What about high severity ones?")
+    intent, params = await _turn("What about high severity ones?")
 
     assert intent == Intent.TOP_ALERTS
     assert params["severity"] == "high"
@@ -406,27 +434,23 @@ async def test_a_follow_up_naming_a_new_severity_overrides_the_inherited_one(fak
 
 @pytest.mark.asyncio
 async def test_a_follow_up_naming_a_user_adds_it_to_the_inherited_params(fake_redis):
-    await resolve_query("tenant-a", "session-1", "Show failed logins for host DESKTOP-042")
+    await _turn("Show failed logins for host DESKTOP-042")
 
-    intent, params = await resolve_query("tenant-a", "session-1", "What about for user admin?")
+    intent, params = await _turn("What about for user admin?")
 
     assert intent == Intent.AUTH_FAILURES
     assert params == {"host_id": "DESKTOP-042", "user": "admin"}
 
 
 @pytest.mark.asyncio
-async def test_a_follow_up_with_an_unresolvable_time_phrase_still_inherits_intent_only(fake_redis):
-    """
-    SS-089-specific regression: 'yesterday' must still degrade to
-    intent-only inheritance (SS-046's existing behavior), not a wrong-
-    guess timerange_hours.
-    """
-    await resolve_query("tenant-a", "session-1", "Show failed logins for host DESKTOP-042")
+async def test_a_follow_up_naming_a_time_window_keeps_the_inherited_host(fake_redis):
+    """A follow-up that only names a time keeps the previous turn's intent and host."""
+    await _turn("Show failed logins for host DESKTOP-042")
 
-    intent, params = await resolve_query("tenant-a", "session-1", "What about yesterday?")
+    intent, params = await _turn("What about yesterday?")
 
     assert intent == Intent.AUTH_FAILURES
-    assert params == {"host_id": "DESKTOP-042"}
+    assert params["host_id"] == "DESKTOP-042"
 
 
 # ── SS-087: bounded conversation transcript ────────────────────────
@@ -452,7 +476,7 @@ async def test_save_context_without_a_transcript_defaults_to_empty(fake_redis):
 
 @pytest.mark.asyncio
 async def test_append_turn_adds_a_query_answer_pair_to_the_transcript(fake_redis):
-    await resolve_query("tenant-a", "session-1", "Show failed logins for host DESKTOP-042")
+    await _turn("Show failed logins for host DESKTOP-042")
 
     await append_turn("tenant-a", "session-1", "Show failed logins for host DESKTOP-042", "Found 3 failed logins.")
 
@@ -464,7 +488,7 @@ async def test_append_turn_adds_a_query_answer_pair_to_the_transcript(fake_redis
 
 @pytest.mark.asyncio
 async def test_append_turn_caps_the_transcript_dropping_the_oldest_first(fake_redis):
-    await resolve_query("tenant-a", "session-1", "Show failed logins for host DESKTOP-042")
+    await _turn("Show failed logins for host DESKTOP-042")
 
     for i in range(MAX_TRANSCRIPT_TURNS + 2):
         await append_turn("tenant-a", "session-1", f"query {i}", f"answer {i}")
@@ -485,16 +509,16 @@ async def test_append_turn_is_a_noop_when_no_session_exists(fake_redis):
 
 
 @pytest.mark.asyncio
-async def test_resolve_query_preserves_a_transcript_built_by_append_turn(fake_redis):
+async def test_committing_the_next_turn_preserves_a_transcript_built_by_append_turn(fake_redis):
     """
-    Regression: resolve_query() must not silently wipe out a transcript
-    append_turn() already built when it saves the next turn's
-    intent/params — the two functions write to the same session key.
+    Regression: committing the next turn's intent/params must not wipe
+    out a transcript append_turn() already built — both write the same
+    session key.
     """
-    await resolve_query("tenant-a", "session-1", "Show failed logins for host DESKTOP-042")
+    await _turn("Show failed logins for host DESKTOP-042")
     await append_turn("tenant-a", "session-1", "Show failed logins for host DESKTOP-042", "Found 3.")
 
-    await resolve_query("tenant-a", "session-1", "What about yesterday?")
+    await _turn("What about yesterday?")
 
     context = await get_context("tenant-a", "session-1")
     assert context.transcript == [{"query": "Show failed logins for host DESKTOP-042", "answer": "Found 3."}]

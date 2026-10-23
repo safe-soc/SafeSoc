@@ -38,6 +38,7 @@ from app.schemas.reports import InvestigationReportResponse
 from app.services.incident_evidence import IncidentEvidence, get_incident_evidence
 from app.services.incident_graph import IncidentGraph, get_incident_graph
 from app.services.incident_narrative import IncidentNarrativeResponse, get_incident_narrative
+from app.services.incident_summary import IncidentSummary, summarize_incidents
 from app.services.incident_timeline import get_incident_timeline
 from app.services.incidents import (
     add_note,
@@ -48,6 +49,7 @@ from app.services.incidents import (
     link_alerts,
     list_incidents,
     list_notes,
+    mark_investigating_on_analyst_action,
     set_tags,
     transition_incident,
 )
@@ -56,7 +58,7 @@ from app.services.investigation_report import generate_incident_report
 router = APIRouter(prefix="/api/v1/incidents", tags=["incidents"])
 
 
-def _to_response(incident: Incident) -> IncidentResponse:
+def _to_response(incident: Incident, summary: IncidentSummary) -> IncidentResponse:
     return IncidentResponse(
         id=incident.id,
         tenant_id=incident.tenant_id,
@@ -68,7 +70,27 @@ def _to_response(incident: Incident) -> IncidentResponse:
         tags=incident.tags,
         created_at=incident.created_at,
         updated_at=incident.updated_at,
+        hosts=summary.hosts,
+        severity=summary.severity,
     )
+
+
+async def _after_analyst_action(db: AsyncSession, current_user: CurrentUser, incident: Incident) -> Incident:
+    """
+    An analyst just changed this incident: move it OPEN -> INVESTIGATING
+    and return it as it now stands. Route handlers only — see
+    services/incidents.py::mark_investigating_on_analyst_action for why
+    the service functions themselves (shared with SOAR) never do this.
+    """
+    if await mark_investigating_on_analyst_action(db, current_user.tenant_id, incident.id, current_user.user_id):
+        return await get_incident(db, current_user.tenant_id, incident.id)
+    return incident
+
+
+async def _respond(incident: Incident) -> IncidentResponse:
+    """Single-incident response — every endpoint returns hosts/severity, so the UI never sees them blank out."""
+    summaries = await summarize_incidents([incident])
+    return _to_response(incident, summaries[incident.id])
 
 
 def _note_to_response(note: IncidentNote) -> IncidentNoteResponse:
@@ -89,7 +111,7 @@ async def create(
 ):
     """Manually open an incident, independent of correlation-chain auto-detection (SS-031)."""
     incident = await create_incident(db, current_user.tenant_id, payload.alert_ids, actor_user_id=current_user.user_id)
-    return _to_response(incident)
+    return await _respond(incident)
 
 
 @router.get("", response_model=IncidentListResponse)
@@ -102,12 +124,14 @@ async def list_all(
 ):
     """List incidents scoped to the authenticated tenant, newest first."""
     incidents, total = await list_incidents(db, current_user.tenant_id, status=status, page=page, size=size)
+    # One batched alert lookup for the whole page, not one per incident.
+    summaries = await summarize_incidents(incidents)
     return IncidentListResponse(
         total=total,
         page=page,
         size=size,
         pages=(total + size - 1) // size if total else 0,
-        incidents=[_to_response(incident) for incident in incidents],
+        incidents=[_to_response(incident, summaries[incident.id]) for incident in incidents],
     )
 
 
@@ -119,7 +143,7 @@ async def get_one(
 ):
     """Fetch a single incident scoped to the authenticated tenant."""
     incident = await get_incident(db, current_user.tenant_id, incident_id)
-    return _to_response(incident)
+    return await _respond(incident)
 
 
 @router.post("/{incident_id}/transitions", response_model=IncidentResponse)
@@ -137,7 +161,7 @@ async def transition(
     incident = await transition_incident(
         db, current_user.tenant_id, incident_id, payload.to_status, current_user.user_id
     )
-    return _to_response(incident)
+    return await _respond(incident)
 
 
 @router.post("/{incident_id}/assign", response_model=IncidentResponse)
@@ -151,7 +175,8 @@ async def assign(
     incident = await assign_incident(
         db, current_user.tenant_id, incident_id, payload.assignee_user_id, actor_user_id=current_user.user_id
     )
-    return _to_response(incident)
+    incident = await _after_analyst_action(db, current_user, incident)
+    return await _respond(incident)
 
 
 @router.post("/{incident_id}/tags", response_model=IncidentResponse)
@@ -163,7 +188,8 @@ async def set_tags_route(
 ):
     """Replace an incident's free-form tags (SS-106). Audit-logged; visible in the SS-099 timeline."""
     incident = await set_tags(db, current_user.tenant_id, incident_id, payload.tags, actor_user_id=current_user.user_id)
-    return _to_response(incident)
+    incident = await _after_analyst_action(db, current_user, incident)
+    return await _respond(incident)
 
 
 @router.post("/{incident_id}/alerts", response_model=IncidentResponse)
@@ -185,7 +211,8 @@ async def link_alert_route(
         incident, accepted, rejected = await link_alerts(
             db, current_user.tenant_id, incident_id, payload.alert_ids, actor_user_id=current_user.user_id
         )
-        response = _to_response(incident)
+        incident = await _after_analyst_action(db, current_user, incident)
+        response = await _respond(incident)
         response.accepted_alert_ids = accepted
         response.rejected_alert_ids = rejected
         return response
@@ -193,7 +220,8 @@ async def link_alert_route(
     incident = await link_alert(
         db, current_user.tenant_id, incident_id, payload.alert_id, actor_user_id=current_user.user_id
     )
-    return _to_response(incident)
+    incident = await _after_analyst_action(db, current_user, incident)
+    return await _respond(incident)
 
 
 @router.post("/{incident_id}/notes", response_model=IncidentNoteResponse, status_code=201)
@@ -205,6 +233,7 @@ async def add_note_route(
 ):
     """Append an immutable, timestamped analyst note to an incident."""
     note = await add_note(db, current_user.tenant_id, incident_id, current_user.user_id, payload.body)
+    await mark_investigating_on_analyst_action(db, current_user.tenant_id, incident_id, current_user.user_id)
     return _note_to_response(note)
 
 

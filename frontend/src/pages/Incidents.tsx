@@ -8,16 +8,19 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Layout from '../components/Layout';
 import PageHeader from '../components/PageHeader';
+import LevelBadge from '../components/LevelBadge';
 import StatusBadge from '../components/StatusBadge';
 import EmptyState from '../components/EmptyState';
 import TableSkeleton from '../components/TableSkeleton';
 import { ChevronLeftIcon, ChevronRightIcon, IncidentIcon } from '../components/icons';
 import { api } from '../lib/api';
-import { formatDateTime, formatRelativeTime } from '../lib/format';
+import { categoryLabel, hostsLabel } from '../lib/format';
+import Timestamp from '../components/Timestamp';
 import type { Incident, IncidentListResponse, IncidentStatus } from '../lib/types';
 
 const STATUSES: IncidentStatus[] = ['open', 'investigating', 'resolved', 'false_positive'];
 const PAGE_SIZE = 50;
+const COLUMN_COUNT = 9;
 
 export default function Incidents() {
   const [status, setStatus] = useState('');
@@ -92,6 +95,10 @@ export default function Incidents() {
             <thead className="bg-slate-900/80 text-xs uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="px-4 py-3 font-medium">Incident</th>
+                <th className="px-4 py-3 font-medium">Title / Category</th>
+                <th className="px-4 py-3 font-medium">Host</th>
+                <th className="px-4 py-3 font-medium">Severity</th>
+                <th className="px-4 py-3 font-medium">Confidence</th>
                 <th className="px-4 py-3 font-medium">Status</th>
                 <th className="px-4 py-3 font-medium">Alerts</th>
                 <th className="px-4 py-3 font-medium">Created</th>
@@ -100,10 +107,10 @@ export default function Incidents() {
             </thead>
             <tbody>
               {isLoading ? (
-                <TableSkeleton rows={8} columns={5} />
+                <TableSkeleton rows={8} columns={COLUMN_COUNT} />
               ) : incidents.length === 0 ? (
                 <tr>
-                  <td colSpan={5}>
+                  <td colSpan={COLUMN_COUNT}>
                     <EmptyState
                       icon={<IncidentIcon className="h-10 w-10 text-slate-700" />}
                       title="No incidents match these filters"
@@ -119,20 +126,34 @@ export default function Incidents() {
                         {incident.id.slice(0, 8)}
                       </Link>
                     </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-slate-200">{categoryLabel(incident.category)}</td>
+                    <td
+                      className="whitespace-nowrap px-4 py-3 font-mono text-xs text-slate-300"
+                      title={incident.hosts.length > 1 ? incident.hosts.join(', ') : undefined}
+                    >
+                      {hostsLabel(incident.hosts)}
+                    </td>
+                    <td className="px-4 py-3">
+                      {incident.severity ? <LevelBadge level={incident.severity} /> : <span className="text-slate-600">—</span>}
+                    </td>
+                    <td className="px-4 py-3 tabular-nums text-slate-300">
+                      {incident.confidence === null ? (
+                        <span className="text-slate-600">—</span>
+                      ) : (
+                        `${Math.round(incident.confidence * 100)}%`
+                      )}
+                    </td>
                     <td className="px-4 py-3">
                       <StatusBadge status={incident.status} />
                     </td>
-                    <td className="px-4 py-3 text-slate-300">
-                      {incident.alert_ids.length}
-                      {incident.alert_ids.length > 1 && (
-                        <span className="ml-1.5 rounded bg-slate-800 px-1.5 py-0.5 text-xs text-slate-400">chain</span>
-                      )}
+                    <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-300">
+                      {incident.alert_ids.length} alert{incident.alert_ids.length === 1 ? '' : 's'}
                     </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-slate-400" title={formatDateTime(incident.created_at)}>
-                      {formatRelativeTime(incident.created_at)}
+                    <td className="whitespace-nowrap px-4 py-3 text-slate-400">
+                      <Timestamp iso={incident.created_at} format="relative" />
                     </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-slate-400" title={formatDateTime(incident.updated_at)}>
-                      {formatRelativeTime(incident.updated_at)}
+                    <td className="whitespace-nowrap px-4 py-3 text-slate-400">
+                      <Timestamp iso={incident.updated_at} format="relative" />
                     </td>
                   </tr>
                 ))

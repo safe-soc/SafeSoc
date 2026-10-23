@@ -4,14 +4,19 @@
  * every filter the backend already supports (severity, log_type,
  * source, host, timerange) — not a subset (AC).
  *
- * The quick-search box is a client-side filter over the currently
- * loaded page only — the backend's alert search has no free-text
- * query parameter wired to this router (only the structured filters
- * below), so "search" here narrows what's already on screen rather
- * than querying the server, and is labeled that way in the UI.
+ * The search box is a real server-side search: it sends `q` (debounced
+ * 300 ms) to GET /api/v1/alerts, which matches it case-insensitively
+ * against host, user, action, description, source/destination IP, rule
+ * id and MITRE technique, combined with every other filter — so
+ * pagination and the total reflect the search, not just this page.
+ *
+ * Triage: Acknowledge, or Dismiss with a reason (a note is required for
+ * "Other"); a dismissed alert shows its reason and can be restored with
+ * Undo. The Triage filter (untriaged / acknowledged / dismissed) is also
+ * applied server-side.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import Layout from '../components/Layout';
 import PageHeader from '../components/PageHeader';
@@ -20,10 +25,23 @@ import EmptyState from '../components/EmptyState';
 import TableSkeleton from '../components/TableSkeleton';
 import { AlertIcon, ChevronLeftIcon, ChevronRightIcon, SearchIcon } from '../components/icons';
 import { api } from '../lib/api';
-import { formatDateTime } from '../lib/format';
-import { LOG_SOURCES, LOG_TYPES, SEVERITIES, type Alert, type AlertAnnotation, type AlertSearchResponse } from '../lib/types';
+import { dismissReasonLabel } from '../lib/format';
+import Timestamp from '../components/Timestamp';
+import {
+  DISMISS_REASONS,
+  LOG_SOURCES,
+  LOG_TYPES,
+  SEVERITIES,
+  TRIAGE_STATUSES,
+  type Alert,
+  type AlertAnnotation,
+  type AlertSearchResponse,
+  type DismissReason,
+} from '../lib/types';
 
 const PAGE_SIZE = 50;
+const SEARCH_DEBOUNCE_MS = 300;
+const DISMISS_NOTE_MAX_LENGTH = 500;
 
 const selectClasses =
   'rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-sm text-slate-100 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500';
@@ -39,9 +57,13 @@ export default function Alerts() {
   const [logType, setLogType] = useState('');
   const [source, setSource] = useState('');
   const [hostId, setHostId] = useState(() => searchParams.get('host_id') ?? '');
+  const [triage, setTriage] = useState('');
   const [timerangeHours, setTimerangeHours] = useState(24);
   const [page, setPage] = useState(1);
-  const [quickSearch, setQuickSearch] = useState('');
+  // What's typed vs. what's been sent: `q` only follows `searchInput`
+  // after a 300 ms pause, so each keystroke doesn't fire a request.
+  const [searchInput, setSearchInput] = useState('');
+  const [q, setQ] = useState('');
 
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [total, setTotal] = useState(0);
@@ -49,6 +71,16 @@ export default function Alerts() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [triageAlertId, setTriageAlertId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const next = searchInput.trim();
+    if (next === q) return;
+    const timer = setTimeout(() => {
+      setQ(next);
+      setPage(1);
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [searchInput, q]);
 
   useEffect(() => {
     let cancelled = false;
@@ -60,6 +92,8 @@ export default function Alerts() {
     if (logType) params.log_type = logType;
     if (source) params.source = source;
     if (hostId) params.host_id = hostId;
+    if (triage) params.triage = triage;
+    if (q) params.q = q;
 
     api
       .get<AlertSearchResponse>('/api/v1/alerts', { params })
@@ -79,31 +113,26 @@ export default function Alerts() {
     return () => {
       cancelled = true;
     };
-  }, [severity, logType, source, hostId, timerangeHours, page]);
+  }, [severity, logType, source, hostId, triage, q, timerangeHours, page]);
 
-  const visibleAlerts = useMemo(() => {
-    const needle = quickSearch.trim().toLowerCase();
-    if (!needle) return alerts;
-    return alerts.filter((alert) =>
-      [alert.host_id, alert.action, alert.description, alert.user].some((field) =>
-        field?.toLowerCase().includes(needle),
-      ),
-    );
-  }, [alerts, quickSearch]);
-
-  const handleTriage = async (alertId: string, action: 'acknowledge' | 'dismiss') => {
+  const handleTriage = async (
+    alertId: string,
+    action: 'acknowledge' | 'dismiss' | 'restore',
+    body?: { reason: DismissReason; note?: string },
+  ): Promise<boolean> => {
     setTriageAlertId(alertId);
     try {
-      const response = await api.post<AlertAnnotation>(`/api/v1/alerts/${alertId}/${action}`);
+      const response = await api.post<AlertAnnotation>(`/api/v1/alerts/${alertId}/${action}`, body);
+      const { acknowledged, dismissed, dismiss_reason, dismiss_note } = response.data;
       setAlerts((prev) =>
         prev.map((alert) =>
-          alert.alert_id === alertId
-            ? { ...alert, acknowledged: response.data.acknowledged, dismissed: response.data.dismissed }
-            : alert,
+          alert.alert_id === alertId ? { ...alert, acknowledged, dismissed, dismiss_reason, dismiss_note } : alert,
         ),
       );
+      return true;
     } catch {
       setError(`Failed to ${action} that alert.`);
+      return false;
     } finally {
       setTriageAlertId(null);
     }
@@ -114,7 +143,7 @@ export default function Alerts() {
     setPage(1);
   };
 
-  const hasActiveFilters = Boolean(severity || logType || source || hostId);
+  const hasActiveFilters = Boolean(severity || logType || source || hostId || triage || searchInput);
   const rangeStart = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
   const rangeEnd = Math.min(page * PAGE_SIZE, total);
 
@@ -127,11 +156,13 @@ export default function Alerts() {
           <div className="relative">
             <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
             <input
-              type="text"
-              placeholder="Quick search (this page)…"
-              value={quickSearch}
-              onChange={(e) => setQuickSearch(e.target.value)}
-              className="w-56 rounded-lg border border-slate-700 bg-slate-800 py-1.5 pl-8 pr-2.5 text-sm text-slate-100 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              type="search"
+              aria-label="Search alerts"
+              placeholder="Search alerts (host, user, IP, action…)"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              maxLength={200}
+              className="w-72 max-w-full rounded-lg border border-slate-700 bg-slate-800 py-1.5 pl-8 pr-2.5 text-sm text-slate-100 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             />
           </div>
 
@@ -160,6 +191,20 @@ export default function Alerts() {
             {LOG_SOURCES.map((s) => (
               <option key={s} value={s}>
                 {s}
+              </option>
+            ))}
+          </select>
+
+          <select
+            aria-label="Triage status"
+            value={triage}
+            onChange={(e) => resetToFirstPage(setTriage)(e.target.value)}
+            className={selectClasses}
+          >
+            <option value="">All triage</option>
+            {TRIAGE_STATUSES.map((t) => (
+              <option key={t} value={t}>
+                {t.charAt(0).toUpperCase() + t.slice(1)}
               </option>
             ))}
           </select>
@@ -196,6 +241,9 @@ export default function Alerts() {
                 setLogType('');
                 setSource('');
                 setHostId('');
+                setTriage('');
+                setSearchInput('');
+                setQ('');
                 setPage(1);
               }}
               className="text-sm text-slate-500 hover:text-slate-300"
@@ -227,25 +275,25 @@ export default function Alerts() {
             <tbody>
               {isLoading ? (
                 <TableSkeleton rows={10} columns={9} />
-              ) : visibleAlerts.length === 0 ? (
+              ) : alerts.length === 0 ? (
                 <tr>
                   <td colSpan={9}>
                     <EmptyState
                       icon={<AlertIcon className="h-10 w-10 text-slate-700" />}
-                      title={quickSearch ? 'No alerts match your search' : 'No alerts match these filters'}
+                      title={q ? 'No alerts match your search' : 'No alerts match these filters'}
                       description={
-                        quickSearch
-                          ? 'Try a different term, or clear the quick search box.'
+                        q
+                          ? 'Try a different term, widen the time range, or clear the search.'
                           : 'Try widening the time range or clearing a filter.'
                       }
                     />
                   </td>
                 </tr>
               ) : (
-                visibleAlerts.map((alert) => (
+                alerts.map((alert) => (
                   <tr key={alert.alert_id} className="border-t border-slate-800/70 transition-colors hover:bg-slate-900/50">
-                    <td className="whitespace-nowrap px-4 py-2.5 text-slate-400" title={alert.timestamp}>
-                      {formatDateTime(alert.timestamp)}
+                    <td className="whitespace-nowrap px-4 py-2.5 text-slate-400">
+                      <Timestamp iso={alert.timestamp} />
                     </td>
                     <td className="px-4 py-2.5">
                       <LevelBadge level={alert.severity} />
@@ -258,31 +306,14 @@ export default function Alerts() {
                       {alert.description}
                     </td>
                     <td className="px-4 py-2.5 text-slate-400">{alert.user}</td>
-                    <td className="whitespace-nowrap px-4 py-2.5">
-                      {alert.dismissed ? (
-                        <span className="text-xs text-slate-500">Dismissed</span>
-                      ) : alert.acknowledged ? (
-                        <span className="text-xs text-green-400">Acknowledged</span>
-                      ) : (
-                        <div className="flex gap-2">
-                          <button
-                            type="button"
-                            disabled={triageAlertId === alert.alert_id}
-                            onClick={() => handleTriage(alert.alert_id, 'acknowledge')}
-                            className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
-                          >
-                            Acknowledge
-                          </button>
-                          <button
-                            type="button"
-                            disabled={triageAlertId === alert.alert_id}
-                            onClick={() => handleTriage(alert.alert_id, 'dismiss')}
-                            className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-500 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
-                          >
-                            Dismiss
-                          </button>
-                        </div>
-                      )}
+                    <td className="whitespace-nowrap px-4 py-2.5 align-top">
+                      <TriageCell
+                        alert={alert}
+                        isBusy={triageAlertId === alert.alert_id}
+                        onAcknowledge={() => handleTriage(alert.alert_id, 'acknowledge')}
+                        onDismiss={(reason, note) => handleTriage(alert.alert_id, 'dismiss', { reason, note })}
+                        onRestore={() => handleTriage(alert.alert_id, 'restore')}
+                      />
                     </td>
                   </tr>
                 ))
@@ -321,5 +352,152 @@ export default function Alerts() {
         </div>
       </div>
     </Layout>
+  );
+}
+
+const triageButtonClasses =
+  'rounded-md border border-slate-700 px-2 py-1 text-xs transition-colors hover:bg-slate-800 focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-40';
+
+/**
+ * One row's triage controls. Dismiss opens an inline reason picker in
+ * the cell itself (not an absolutely positioned popover, which the
+ * table's overflow container would clip on the last rows). Radios and
+ * real buttons keep it keyboard-operable; Escape cancels and returns
+ * focus to the Dismiss button.
+ */
+function TriageCell({
+  alert,
+  isBusy,
+  onAcknowledge,
+  onDismiss,
+  onRestore,
+}: {
+  alert: Alert;
+  isBusy: boolean;
+  onAcknowledge: () => void;
+  onDismiss: (reason: DismissReason, note?: string) => Promise<boolean>;
+  onRestore: () => void;
+}) {
+  const [isPicking, setIsPicking] = useState(false);
+  const [reason, setReason] = useState<DismissReason>('false_positive');
+  const [note, setNote] = useState('');
+  const dismissButtonRef = useRef<HTMLButtonElement>(null);
+
+  const trimmedNote = note.trim();
+  const canConfirm = !isBusy && (reason !== 'other' || trimmedNote.length > 0);
+
+  const reset = () => {
+    setIsPicking(false);
+    setReason('false_positive');
+    setNote('');
+  };
+
+  const cancel = () => {
+    reset();
+    requestAnimationFrame(() => dismissButtonRef.current?.focus());
+  };
+
+  const confirm = async () => {
+    if (!canConfirm) return;
+    if (await onDismiss(reason, trimmedNote || undefined)) reset();
+  };
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLFieldSetElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      cancel();
+    }
+  };
+
+  if (alert.dismissed) {
+    const label = alert.dismiss_reason ? dismissReasonLabel(alert.dismiss_reason) : null;
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-slate-500" title={alert.dismiss_note ?? undefined}>
+          Dismissed{label ? ` · ${label}` : ''}
+        </span>
+        <button type="button" disabled={isBusy} onClick={onRestore} className={`${triageButtonClasses} text-slate-300`}>
+          Undo
+        </button>
+      </div>
+    );
+  }
+
+  if (alert.acknowledged) {
+    return <span className="text-xs text-green-400">Acknowledged</span>;
+  }
+
+  if (isPicking) {
+    return (
+      <fieldset
+        onKeyDown={handleKeyDown}
+        className="w-56 space-y-2 whitespace-normal rounded-lg border border-slate-700 bg-slate-900 p-2.5"
+      >
+        <legend className="sr-only">Dismiss reason</legend>
+        <p className="text-xs font-medium text-slate-300">Dismiss as…</p>
+        {DISMISS_REASONS.map((value, index) => (
+          <label key={value} className="flex cursor-pointer items-center gap-2 text-xs text-slate-300">
+            <input
+              type="radio"
+              name={`dismiss-reason-${alert.alert_id}`}
+              value={value}
+              checked={reason === value}
+              onChange={() => setReason(value)}
+              autoFocus={index === 0}
+              className="accent-blue-500"
+            />
+            {dismissReasonLabel(value)}
+          </label>
+        ))}
+        {reason === 'other' && (
+          <input
+            type="text"
+            aria-label="Dismiss note"
+            placeholder="Note (required)"
+            value={note}
+            maxLength={DISMISS_NOTE_MAX_LENGTH}
+            onChange={(e) => setNote(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                void confirm();
+              }
+            }}
+            className="w-full rounded-md border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-100 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          />
+        )}
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" onClick={cancel} className={`${triageButtonClasses} text-slate-400`}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={!canConfirm}
+            onClick={() => void confirm()}
+            className={`${triageButtonClasses} border-slate-600 bg-slate-800 text-slate-100`}
+          >
+            {isBusy ? 'Dismissing…' : 'Dismiss'}
+          </button>
+        </div>
+      </fieldset>
+    );
+  }
+
+  return (
+    <div className="flex gap-2">
+      <button type="button" disabled={isBusy} onClick={onAcknowledge} className={`${triageButtonClasses} text-slate-300`}>
+        Acknowledge
+      </button>
+      <button
+        ref={dismissButtonRef}
+        type="button"
+        disabled={isBusy}
+        aria-haspopup="true"
+        onClick={() => setIsPicking(true)}
+        className={`${triageButtonClasses} text-slate-500`}
+      >
+        Dismiss…
+      </button>
+    </div>
   );
 }

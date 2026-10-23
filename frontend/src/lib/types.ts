@@ -13,6 +13,14 @@ export const LOG_TYPES: LogType[] = ['authentication', 'network', 'process', 'fi
 export type LogSource = 'wazuh' | 'synthetic' | 'aws_cloudtrail' | 'aws_guardduty' | 'cloudlens';
 export const LOG_SOURCES: LogSource[] = ['wazuh', 'synthetic', 'aws_cloudtrail', 'aws_guardduty', 'cloudlens'];
 
+// Why an alert was dismissed (backend core/enums.py DismissReason).
+export type DismissReason = 'false_positive' | 'expected_activity' | 'duplicate' | 'other';
+export const DISMISS_REASONS: DismissReason[] = ['false_positive', 'expected_activity', 'duplicate', 'other'];
+
+// GET /api/v1/alerts?triage= (backend core/enums.py TriageStatus).
+export type TriageStatus = 'untriaged' | 'acknowledged' | 'dismissed';
+export const TRIAGE_STATUSES: TriageStatus[] = ['untriaged', 'acknowledged', 'dismissed'];
+
 export interface Alert {
   alert_id: string;
   tenant_id: string;
@@ -33,13 +41,18 @@ export interface Alert {
   // (SS-107) — default false for an alert with no annotation row yet.
   acknowledged?: boolean;
   dismissed?: boolean;
+  // Set while dismissed; the note is required for reason "other".
+  dismiss_reason?: DismissReason | null;
+  dismiss_note?: string | null;
 }
 
-// POST /api/v1/alerts/{id}/acknowledge, .../dismiss (SS-107)
+// POST /api/v1/alerts/{id}/acknowledge, .../dismiss, .../restore (SS-107)
 export interface AlertAnnotation {
   alert_id: string;
   acknowledged: boolean;
   dismissed: boolean;
+  dismiss_reason: DismissReason | null;
+  dismiss_note: string | null;
   updated_by_user_id: string;
   updated_at: string;
 }
@@ -75,15 +88,31 @@ export const ALLOWED_TRANSITIONS: Record<IncidentStatus, IncidentStatus[]> = {
   false_positive: [],
 };
 
+// Correlation-engine chain patterns (backend core/enums.py CorrelationPattern).
+export type CorrelationPattern =
+  | 'credential_brute_force'
+  | 'successful_compromise'
+  | 'recon_to_exploitation'
+  | 'privilege_escalation'
+  | 'data_exfiltration'
+  | 'lateral_movement';
+
 export interface Incident {
   id: string;
   tenant_id: string;
   status: IncidentStatus;
   alert_ids: string[];
   assigned_analyst_id: string | null;
-  // SS-094: the detected chain's confidence at creation/last merge —
-  // null for a manually-created incident, which has no detected chain.
+  // SS-094: the detected chain's pattern and confidence at creation/last
+  // merge — null for a manually-created incident, which has no detected chain.
+  category: CorrelationPattern | null;
   confidence: number | null;
+  // Read-only, derived server-side from the linked alerts on every read:
+  // hosts ordered by alert count (most first, CloudLens resources
+  // excluded); severity is the highest linked alert severity, null when
+  // none of the alerts resolve.
+  hosts: string[];
+  severity: Severity | null;
   // SS-106: free-form analyst-authored labels.
   tags: string[];
   created_at: string;

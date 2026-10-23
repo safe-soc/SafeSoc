@@ -20,7 +20,7 @@ import EmptyState from '../components/EmptyState';
 import TableSkeleton from '../components/TableSkeleton';
 import { AlertIcon, ComplianceIcon, EndpointIcon, IncidentIcon, LayersIcon } from '../components/icons';
 import { api } from '../lib/api';
-import { formatDateTime } from '../lib/format';
+import Timestamp from '../components/Timestamp';
 import type { CompliancePostureResponse, ComplianceFrameworkSummary } from '../lib/types';
 
 function FrameworkCard({ framework }: { framework: ComplianceFrameworkSummary }) {
@@ -138,7 +138,7 @@ export default function Compliance() {
                     <td className="max-w-sm px-4 py-2.5 text-slate-400" title={req.evidence_summary}>
                       <span className="line-clamp-2">{req.evidence_summary}</span>
                     </td>
-                    <td className="px-4 py-2.5 whitespace-nowrap text-slate-500">{formatDateTime(req.last_evaluated)}</td>
+                    <td className="px-4 py-2.5 whitespace-nowrap text-slate-500"><Timestamp iso={req.last_evaluated} /></td>
                     <td className="px-4 py-2.5 text-right">
                       <Link to={`/compliance/${req.id}`} className="text-xs font-medium text-blue-400 hover:text-blue-300 hover:underline">
                         View

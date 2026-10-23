@@ -25,11 +25,14 @@ export default function SeverityDistributionChart({ summary }: { summary: AlertS
   const bySeverity = summary?.by_severity ?? {};
 
   // Preserve the low->critical ordering regardless of bucket order returned
-  // by the backend; only include severities actually present in the window.
+  // by the backend. The legend always lists all four severities, zeros
+  // included, so "no critical alerts" reads as 0 rather than a missing
+  // row; only the donut skips zero slices, which can't render.
   const counts = SEVERITIES.map((severity) => ({
     name: severity,
     value: bySeverity[severity] ?? 0,
-  })).filter((entry) => entry.value > 0);
+  }));
+  const slices = counts.filter((entry) => entry.value > 0);
 
   // Buckets not recognized as one of the 4 known severities (shouldn't
   // occur — NormalizedLog validation rejects anything else at ingestion —
@@ -44,14 +47,14 @@ export default function SeverityDistributionChart({ summary }: { summary: AlertS
         <div className="flex h-56 items-center justify-center">
           <Spinner className="h-5 w-5 text-slate-600" />
         </div>
-      ) : counts.length === 0 ? (
+      ) : total === 0 ? (
         <div className="flex h-56 items-center justify-center text-sm text-slate-500">No alerts in this window.</div>
       ) : (
         <div className="flex items-center gap-4">
           <ResponsiveContainer width="55%" height={200}>
             <PieChart>
-              <Pie data={counts} dataKey="value" nameKey="name" innerRadius={50} outerRadius={80} paddingAngle={2}>
-                {counts.map((entry) => (
+              <Pie data={slices} dataKey="value" nameKey="name" innerRadius={50} outerRadius={80} paddingAngle={2}>
+                {slices.map((entry) => (
                   <Cell key={entry.name} fill={COLORS[entry.name]} stroke="#0f172a" strokeWidth={2} />
                 ))}
               </Pie>
@@ -69,7 +72,7 @@ export default function SeverityDistributionChart({ summary }: { summary: AlertS
                   {entry.name}
                 </span>
                 <span className="font-medium tabular-nums text-slate-100">
-                  {entry.value} <span className="text-slate-500">({Math.round((entry.value / total) * 100)}%)</span>
+                  {entry.value} <span className="text-slate-500">({total > 0 ? Math.round((entry.value / total) * 100) : 0}%)</span>
                 </span>
               </li>
             ))}
