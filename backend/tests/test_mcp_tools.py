@@ -40,6 +40,19 @@ def test_every_tool_has_a_name_description_and_typed_schemas():
         assert tool.output_model is not None
 
 
+@pytest.fixture(autouse=True)
+def _no_incidents(monkeypatch):
+    """Snapshot/overview also list incidents (Postgres); default to none. Tests that care override this."""
+    monkeypatch.setattr("app.mcp.tools.list_incidents", AsyncMock(return_value=([], 0)))
+
+
+def _assert_searched_with(mock_search, **expected):
+    """The (only) search_alerts call included these kwargs; other kwargs (aggregations, window) are free."""
+    kwargs = mock_search.call_args.kwargs
+    for key, value in expected.items():
+        assert kwargs.get(key) == value, f"{key}={kwargs.get(key)!r}, expected {value!r}"
+
+
 # ── auth_failures ─────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -53,8 +66,9 @@ async def test_auth_failures_queries_search_alerts_with_failed_login_action(monk
     assert isinstance(result, AlertListOutput)
     assert result.total == 2
     assert result.truncated is False  # total == len(alerts) — nothing left out
-    mock_search.assert_called_once_with(
-        tenant_id=str(tenant_id), action="failed_login", host_id="DESKTOP-042", timerange_hours=24, size=100
+    mock_search.assert_called_once()
+    _assert_searched_with(
+        mock_search, tenant_id=str(tenant_id), action="failed_login", host_id="DESKTOP-042", timerange_hours=24, size=100
     )
 
 
@@ -78,7 +92,7 @@ async def test_alert_list_tool_reports_truncated_when_total_exceeds_returned_ale
 # ── ip_activity ───────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_ip_activity_queries_search_alerts_by_source_ip(monkeypatch):
+async def test_ip_activity_queries_search_alerts_by_source_or_destination_ip(monkeypatch):
     mock_search = AsyncMock(return_value={"total": 1, "alerts": [{"alert_id": "a1"}]})
     monkeypatch.setattr("app.mcp.tools.search_alerts", mock_search)
     tenant_id = uuid.uuid4()
@@ -86,9 +100,10 @@ async def test_ip_activity_queries_search_alerts_by_source_ip(monkeypatch):
     result = await TOOLS[Intent.IP_ACTIVITY].call(None, tenant_id, {"ip": "45.33.32.156"})
 
     assert result.total == 1
-    mock_search.assert_called_once_with(
-        tenant_id=str(tenant_id), source_ip="45.33.32.156", timerange_hours=24, size=100
-    )
+    mock_search.assert_called_once()
+    # `ip` (source OR destination), not source_ip alone.
+    _assert_searched_with(mock_search, tenant_id=str(tenant_id), ip="45.33.32.156", timerange_hours=24, size=100)
+    assert "source_ip" not in mock_search.call_args.kwargs
 
 
 @pytest.mark.asyncio
@@ -164,7 +179,10 @@ async def test_top_alerts_passes_through_severity_filter(monkeypatch):
 
     await TOOLS[Intent.TOP_ALERTS].call(None, tenant_id, {"severity": "critical"})
 
-    mock_search.assert_called_once_with(tenant_id=str(tenant_id), severity="critical", timerange_hours=24, size=20)
+    mock_search.assert_called_once()
+    _assert_searched_with(
+        mock_search, tenant_id=str(tenant_id), severity="critical", timerange_hours=24, size=20, sort_by_severity=True
+    )
 
 
 # ── user_activity ─────────────────────────────────────────────────
@@ -177,7 +195,9 @@ async def test_user_activity_queries_search_alerts_by_user(monkeypatch):
 
     await TOOLS[Intent.USER_ACTIVITY].call(None, tenant_id, {"user": "john.doe"})
 
-    mock_search.assert_called_once_with(tenant_id=str(tenant_id), user="john.doe", timerange_hours=24, size=100)
+    mock_search.assert_called_once()
+    _assert_searched_with(mock_search, tenant_id=str(tenant_id), user="john.doe", timerange_hours=24, size=100)
+    assert "action" not in mock_search.call_args.kwargs  # every alert type for the account
 
 
 # ── cloud_events ──────────────────────────────────────────────────
@@ -190,7 +210,8 @@ async def test_cloud_events_queries_search_alerts_by_cloudlens_source(monkeypatc
 
     await TOOLS[Intent.CLOUD_EVENTS].call(None, tenant_id, {})
 
-    mock_search.assert_called_once_with(tenant_id=str(tenant_id), source="cloudlens", timerange_hours=24, size=50)
+    mock_search.assert_called_once()
+    _assert_searched_with(mock_search, tenant_id=str(tenant_id), source="cloudlens", timerange_hours=24, size=50)
 
 
 # ── risky_endpoints ───────────────────────────────────────────────
@@ -242,9 +263,12 @@ async def test_attack_chain_status_reuses_list_incidents(monkeypatch):
 
     assert isinstance(result, AttackChainStatusOutput)
     assert result.total == 1
-    assert result.incidents[0]["alert_ids"] == ["a1", "a2"]
+    assert result.incidents[0]["alert_count"] == 2
+    assert result.active_count == 1
     assert result.truncated is False  # total == len(incidents)
-    mock_list.assert_called_once_with(None, tenant_id, status=IncidentStatus.OPEN)
+    mock_list.assert_called_once()
+    assert mock_list.call_args.args == (None, tenant_id)
+    assert mock_list.call_args.kwargs["status"] == IncidentStatus.OPEN
 
 
 @pytest.mark.asyncio

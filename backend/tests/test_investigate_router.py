@@ -706,13 +706,15 @@ def test_investigate_falls_back_to_a_templated_summary_when_the_llm_fails(client
     assert body["is_fallback"] is True
 
 
-def test_investigate_returns_an_explanatory_response_when_tool_validation_fails(client, auth_headers, monkeypatch):
+def test_investigate_asks_for_a_missing_parameter_when_tool_validation_fails(client, auth_headers, monkeypatch):
     """
     SS-085: a classified intent whose params fail the tool's own input
     validation (e.g. IP_ACTIVITY resolved without an `ip`) must not
     500. TOOLS is left unmocked here so the real MCPTool.call() raises
     a genuine pydantic.ValidationError for the missing required field,
-    before any handler/downstream query ever runs.
+    before any handler/downstream query ever runs. That is not a backend
+    failure, so the answer is a clarifying question, not "ran into a
+    problem retrieving the underlying data".
     """
     _mock_resolve_query(monkeypatch, Intent.IP_ACTIVITY)  # params default to {} — missing required "ip"
 
@@ -722,8 +724,9 @@ def test_investigate_returns_an_explanatory_response_when_tool_validation_fails(
     body = response.json()
     assert body["intent"] == "ip_activity"  # the classified intent is preserved
     assert body["data"] == {}
-    assert body["is_fallback"] is True
-    assert body["answer"]  # a real, explanatory message
+    assert body["is_fallback"] is False
+    assert body["answer"].startswith("Which IP address?")
+    assert "problem retrieving" not in body["answer"]
 
 
 def test_investigate_returns_an_explanatory_response_when_the_tool_call_hits_a_downstream_failure(

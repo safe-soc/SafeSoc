@@ -22,7 +22,8 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Optional
 
-from app.core.enums import LogSource, Severity
+from app.core.enums import CorrelationPattern, LogSource, Severity
+from app.core.mitre_mapping import incident_technique_ids
 from app.db.opensearch import get_alerts_by_ids
 from app.models.incident import Incident
 from app.utils.logger import get_logger
@@ -32,21 +33,45 @@ logger = get_logger(__name__)
 _SEVERITY_RANK = {Severity.LOW: 0, Severity.MEDIUM: 1, Severity.HIGH: 2, Severity.CRITICAL: 3}
 
 
+# Readable names for detected chain patterns, matching the frontend's
+# categoryLabel() (frontend/src/lib/format.ts).
+_CATEGORY_LABELS: dict[CorrelationPattern, str] = {
+    CorrelationPattern.CREDENTIAL_BRUTE_FORCE: "Credential brute force",
+    CorrelationPattern.SUCCESSFUL_COMPROMISE: "Successful compromise",
+    CorrelationPattern.RECON_TO_EXPLOITATION: "Recon to exploitation",
+    CorrelationPattern.PRIVILEGE_ESCALATION: "Privilege escalation",
+    CorrelationPattern.DATA_EXFILTRATION: "Data exfiltration",
+    CorrelationPattern.LATERAL_MOVEMENT: "Lateral movement",
+}
+
+
+def category_label(category: Optional[CorrelationPattern]) -> str:
+    """A detected chain's readable name; an incident with no category was opened manually."""
+    if category is None:
+        return "Manual incident"
+    return _CATEGORY_LABELS.get(category, category.value.replace("_", " ").capitalize())
+
+
 @dataclass(frozen=True)
 class IncidentSummary:
     hosts: list[str] = field(default_factory=list)
     severity: Optional[Severity] = None
+    # Every MITRE technique the incident maps to: its alerts' own ids
+    # plus its category's (core/mitre_mapping.incident_technique_ids).
+    mitre_techniques: list[str] = field(default_factory=list)
 
 
 def summarize_incident(incident: Incident, alerts_by_id: dict[str, dict]) -> IncidentSummary:
     """Hosts by alert count (most first, ties by name) and the highest alert severity."""
     host_counts: Counter[str] = Counter()
     best_severity: Optional[Severity] = None
+    alert_techniques: list[Optional[str]] = []
 
     for alert_id in incident.alert_ids:
         alert = alerts_by_id.get(alert_id)
         if not alert:
             continue
+        alert_techniques.append(alert.get("mitre_technique"))
 
         host_id = alert.get("host_id")
         # A CloudLens alert's host_id is the affected cloud resource id,
@@ -62,7 +87,11 @@ def summarize_incident(incident: Incident, alerts_by_id: dict[str, dict]) -> Inc
             best_severity = severity
 
     hosts = sorted(host_counts, key=lambda host: (-host_counts[host], host))
-    return IncidentSummary(hosts=hosts, severity=best_severity)
+    return IncidentSummary(
+        hosts=hosts,
+        severity=best_severity,
+        mitre_techniques=incident_technique_ids(alert_techniques, incident.category),
+    )
 
 
 async def summarize_incidents(incidents: list[Incident]) -> dict[uuid.UUID, IncidentSummary]:

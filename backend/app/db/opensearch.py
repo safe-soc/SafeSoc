@@ -268,6 +268,37 @@ def build_alert_search_clause(q: str) -> Optional[dict]:
     return {"bool": {"should": should, "minimum_should_match": 1}}
 
 
+# Severity rank for sort_by_severity: critical first. A script sort,
+# because severity is a keyword (alphabetical order would be wrong).
+_SEVERITY_SORT_SCRIPT = {
+    "_script": {
+        "type": "number",
+        "order": "desc",
+        "script": {
+            "lang": "painless",
+            "source": "doc['severity'].size() == 0 ? 0 : params.rank.getOrDefault(doc['severity'].value, 0)",
+            "params": {"rank": {"critical": 4, "high": 3, "medium": 2, "low": 1}},
+        },
+    }
+}
+
+# Fields search_alerts can return per-value counts for (aggregate_by).
+COUNTABLE_ALERT_FIELDS = frozenset({"severity", "log_type", "action", "host_id", "user", "source_ip", "destination_ip"})
+
+
+def _time_range_filter(timerange_hours: int, start: Optional[str], end: Optional[str]) -> dict:
+    """
+    A bounded [start, end) window when start is given (e.g. "yesterday"
+    is [yesterday 00:00, today 00:00) UTC), otherwise the trailing
+    timerange_hours. end defaults to now.
+    """
+    if start:
+        bounds = {"gte": start}
+        bounds["lt" if end else "lte"] = end or "now"
+        return {"range": {"timestamp": bounds}}
+    return {"range": {"timestamp": {"gte": f"now-{timerange_hours}h", "lte": "now"}}}
+
+
 async def search_alerts(
     tenant_id: str,
     severity: Optional[str] = None,
@@ -283,6 +314,13 @@ async def search_alerts(
     q: Optional[str] = None,
     alert_ids_include: Optional[list[str]] = None,
     alert_ids_exclude: Optional[list[str]] = None,
+    ip: Optional[str] = None,
+    severities: Optional[list[str]] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    sort_by_severity: bool = False,
+    aggregate_by: Optional[list[str]] = None,
+    aggregate_size: int = 10,
 ) -> dict:
     """
     Search alerts with mandatory tenant_id filter.
@@ -292,9 +330,16 @@ async def search_alerts(
     with every other filter. alert_ids_include/exclude restrict the
     results by id (the Alerts page's triage filter); an empty include
     list means nothing can match.
+
+    `ip` matches source_ip OR destination_ip. `severities` matches any
+    of several severities. `start`/`end` (ISO) select a bounded window
+    instead of the trailing timerange_hours. `sort_by_severity` orders
+    critical -> low, then newest. `aggregate_by` adds per-value counts
+    for those fields over ALL matches (not just this page), returned as
+    result["counts"][field] = {value: count}, in the same query.
     """
     if alert_ids_include is not None and not alert_ids_include:
-        return {"total": 0, "page": page, "size": size, "pages": 0, "alerts": []}
+        return {"total": 0, "page": page, "size": size, "pages": 0, "alerts": [], "counts": {}}
 
     client = get_client()
 
@@ -302,6 +347,8 @@ async def search_alerts(
 
     if severity:
         must_filters.append({"term": {"severity": severity}})
+    if severities:
+        must_filters.append({"terms": {"severity": list(severities)}})
     if log_type:
         must_filters.append({"term": {"log_type": log_type}})
     if source:
@@ -314,47 +361,55 @@ async def search_alerts(
         must_filters.append({"term": {"user": user}})
     if source_ip:
         must_filters.append({"term": {"source_ip": source_ip}})
+    if ip:
+        must_filters.append({
+            "bool": {"should": [{"term": {"source_ip": ip}}, {"term": {"destination_ip": ip}}], "minimum_should_match": 1}
+        })
     if alert_ids_include is not None:
         must_filters.append({"terms": {"alert_id": alert_ids_include}})
     search_clause = build_alert_search_clause(q) if q else None
     if search_clause:
         must_filters.append(search_clause)
 
-    range_filter = {
-        "range": {
-            "timestamp": {
-                "gte": f"now-{timerange_hours}h",
-                "lte": "now",
-            }
-        }
-    }
+    sort = [_SEVERITY_SORT_SCRIPT] if sort_by_severity else []
+    sort.append({"timestamp": {"order": "desc"}})
 
     query = {
         "query": {
             "bool": {
                 "must": must_filters,
-                "filter": [range_filter],
+                "filter": [_time_range_filter(timerange_hours, start, end)],
                 "must_not": [{"terms": {"alert_id": alert_ids_exclude}}] if alert_ids_exclude else [],
             }
         },
-        "sort": [{"timestamp": {"order": "desc"}}],
+        "sort": sort,
         "from": (page - 1) * size,
         "size": size,
         "track_total_hits": True,
     }
+    fields = [field for field in (aggregate_by or []) if field in COUNTABLE_ALERT_FIELDS]
+    if fields:
+        query["aggs"] = {f"by_{field}": {"terms": {"field": field, "size": aggregate_size}} for field in fields}
 
     # Search across all monthly indices
     response = client.search(index="safesoc-alerts-*", body=query)
 
     total = response["hits"]["total"]["value"]
     hits = [hit["_source"] for hit in response["hits"]["hits"]]
+    aggs = response.get("aggregations", {})
+    counts = {
+        field: {str(bucket["key"]): bucket["doc_count"] for bucket in aggs.get(f"by_{field}", {}).get("buckets", [])}
+        for field in fields
+    }
 
     return {
         "total": total,
         "page": page,
         "size": size,
-        "pages": (total + size - 1) // size,
+        # size=0 is a counts-only query (aggregate_by), not a page.
+        "pages": (total + size - 1) // size if size else 0,
         "alerts": hits,
+        "counts": counts,
     }
 
 

@@ -89,7 +89,8 @@ CONVERSATION = [
     ("what about yesterday?", TOOL, Intent.AUTH_FAILURES, {"host_id": "WIN10-FIN-07", **YESTERDAY}, set()),
     ("which users were involved?", TOOL, Intent.AUTH_FAILURES, {"host_id": "WIN10-FIN-07"}, set()),
     ("now show me UBUNTU-WEB-01", TOOL, Intent.AUTH_FAILURES, {"host_id": "UBUNTU-WEB-01"}, set()),
-    ("was the attack successful?", TOOL, Intent.AUTH_FAILURES, {"host_id": "UBUNTU-WEB-01"}, set()),
+    # "Was it successful?" needs every alert type on the host, not the failed-login search before it.
+    ("was the attack successful?", TOOL, Intent.ENDPOINT_SNAPSHOT, {"host_id": "UBUNTU-WEB-01"}, set()),
     ("show only high severity alerts from the last 2 hours", TOOL, Intent.TOP_ALERTS,
      {"severity": "high", "timerange_hours": 2}, {"host_id"}),
     ("failed logins for john.doe on UBUNTU-WEB-01", TOOL, Intent.AUTH_FAILURES,
@@ -277,7 +278,7 @@ def test_a_clarifying_turn_calls_no_tool_and_the_reply_completes_it(client, make
     snapshot = AsyncMock()
     monkeypatch.setattr("app.routers.v1.investigate.TOOLS", {Intent.ENDPOINT_SNAPSHOT: Mock(call=snapshot)})
 
-    question = client.post("/api/v1/investigate", json={"query": "is that host compromised?"}, headers=headers).json()
+    question = client.post("/api/v1/investigate", json={"query": "what's happening on that box?"}, headers=headers).json()
 
     assert question["answer"].startswith("Which host?")
     snapshot.assert_not_called()

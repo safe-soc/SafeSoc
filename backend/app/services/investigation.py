@@ -537,7 +537,7 @@ _REQUIRED_PARAM: dict[Intent, str] = {
 }
 
 
-def _clarifying_question(missing: str, known: KnownEntities) -> str:
+def clarifying_question(missing: str, known: KnownEntities) -> str:
     if missing == "host_id":
         examples = ", ".join(known.hosts[:3]) or "WIN10-FIN-07"
         return f"Which host? For example: {examples}"
@@ -635,6 +635,14 @@ async def append_turn(tenant_id: str, session_id: str, query: str, answer: str) 
 
 # ── Resolution ─────────────────────────────────────────────────────
 
+_SUCCESS_QUESTION_PATTERN = re.compile(
+    r"\bwas\s+(?:it|that|this|the\s+(?:attack|attempt|brute[- ]?force))\s+successful\b"
+    r"|\bcompromised\b"
+    r"|\bdid\s+(?:they|the\s+attackers?|anyone|someone|it|the\s+attack)\s+(?:get\s+in|break\s+in|succeed)\b"
+    r"|\bgot\s+in\b|\bbreached\b"
+)
+_WINDOW_KEYS = frozenset({"timerange_hours", "start", "end"})
+
 # Whole-word markers that make a topic-less query a follow-up.
 _FOLLOW_UP_MARKERS = (
     "what about", "how about", "and", "now", "also", "same for", "which users", "which hosts",
@@ -668,7 +676,7 @@ def _finalize(intent: Intent, params: dict, known: KnownEntities, notice: Option
     if missing and not params.get(missing):
         return Resolution(
             kind=QueryResolution.CLARIFY, intent=intent, params=params,
-            message=_clarifying_question(missing, known), missing=missing,
+            message=clarifying_question(missing, known), missing=missing,
         )
     return Resolution(kind=QueryResolution.TOOL, intent=intent, params=params, notice=notice)
 
@@ -707,6 +715,20 @@ async def resolve_query(
     pending = previous.pending if previous is not None else None
     if pending and topic is None and entities.get(pending["missing"]):
         return _finalize(Intent(pending["intent"]), {**pending["params"], **entities}, known)
+
+    # "Was it successful?" / "is X compromised?" / "did they get in?" is
+    # answered by a host's full snapshot (every alert type, plus logins
+    # that succeeded after failures) — never by re-running whatever
+    # narrower search came before, which can't see a success. With no
+    # host in the query or the conversation, the tenant-wide overview.
+    if _SUCCESS_QUESTION_PATTERN.search(nq.lower):
+        inherited = previous.params if previous is not None else {}
+        params = {} if _WINDOW_KEYS & entities.keys() else {k: inherited[k] for k in _WINDOW_KEYS if k in inherited}
+        params.update(entities)
+        host_id = entities.get("host_id") or inherited.get("host_id")
+        if host_id:
+            return _finalize(Intent.ENDPOINT_SNAPSHOT, {**params, "host_id": host_id}, known)
+        return _finalize(Intent.OVERVIEW, params, known)
 
     if topic is not None:
         intent = classify_intent(nq.text, known)
