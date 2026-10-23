@@ -14,4 +14,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# Bring the schema up to date before serving, so a fresh Postgres volume
+# (e.g. after `docker compose down -v`) never leaves the API running
+# against missing tables. `alembic upgrade head` is a no-op when already
+# at head. Only this default CMD migrates: docker-compose.yml's worker and
+# beat override `command:`, so they never race the backend's migration —
+# they start only once the backend's healthcheck passes instead.
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"]

@@ -88,6 +88,15 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # The image's CMD runs `alembic upgrade head` before uvicorn, so this
+    # passing means the schema is migrated too. python:3.12-slim has no
+    # curl; /health answers 200 even when degraded, so any response counts.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
     restart: unless-stopped
 
   worker:
@@ -128,6 +137,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      # Wait for the backend's migration rather than running one here:
+      # concurrent `alembic upgrade` runs would race on the same schema.
+      backend:
+        condition: service_healthy
     restart: unless-stopped
 
   beat:
@@ -167,6 +180,10 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      # Wait for the backend's migration rather than running one here:
+      # concurrent `alembic upgrade` runs would race on the same schema.
+      backend:
         condition: service_healthy
     restart: unless-stopped
 

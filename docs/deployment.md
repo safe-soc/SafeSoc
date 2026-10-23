@@ -20,8 +20,12 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"]
 ```
+
+(Abridged: the real file also installs Pango for WeasyPrint.)
+
+**Migrations run automatically.** The default `CMD` runs `alembic upgrade head` before uvicorn starts, so a fresh Postgres volume (first `docker compose up`, or after `docker compose down -v`) gets its schema before the API serves a request. This used to be a manual step; without it, `injector/demo.py` failed on a fresh volume with `relation "tenants" does not exist`. The command is idempotent: on an up-to-date database alembic connects, finds nothing to apply, and uvicorn starts normally. If a migration fails, the `&&` stops uvicorn from starting, and the container exits and restarts (`restart: unless-stopped`) rather than serving against a half-migrated schema.
 
 This image alone is not sufficient to run SafeSOC — it needs a reachable OpenSearch instance. `docker-compose.yml` (below) provisions and wires that up automatically.
 
@@ -48,8 +52,11 @@ This starts six services, defined in `docker-compose.yml`:
 - **`postgres`** — PostgreSQL 16, healthcheck-gated, persisted to a named volume.
 - **`redis`** — Redis 7, healthcheck-gated.
 - **`backend`** — builds `backend/Dockerfile`, waits for all three healthchecks above before starting, mounts `./backend` into the container for live-reload during development, and is pointed at each dependency by container hostname (`OPENSEARCH_HOST=opensearch`, `POSTGRES_HOST=postgres`, `REDIS_HOST=redis`) rather than `localhost`.
+- **`backend`** also has a healthcheck: a small Python `urllib` request to its own `/health`, since `python:3.12-slim` ships no `curl`. `/health` answers 200 even when a dependency is degraded, so passing it means "migrations done, uvicorn serving".
 - **`worker`** — `celery -A app.tasks.celery_app worker`, runs the enrichment/correlation/scoring/reporting/notification background tasks. Reads the same root `.env` as `backend`, so both always agree on which LLM provider and model are in use.
 - **`beat`** — `celery -A app.tasks.celery_app beat`, dispatches the scheduled risk-recalculation and weekly-report tasks on their configured intervals.
+
+Only `backend` migrates. `worker` and `beat` build from the same image but override its `command:`, so they never run `alembic upgrade`; concurrent upgrades would race on the same schema. Instead they `depends_on: backend: condition: service_healthy`, so they start only after the backend has migrated and is serving.
 
 No `.env` file is required to start — every service has working defaults. Where one exists, `docker-compose.yml` loads the **root `.env`** into `backend`, `worker` and `beat` (`env_file`, `required: false`), so the AI features are configured in one place: set `LLM_PROVIDER=ollama` with the model pulled on the Docker host (`ollama pull llama3.2:3b`), or `LLM_PROVIDER=groq` with a real `GROQ_API_KEY`. The same file supplies `VT_API_KEY`, `ABUSEIPDB_API_KEY` and `TELEGRAM_*`; only the container hostnames (`OPENSEARCH_HOST`, `POSTGRES_HOST`, `REDIS_HOST`, `OLLAMA_HOST`) stay in compose's own `environment:`, because those must override `.env`'s `localhost` values. Without a configured, reachable provider the AI summary and incident chat fall back to their templated text rather than failing.
 
@@ -90,7 +97,7 @@ OPENSEARCH_PORT=9201 BACKEND_PORT=8001 docker compose up --build
 
 **Restart policy:** both services are configured `restart: unless-stopped`, matching the SRS non-functional requirement that Docker services restart automatically on failure.
 
-**Stopping:** `docker compose down` (add `-v` to also delete the OpenSearch data volume).
+**Stopping:** `docker compose down`. Add `-v` to also delete the named volumes (OpenSearch, Postgres, Redis); the next `docker compose up` re-creates the schema automatically (see §2), after which `python injector/demo.py` re-provisions the demo tenant.
 
 ## 4. Running the Backend Without Docker (Alternative, for local debugging)
 
