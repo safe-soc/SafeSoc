@@ -4,7 +4,7 @@ services/soar_execution.py::execute_action is the one function that
 turns a PENDING action into a real (simulated) effect — these tests
 cover its control flow (automatic executes, approval-required is
 refused, success/failure/verification-failure persistence, idempotent
-duplicate/concurrent calls) and its own internal handlers for the 4
+duplicate/concurrent calls) and its own internal handlers for the 5
 AUTOMATIC action types, each mocking only its own direct dependency
 (boundary-mocked, same convention as every other service test in this
 suite).
@@ -614,3 +614,135 @@ async def test_get_or_create_soar_session_reuses_an_existing_system_session(monk
 
     assert result is existing
     create_mock.assert_not_called()
+
+
+# ── INCREASE_INCIDENT_PRIORITY ───────────────────────────────────────
+
+def _mock_priority_boundaries(monkeypatch, incident):
+    """
+    Stateful stand-ins for incidents_service.get_incident/set_tags/add_note
+    over one in-memory incident, so a second handler call sees the first
+    call's tag exactly like a real session would.
+    """
+    from app.models.incident import IncidentNote
+
+    notes = []
+
+    async def _set_tags(db, tenant_id, incident_id, tags, actor_user_id=None):
+        assert tags is not incident.tags  # a new list — never an in-place mutation of the JSON column
+        incident.tags = tags
+        return incident
+
+    async def _add_note(db, tenant_id, incident_id, author_user_id, body):
+        note = IncidentNote(id=uuid.uuid4(), incident_id=incident_id, author_user_id=author_user_id, body=body, created_at=datetime.now(timezone.utc))
+        notes.append(note)
+        return note
+
+    monkeypatch.setattr(soar_execution, "_get_or_create_system_actor", AsyncMock(return_value=uuid.uuid4()))
+    monkeypatch.setattr(soar_execution.incidents_service, "get_incident", AsyncMock(return_value=incident))
+    monkeypatch.setattr(soar_execution.incidents_service, "set_tags", _set_tags)
+    monkeypatch.setattr(soar_execution.incidents_service, "add_note", _add_note)
+    return notes
+
+
+@pytest.mark.asyncio
+async def test_increase_incident_priority_tags_the_incident_and_adds_one_note(monkeypatch):
+    incident = _incident(uuid.uuid4())
+    incident.tags = ["existing"]
+    notes = _mock_priority_boundaries(monkeypatch, incident)
+
+    result = await soar_execution._execute_increase_incident_priority(None, incident.tenant_id, incident.id, {"reason": "privilege escalation"})
+
+    assert result["success"] is True
+    assert "already_elevated" not in result and "skipped" not in result
+    assert result["tag"] == soar_execution.PRIORITY_ELEVATED_TAG
+    assert incident.tags == ["existing", soar_execution.PRIORITY_ELEVATED_TAG]
+    assert len(notes) == 1
+    assert notes[0].body == "Priority elevated by SOAR automation. Reason: privilege escalation"
+    assert result["note_id"] == str(notes[0].id)
+
+
+@pytest.mark.asyncio
+async def test_increase_incident_priority_second_run_confirms_without_duplicating(monkeypatch):
+    incident = _incident(uuid.uuid4())
+    notes = _mock_priority_boundaries(monkeypatch, incident)
+
+    await soar_execution._execute_increase_incident_priority(None, incident.tenant_id, incident.id, {"reason": "r"})
+    tags_after_first = list(incident.tags)
+    result = await soar_execution._execute_increase_incident_priority(None, incident.tenant_id, incident.id, {"reason": "r"})
+
+    assert result["success"] is True
+    assert result["already_elevated"] is True
+    assert "skipped" not in result  # desired state confirmed, not skipped
+    assert incident.tags == tags_after_first == [soar_execution.PRIORITY_ELEVATED_TAG]
+    assert len(notes) == 1
+
+
+@pytest.mark.asyncio
+async def test_increase_incident_priority_without_reason_says_not_specified(monkeypatch):
+    incident = _incident(uuid.uuid4())
+    notes = _mock_priority_boundaries(monkeypatch, incident)
+
+    result = await soar_execution._execute_increase_incident_priority(None, incident.tenant_id, incident.id, {})
+
+    assert result["success"] is True
+    assert notes[0].body == "Priority elevated by SOAR automation. Reason: not specified"
+    assert result["message"].endswith("Reason: not specified")
+
+
+@pytest.mark.asyncio
+async def test_increase_incident_priority_executes_end_to_end_as_verified(monkeypatch):
+    tenant_id = uuid.uuid4()
+    incident = _incident(tenant_id)
+    run = _run(incident.id)
+    action = _action(run.id, action_type=SoarActionType.INCREASE_INCIDENT_PRIORITY)
+    action.parameters = {"reason": "Privilege escalation detected"}
+    db = _FakeExecutionSession(action, run, incident)
+    _mock_priority_boundaries(monkeypatch, incident)
+
+    result = await soar_execution.execute_action(db, action.id)
+
+    assert result.status == SoarActionStatus.SUCCEEDED
+    assert result.verification_status == SoarVerificationStatus.VERIFIED
+
+
+def test_every_automatic_action_type_has_an_executor():
+    """Guard: a type classified AUTOMATIC with no handler/adapter always FAILS its run."""
+    from app.core.soar_policy import classify
+
+    missing = [
+        t for t in SoarActionType
+        if classify(t) == AutonomyClass.AUTOMATIC
+        and t not in soar_execution._AUTOMATIC_HANDLERS
+        and soar_execution.soar_adapter_registry.get(t) is None
+    ]
+    assert missing == []
+
+
+# ── Audit details ────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_audit_details_carry_action_id_and_target(monkeypatch):
+    incident = _incident(uuid.uuid4())
+    action = _action(uuid.uuid4(), action_type=SoarActionType.ENRICH_INDICATOR)
+    action.parameters = {"description": "ignored", "indicator": "203.0.113.5", "ip": "198.51.100.1"}
+
+    await soar_execution._emit(None, incident.tenant_id, "soar.action.started", "soar_action_started", action, incident, {"result": {"x": 1}})
+
+    details = soar_execution.record_event.call_args.kwargs["details"]
+    assert details["action_id"] == str(action.id)
+    assert details["target"] == "203.0.113.5"
+    assert details["result"] == {"x": 1}
+    payload = soar_execution.publish_event.call_args.args[2]
+    assert payload == {"action_id": str(action.id), "incident_id": str(incident.id), "action_type": action.action_type.value}
+
+
+@pytest.mark.asyncio
+async def test_audit_details_omit_target_when_no_target_parameter(monkeypatch):
+    incident = _incident(uuid.uuid4())
+    action = _action(uuid.uuid4(), action_type=SoarActionType.INCREASE_INCIDENT_PRIORITY)
+    action.parameters = {"reason": "x", "user": ""}
+
+    await soar_execution._emit(None, incident.tenant_id, "soar.action.started", "soar_action_started", action, incident)
+
+    assert "target" not in soar_execution.record_event.call_args.kwargs["details"]

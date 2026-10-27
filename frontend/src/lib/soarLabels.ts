@@ -32,7 +32,7 @@ const SIMULATED_IMPACT: Record<SoarActionType, string> = {
   create_investigation_action: 'Adds an open action item to this incident\'s investigation session.',
   enrich_indicator: 'Looks up this indicator against SafeSOC\'s existing threat-intel cache/clients.',
   add_incident_note: 'Adds an automated note to this incident\'s timeline.',
-  increase_incident_priority: 'Not currently implemented as a working action handler.',
+  increase_incident_priority: 'Tags this incident \'priority:elevated\' and adds a note explaining why — SafeSOC-internal only.',
   isolate_endpoint: 'The simulated EDR (SimulatedEDR) marks this endpoint as isolated in SafeSOC\'s own simulated environment — no real endpoint agent, firewall, or network device is contacted.',
   disable_account: 'The simulated Identity Provider (SimulatedIdentityProvider) marks this account as disabled in SafeSOC\'s own simulated environment — no real directory or IdP is contacted.',
   block_indicator: 'The simulated Firewall (SimulatedFirewall) marks this indicator as blocked in SafeSOC\'s own simulated environment — no real firewall or network appliance is contacted.',

@@ -229,11 +229,11 @@ response pipeline comes from deterministic code or a human clicking approve.
   not happen, and the reliability table below understates failures for that reason.
 - **Sample size.** Every timing figure is a single-run observation on one developer
   machine. Nothing here supports a statistical claim.
-- **`increase_incident_priority` has no handler.** It is classified AUTOMATIC and
-  instantiated by the privilege-escalation playbook, but `services/soar_execution.py`
-  registers no handler for it, so it always fails — and because any failed action fails
-  its run, that playbook's run always ends FAILED. Counted honestly here rather than
-  excluded.
+- **`increase_incident_priority` had no handler at the time of this run.** It was
+  classified AUTOMATIC but `services/soar_execution.py` registered no handler for it, so
+  it failed and the privilege-escalation run ended FAILED in the figures below. A handler
+  has since been added (it tags the incident `priority:elevated` and adds a note); the
+  measured numbers here have not been re-run.
 - **Adapters are simulated.** The EDR, identity, and firewall adapters mutate SafeSOC's
   own in-memory state. A passing verification means the simulation is consistent, not
   that a real endpoint was isolated.

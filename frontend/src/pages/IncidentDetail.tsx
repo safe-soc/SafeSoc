@@ -21,6 +21,7 @@ import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
 import LevelBadge from '../components/LevelBadge';
 import MitreBadge from '../components/MitreBadge';
+import PriorityElevatedBadge from '../components/PriorityElevatedBadge';
 import IncidentTimeline from '../components/IncidentTimeline';
 import EvidenceExplorer from '../components/EvidenceExplorer';
 import { MarkdownAnswer } from '../components/MarkdownAnswer';
@@ -285,6 +286,7 @@ export default function IncidentDetail() {
               Start investigating
             </button>
           )}
+          <PriorityElevatedBadge tags={incident.tags} />
           {incident.severity && <LevelBadge level={incident.severity} />}
           <StatusBadge status={incident.status} />
           {incident.confidence != null && (

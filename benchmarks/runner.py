@@ -334,9 +334,8 @@ def evaluate(result: ScenarioResult, scenario: BenchmarkScenario) -> ScenarioRes
         f"{[a.status for a in result.approval_actions]}",
     ))
 
-    # Automatic actions should have run unattended. INCREASE_INCIDENT_PRIORITY
-    # has no handler and always fails — that is a known product gap, so it is
-    # reported rather than counted as an execution failure of the gate.
+    # Automatic actions should have run unattended. A failed automatic
+    # action is reported rather than counted as a failure of the gate.
     ran = [a for a in result.automatic_actions if a.status in ("succeeded", "failed")]
     check((
         "automatic actions executed unattended",
