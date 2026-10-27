@@ -14,7 +14,7 @@ from app.db.opensearch import get_alert_by_id, update_alert_anomaly_score
 from app.db.postgresql import worker_session_factory
 from app.schemas.log import NormalizedLog
 from app.services.anomaly import score_alert
-from app.services.enrichment import enrich_log
+from app.services.enrichment import enrich_log, refresh_ip
 from app.tasks.celery_app import celery_app
 from app.utils.logger import get_logger
 
@@ -38,6 +38,29 @@ async def _enrich_alert_async(alert_id: str) -> None:
         await enrich_log(db, log)
 
     await _score_anomaly(log)
+
+
+@celery_app.task(name="app.tasks.enrichment.refresh_indicator")
+def refresh_indicator(ip: str) -> None:
+    """
+    Celery entrypoint for an analyst-requested TI refresh
+    (services/threat_intel_refresh.py). Runs here, not in the API
+    process, because the provider clients block on rate limits.
+    """
+    asyncio.run(_refresh_indicator_async(ip))
+
+
+async def _refresh_indicator_async(ip: str) -> None:
+    try:
+        async with worker_session_factory() as db:
+            result = await refresh_ip(db, ip)
+    except Exception as e:
+        logger.error("Threat-intel refresh failed", ip=ip, error_type=type(e).__name__, error=str(e))
+        return
+    logger.info(
+        "Threat-intel refresh completed", ip=ip, is_malicious=result.is_malicious,
+        has_vt=result.vt is not None, has_abuse=result.abuse is not None,
+    )
 
 
 async def _score_anomaly(log: NormalizedLog) -> None:

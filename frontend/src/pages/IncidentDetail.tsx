@@ -462,7 +462,7 @@ export default function IncidentDetail() {
       {/* Evidence explorer */}
       <section className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
         <h2 className="text-sm font-semibold text-slate-200">Evidence</h2>
-        <div className="mt-3">{evidence && <EvidenceExplorer evidence={evidence} />}</div>
+        <div className="mt-3">{evidence && <EvidenceExplorer evidence={evidence} incidentId={incident.id} onEvidenceChange={setEvidence} />}</div>
       </section>
 
       {/* Attack-chain graph */}

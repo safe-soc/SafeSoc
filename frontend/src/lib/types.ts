@@ -309,11 +309,18 @@ export interface AbuseIPDetails {
   max_age_days: number;
 }
 
+// ok = row with details; legacy = row cached before details were
+// collected; missing = no row from that provider.
+export type TIDetailStatus = 'ok' | 'legacy' | 'missing';
+
 export interface IPThreatIntel {
   is_malicious: boolean;
+  // Latest real provider lookup (moves when a refresh completes).
   checked_at: string | null;
   vt: VTIPDetails | null;
   abuse: AbuseIPDetails | null;
+  vt_status: TIDetailStatus;
+  abuse_status: TIDetailStatus;
 }
 
 export interface IPEntity {

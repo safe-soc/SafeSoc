@@ -24,8 +24,19 @@ function ipContext(ip: IPEntity): string | null {
   return [country, owner].filter(Boolean).join(' · ') || null;
 }
 
-export default function EvidenceExplorer({ evidence }: { evidence: IncidentEvidence }) {
-  const [intelIp, setIntelIp] = useState<IPEntity | null>(null);
+export default function EvidenceExplorer({
+  evidence,
+  incidentId,
+  onEvidenceChange,
+}: {
+  evidence: IncidentEvidence;
+  incidentId: string;
+  onEvidenceChange: (evidence: IncidentEvidence) => void;
+}) {
+  // Tracked by address, not entity, so an open card shows refreshed
+  // evidence as soon as the parent receives it.
+  const [intelIp, setIntelIp] = useState<string | null>(null);
+  const intelEntity = intelIp ? evidence.ips.find((ip) => ip.ip === intelIp) : undefined;
   const hasAnything =
     evidence.hosts.length > 0 ||
     evidence.ips.length > 0 ||
@@ -90,7 +101,7 @@ export default function EvidenceExplorer({ evidence }: { evidence: IncidentEvide
                 {ip.ti && (
                   <button
                     type="button"
-                    onClick={() => setIntelIp(ip)}
+                    onClick={() => setIntelIp(ip.ip)}
                     className="text-xs text-blue-400 hover:underline focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500"
                   >
                     View threat intel
@@ -135,7 +146,16 @@ export default function EvidenceExplorer({ evidence }: { evidence: IncidentEvide
         )}
       </div>
 
-      {intelIp?.ti && <IpIntelCard ip={intelIp.ip} intel={intelIp.ti} onClose={() => setIntelIp(null)} />}
+      {intelEntity?.ti && (
+        <IpIntelCard
+          ip={intelEntity.ip}
+          intel={intelEntity.ti}
+          isPublic={intelEntity.is_public ?? false}
+          incidentId={incidentId}
+          onEvidenceChange={onEvidenceChange}
+          onClose={() => setIntelIp(null)}
+        />
+      )}
     </div>
   );
 }

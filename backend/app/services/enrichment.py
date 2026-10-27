@@ -69,9 +69,12 @@ async def _write_cache(db: AsyncSession, indicator: str, provider: TIProvider, r
     await db.commit()
 
 
-async def _get_or_fetch(db, indicator, provider, fetch_fn) -> Optional[TIResult]:
+async def _get_or_fetch(db, indicator, provider, fetch_fn, *, force: bool = False) -> Optional[TIResult]:
     """
     Cache-before-call for a single (indicator, provider) pair.
+
+    force=True skips the fresh-cache early return (an analyst-requested
+    refresh) but keeps the stale fallback below if the live call fails.
 
     Falls back to a stale cached result (SRS §3.4) if the live call
     fails and a cache row exists at all, even expired; if there's
@@ -98,7 +101,7 @@ async def _get_or_fetch(db, indicator, provider, fetch_fn) -> Optional[TIResult]
     """
     cached_row = await _get_cached(db, indicator, provider)
     now = datetime.now(timezone.utc)
-    if cached_row is not None and cached_row.expires_at > now:
+    if not force and cached_row is not None and cached_row.expires_at > now:
         return TIResult(**cached_row.result)
 
     # Read what the fallback needs off the ORM row before ending the
@@ -119,6 +122,7 @@ async def _get_or_fetch(db, indicator, provider, fetch_fn) -> Optional[TIResult]
             return TIResult(**stale_result)
         return None
 
+    result.fetched_at = datetime.now(timezone.utc)
     await _write_cache(db, indicator, provider, result)
     return result
 
@@ -150,6 +154,19 @@ def _merge(
 async def _get_ip_result(db: AsyncSession, ip: str) -> TIResult:
     vt = await _get_or_fetch(db, ip, TIProvider.VIRUSTOTAL, lambda: virustotal.lookup_ip(ip))
     abuse = await _get_or_fetch(db, ip, TIProvider.ABUSEIPDB, lambda: abuseipdb.lookup_ip(ip))
+    return _merge(source_ip=ip, vt=vt, abuse=abuse)
+
+
+async def refresh_ip(db: AsyncSession, ip: str) -> TIResult:
+    """
+    Re-query both providers for an IP regardless of cache freshness
+    (each still falls back to its stale row if its call fails). Blocking
+    provider clients (VirusTotal's rate limiter sleeps) — call only from
+    the Celery worker (tasks/enrichment.py::refresh_indicator), never
+    from a request handler.
+    """
+    vt = await _get_or_fetch(db, ip, TIProvider.VIRUSTOTAL, lambda: virustotal.lookup_ip(ip), force=True)
+    abuse = await _get_or_fetch(db, ip, TIProvider.ABUSEIPDB, lambda: abuseipdb.lookup_ip(ip), force=True)
     return _merge(source_ip=ip, vt=vt, abuse=abuse)
 
 

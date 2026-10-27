@@ -27,7 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.enums import LogSource, RiskLevel, TIProvider
+from app.core.enums import LogSource, RiskLevel, TIDetailStatus, TIProvider
 from app.db.opensearch import get_alerts_by_ids
 from app.models.endpoint import Endpoint
 from app.models.ti_cache import TICache
@@ -54,10 +54,13 @@ class IPThreatIntel(BaseModel):
     provider's own details, read only from that provider's row.
     """
     is_malicious: bool
-    # Latest created_at across this IP's ti_cache rows.
+    # Latest real lookup across this IP's rows: each row's
+    # result.fetched_at, or its created_at for rows predating fetched_at.
     checked_at: Optional[datetime] = None
     vt: Optional[VTIPDetails] = None
     abuse: Optional[AbuseIPDetails] = None
+    vt_status: TIDetailStatus = TIDetailStatus.MISSING
+    abuse_status: TIDetailStatus = TIDetailStatus.MISSING
 
 
 class IPEntity(BaseModel):
@@ -132,15 +135,16 @@ async def _ti_intel(db: AsyncSession, indicators: list[str]) -> dict[str, IPThre
         # If any cached provider says malicious, the indicator is
         # malicious; otherwise clean.
         entry.is_malicious = entry.is_malicious or row.is_malicious
-        if row.created_at is not None and (entry.checked_at is None or row.created_at > entry.checked_at):
-            entry.checked_at = row.created_at
         cached = _cached_result(row)
-        if cached is None:
-            continue
+        looked_up_at = (cached.fetched_at if cached is not None else None) or row.created_at
+        if looked_up_at is not None and (entry.checked_at is None or looked_up_at > entry.checked_at):
+            entry.checked_at = looked_up_at
         if row.provider == TIProvider.VIRUSTOTAL:
-            entry.vt = cached.vt
+            entry.vt = cached.vt if cached is not None else None
+            entry.vt_status = TIDetailStatus.OK if entry.vt is not None else TIDetailStatus.LEGACY
         elif row.provider == TIProvider.ABUSEIPDB:
-            entry.abuse = cached.abuse
+            entry.abuse = cached.abuse if cached is not None else None
+            entry.abuse_status = TIDetailStatus.OK if entry.abuse is not None else TIDetailStatus.LEGACY
     return intel
 
 

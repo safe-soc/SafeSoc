@@ -197,6 +197,23 @@ class SoarPolicyViolationError(SafeSOCError):
         )
 
 
+class InvalidIndicatorError(SafeSOCError):
+    """A threat-intel refresh was requested for a value that isn't a public (globally routable) IP."""
+    def __init__(self, indicator: str):
+        super().__init__(f"'{indicator}' is not a public IP address, so it can't be looked up.", status_code=400)
+
+
+class IndicatorNotInIncidentError(SafeSOCError):
+    """The IP isn't among the incident's evidence IPs — ti_cache is global, so this is the tenant-scoping check."""
+    def __init__(self, indicator: str):
+        super().__init__(f"IP '{indicator}' is not part of this incident's evidence.", status_code=404)
+
+
+class ThreatIntelRefreshCooldownError(SafeSOCError):
+    def __init__(self):
+        super().__init__("Refreshed recently — try again in a minute.", status_code=429)
+
+
 async def safesoc_exception_handler(request: Request, exc: SafeSOCError):
     return JSONResponse(
         status_code=exc.status_code,

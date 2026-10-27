@@ -4,7 +4,9 @@ POST /api/v1/incidents, GET /api/v1/incidents, GET /api/v1/incidents/{id},
 POST /api/v1/incidents/{id}/transitions — incident CRUD and lifecycle
 transitions (SS-036). POST /api/v1/incidents/{id}/alerts and
 POST|GET /api/v1/incidents/{id}/notes — post-creation alert linking
-and investigation notes (SS-037).
+and investigation notes (SS-037). POST
+/api/v1/incidents/{id}/evidence/ips/{ip}/refresh — queue a threat-intel
+re-lookup for one evidence IP.
 
 Auto-created incidents come from correlation-chain detection (SS-031,
 services/incidents.py:create_or_merge_incident); this adds manual
@@ -15,7 +17,7 @@ JWT (SS-015); tenant_id is derived from the token, not the caller (SS-016).
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import CurrentUser, get_current_user, require_role
@@ -54,6 +56,7 @@ from app.services.incidents import (
     transition_incident,
 )
 from app.services.investigation_report import generate_incident_report
+from app.services.threat_intel_refresh import request_ip_refresh
 
 router = APIRouter(prefix="/api/v1/incidents", tags=["incidents"])
 
@@ -267,6 +270,18 @@ async def get_evidence(
 ):
     """Distinct entities (hosts/IPs/users/cloud resources) involved in an incident, annotated with risk/TI data (SS-100/101)."""
     return await get_incident_evidence(db, current_user.tenant_id, incident_id)
+
+
+@router.post("/{incident_id}/evidence/ips/{ip}/refresh", status_code=status.HTTP_202_ACCEPTED)
+async def refresh_evidence_ip(
+    incident_id: uuid.UUID,
+    ip: str,
+    current_user: CurrentUser = Depends(require_role(UserRole.ANALYST)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Queue a forced VirusTotal/AbuseIPDB re-lookup for one of this incident's public evidence IPs (runs in the worker)."""
+    queued_ip = await request_ip_refresh(db, current_user.tenant_id, incident_id, ip, current_user.user_id)
+    return {"queued": True, "ip": queued_ip}
 
 
 @router.get("/{incident_id}/graph", response_model=IncidentGraph)

@@ -75,6 +75,11 @@ class TIResult(BaseModel):
     # before these fields existed.
     vt: Optional[VTIPDetails] = None
     abuse: Optional[AbuseIPDetails] = None
+    # When the provider call that produced this result actually ran
+    # (set by services/enrichment.py::_get_or_fetch). Cache hits and
+    # stale fallbacks keep the stored value; None on rows written before
+    # this field existed and on the merged per-alert result.
+    fetched_at: Optional[datetime] = None
 
 
 class NormalizedLog(BaseModel):
