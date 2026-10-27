@@ -311,3 +311,153 @@ async def test_host_flagged_if_any_one_of_its_alerts_is_anomalous(monkeypatch):
 
     assert evidence.hosts[0].has_anomalous_activity is True
     assert evidence.hosts[0].alert_count == 2
+
+
+# ── Per-IP threat-intel details ─────────────────────────────────────
+
+def _ti_row(ip: str, provider: TIProvider, result: dict, is_malicious: bool, created_at=None) -> TICache:
+    return TICache(id=uuid.uuid4(), indicator=ip, provider=provider, result=result, is_malicious=is_malicious, expires_at=None, created_at=created_at)
+
+
+@pytest.mark.asyncio
+async def test_ip_ti_carries_each_provider_details_from_its_own_row(monkeypatch):
+    from datetime import datetime, timezone
+
+    incident = _incident()
+    _mock_get_incident(monkeypatch, incident)
+    _mock_alerts(monkeypatch, [{"source_ip": "140.246.61.93"}])
+    earlier = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    later = datetime(2026, 10, 2, tzinfo=timezone.utc)
+    # Each row also carries a decoy of the OTHER provider's block, which
+    # must be ignored — vt only from VT's row, abuse only from AbuseIPDB's.
+    vt_row = _ti_row("140.246.61.93", TIProvider.VIRUSTOTAL, {"vt": {"malicious": 4, "as_owner": "VT owner"}, "abuse": {"isp": "WRONG"}}, True, earlier)
+    abuse_row = _ti_row("140.246.61.93", TIProvider.ABUSEIPDB, {"abuse": {"confidence": 12, "isp": "Abuse ISP"}, "vt": {"as_owner": "WRONG"}}, False, later)
+    session = _FakeSession(existing_ti_cache=[vt_row, abuse_row])
+
+    evidence = await get_incident_evidence(session, incident.tenant_id, incident.id)
+
+    ip = evidence.ips[0]
+    assert ip.is_malicious is True
+    assert ip.ti.is_malicious is True
+    assert ip.ti.checked_at == later
+    assert ip.ti.vt.malicious == 4 and ip.ti.vt.as_owner == "VT owner"
+    assert ip.ti.abuse.confidence == 12 and ip.ti.abuse.isp == "Abuse ISP"
+
+
+@pytest.mark.asyncio
+async def test_ip_ti_with_only_an_abuseipdb_row_has_no_vt(monkeypatch):
+    incident = _incident()
+    _mock_get_incident(monkeypatch, incident)
+    _mock_alerts(monkeypatch, [{"source_ip": "140.246.61.93"}])
+    session = _FakeSession(existing_ti_cache=[_ti_row("140.246.61.93", TIProvider.ABUSEIPDB, {"abuse": {"confidence": 0}}, False)])
+
+    evidence = await get_incident_evidence(session, incident.tenant_id, incident.id)
+
+    ip = evidence.ips[0]
+    assert ip.is_malicious is False
+    assert ip.ti.vt is None
+    assert ip.ti.abuse.confidence == 0
+
+
+@pytest.mark.asyncio
+async def test_ip_ti_is_none_with_no_rows(monkeypatch):
+    incident = _incident()
+    _mock_get_incident(monkeypatch, incident)
+    _mock_alerts(monkeypatch, [{"source_ip": "140.246.61.93"}])
+    session = _FakeSession(existing_ti_cache=[])
+
+    evidence = await get_incident_evidence(session, incident.tenant_id, incident.id)
+
+    assert evidence.ips[0].ti is None
+    assert evidence.ips[0].is_malicious is None
+
+
+@pytest.mark.asyncio
+async def test_old_format_cache_rows_without_details_still_deserialize(monkeypatch):
+    incident = _incident()
+    _mock_get_incident(monkeypatch, incident)
+    _mock_alerts(monkeypatch, [{"source_ip": "140.246.61.93"}])
+    old_vt = _ti_row("140.246.61.93", TIProvider.VIRUSTOTAL, {"source_ip": "140.246.61.93", "vt_malicious": 0, "vt_total": 70, "is_malicious": False, "tags": []}, False)
+    old_abuse = _ti_row("140.246.61.93", TIProvider.ABUSEIPDB, {"source_ip": "140.246.61.93", "abuse_confidence": 0, "abuse_total_reports": 0, "is_malicious": False, "tags": []}, False)
+    session = _FakeSession(existing_ti_cache=[old_vt, old_abuse])
+
+    evidence = await get_incident_evidence(session, incident.tenant_id, incident.id)
+
+    ip = evidence.ips[0]
+    assert ip.ti is not None
+    assert ip.ti.vt is None and ip.ti.abuse is None
+    assert ip.ti.checked_at is None
+    assert ip.is_malicious is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("ip", "expected"), [("203.0.113.5", False), ("10.0.0.1", False), ("140.246.61.93", True), ("not-an-ip", False)])
+async def test_is_public_reflects_global_routability(monkeypatch, ip, expected):
+    incident = _incident()
+    _mock_get_incident(monkeypatch, incident)
+    _mock_alerts(monkeypatch, [{"source_ip": ip}])
+
+    evidence = await get_incident_evidence(_FakeSession(), incident.tenant_id, incident.id)
+
+    assert evidence.ips[0].is_public is expected
+
+
+# ── Per-provider detail status + checked_at ─────────────────────────
+
+async def _intel_for(monkeypatch, rows, ip="140.246.61.93"):
+    incident = _incident()
+    _mock_get_incident(monkeypatch, incident)
+    _mock_alerts(monkeypatch, [{"source_ip": ip}])
+    evidence = await get_incident_evidence(_FakeSession(existing_ti_cache=rows), incident.tenant_id, incident.id)
+    return evidence.ips[0].ti
+
+
+@pytest.mark.asyncio
+async def test_detail_status_ok_legacy_and_missing(monkeypatch):
+    from app.core.enums import TIDetailStatus
+
+    ip = "140.246.61.93"
+    ok_vt = _ti_row(ip, TIProvider.VIRUSTOTAL, {"vt": {"malicious": 1}}, True)
+    legacy_vt = _ti_row(ip, TIProvider.VIRUSTOTAL, {"vt_total": 70}, False)
+    ok_abuse = _ti_row(ip, TIProvider.ABUSEIPDB, {"abuse": {"confidence": 3}}, False)
+    legacy_abuse = _ti_row(ip, TIProvider.ABUSEIPDB, {"abuse_confidence": 3}, False)
+
+    both_ok = await _intel_for(monkeypatch, [ok_vt, ok_abuse])
+    assert (both_ok.vt_status, both_ok.abuse_status) == (TIDetailStatus.OK, TIDetailStatus.OK)
+
+    both_legacy = await _intel_for(monkeypatch, [legacy_vt, legacy_abuse])
+    assert (both_legacy.vt_status, both_legacy.abuse_status) == (TIDetailStatus.LEGACY, TIDetailStatus.LEGACY)
+
+    vt_only = await _intel_for(monkeypatch, [ok_vt])
+    assert (vt_only.vt_status, vt_only.abuse_status) == (TIDetailStatus.OK, TIDetailStatus.MISSING)
+
+    abuse_only = await _intel_for(monkeypatch, [legacy_abuse])
+    assert (abuse_only.vt_status, abuse_only.abuse_status) == (TIDetailStatus.MISSING, TIDetailStatus.LEGACY)
+
+
+@pytest.mark.asyncio
+async def test_checked_at_prefers_fetched_at_over_created_at(monkeypatch):
+    from datetime import datetime, timezone
+
+    ip = "140.246.61.93"
+    created = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    # Refreshed in place: created_at is the original insert, fetched_at the latest lookup.
+    vt = _ti_row(ip, TIProvider.VIRUSTOTAL, {"vt": {}, "fetched_at": "2026-10-25T10:00:00+00:00"}, False, created)
+    abuse = _ti_row(ip, TIProvider.ABUSEIPDB, {"abuse": {}, "fetched_at": "2026-10-20T10:00:00+00:00"}, False, created)
+
+    intel = await _intel_for(monkeypatch, [vt, abuse])
+
+    assert intel.checked_at == datetime(2026, 10, 25, 10, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_checked_at_falls_back_to_created_at_for_rows_without_fetched_at(monkeypatch):
+    from datetime import datetime, timezone
+
+    ip = "140.246.61.93"
+    old = _ti_row(ip, TIProvider.VIRUSTOTAL, {"vt_total": 70}, False, datetime(2026, 10, 22, tzinfo=timezone.utc))
+    new = _ti_row(ip, TIProvider.ABUSEIPDB, {"abuse": {}, "fetched_at": "2026-10-21T00:00:00+00:00"}, False, datetime(2026, 9, 1, tzinfo=timezone.utc))
+
+    intel = await _intel_for(monkeypatch, [old, new])
+
+    assert intel.checked_at == datetime(2026, 10, 22, tzinfo=timezone.utc)

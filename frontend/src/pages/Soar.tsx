@@ -38,6 +38,13 @@ function mostRecentTimestamp(action: SoarActionExecution): string {
   return candidates.sort().at(-1) ?? action.created_at;
 }
 
+/** The action's own result message, minus the "[SafeSOC] " prefix internal handlers add. */
+function resultMessage(action: SoarActionExecution): string | null {
+  const message = action.result?.message;
+  if (typeof message !== 'string' || !message.trim()) return null;
+  return message.replace(/^\[SafeSOC\] /, '');
+}
+
 export default function Soar() {
   const [runs, setRuns] = useState<SoarPlaybookRunDetail[]>([]);
   const [playbookTitles, setPlaybookTitles] = useState<Record<string, string>>({});
@@ -202,20 +209,35 @@ export default function Soar() {
             <p className="mt-3 text-sm text-slate-500">No SOAR actions have run yet.</p>
           ) : (
             <ul className="mt-3 space-y-2">
-              {recentActivity.map(({ run, action }) => (
-                <li key={action.id} className="flex items-center justify-between gap-2 rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2 text-sm">
-                  <div className="flex items-center gap-2">
-                    <span className="text-slate-300">{formatActionType(action.action_type)}</span>
-                    <Link to={`/incidents/${run.incident_id}`} className="text-xs text-blue-400 hover:underline">
-                      incident
-                    </Link>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <SoarStatusBadge status={action.status} />
-                    <Timestamp iso={mostRecentTimestamp(action)} format="relative" className="text-xs text-slate-600" />
-                  </div>
-                </li>
-              ))}
+              {recentActivity.map(({ run, action }) => {
+                const target = describeTarget(action);
+                const message = resultMessage(action);
+                const skipped = action.result?.skipped === true;
+                const messageTone = action.status === 'failed' ? 'text-red-400' : skipped ? 'text-amber-400' : 'text-slate-500';
+                return (
+                  <li key={action.id} className="flex items-center justify-between gap-2 rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2 text-sm">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-slate-300">{formatActionType(action.action_type)}</span>
+                        <Link to={`/incidents/${run.incident_id}`} className="text-xs text-blue-400 hover:underline">
+                          incident
+                        </Link>
+                      </div>
+                      {target && <p className="truncate font-mono text-xs text-slate-400" title={target}>{target}</p>}
+                      {message && <p className={`truncate text-xs ${messageTone}`} title={message}>{message}</p>}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <SoarStatusBadge status={action.status} />
+                      {skipped && (
+                        <span className="inline-flex items-center rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-300 ring-1 ring-inset ring-amber-500/30">
+                          Skipped
+                        </span>
+                      )}
+                      <Timestamp iso={mostRecentTimestamp(action)} format="relative" className="text-xs text-slate-600" />
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </section>

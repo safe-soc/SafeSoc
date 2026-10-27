@@ -518,7 +518,9 @@ async def incident_narrative_data(
         incident_id=incident.id,
         events=[TimelineEventSummary(type=entry.type, timestamp=entry.timestamp, data=entry.data) for entry in timeline],
         hosts=[host.model_dump(mode="json") for host in evidence.hosts],
-        ips=[ip.model_dump(mode="json") for ip in evidence.ips],
+        # ti (per-provider threat-intel detail) is for the Evidence UI;
+        # left out so this tool's LLM-facing payload stays compact.
+        ips=[ip.model_dump(mode="json", exclude={"ti"}) for ip in evidence.ips],
         users=[user.model_dump(mode="json") for user in evidence.users],
         cloud_resources=[resource.model_dump(mode="json") for resource in evidence.cloud_resources],
         mitre_techniques=mitre_techniques,

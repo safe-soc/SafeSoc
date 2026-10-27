@@ -46,6 +46,51 @@ export interface Alert {
   dismiss_note?: string | null;
 }
 
+// GET /api/v1/alerts/{id}/context — the full OpenSearch document, so
+// every NormalizedLog field may be present; unknown extras are allowed.
+export interface AlertDocument extends Alert {
+  ingested_at?: string | null;
+  rule_id?: string | null;
+  source_port?: number | null;
+  destination_ip?: string | null;
+  destination_port?: number | null;
+  protocol?: string | null;
+  file_path?: string | null;
+  file_hash?: string | null;
+  file_size?: number | null;
+  process_name?: string | null;
+  process_id?: number | null;
+  parent_process?: string | null;
+  command_line?: string | null;
+  raw_log?: string | null;
+  ti_enriched?: boolean | null;
+  ti_result?: Record<string, unknown> | null;
+  risk_score?: number | null;
+  anomaly_score?: number | null;
+  [key: string]: unknown;
+}
+
+export interface AlertContextIncident {
+  id: string;
+  category: CorrelationPattern | null;
+  hosts: string[];
+  status: IncidentStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AlertIPIntel {
+  // null = no ti_cache row for this IP.
+  ti: IPThreatIntel | null;
+  is_public: boolean;
+}
+
+export interface AlertContext {
+  alert: AlertDocument;
+  incident: AlertContextIncident | null;
+  ip_intel: Record<string, AlertIPIntel>;
+}
+
 // POST /api/v1/alerts/{id}/acknowledge, .../dismiss, .../restore (SS-107)
 export interface AlertAnnotation {
   alert_id: string;
@@ -270,11 +315,67 @@ export interface HostEntity {
   has_anomalous_activity?: boolean;
 }
 
+// Per-provider IP details captured from the same VirusTotal / AbuseIPDB
+// calls enrichment already makes (backend schemas/log.py).
+export interface VTFlaggedEngine {
+  engine: string;
+  category: string;
+  result: string | null;
+}
+
+export interface VTIPDetails {
+  malicious: number;
+  suspicious: number;
+  harmless: number;
+  undetected: number;
+  total: number;
+  reputation: number | null;
+  asn: number | null;
+  as_owner: string | null;
+  network: string | null;
+  country: string | null;
+  last_analysis_date: string | null;
+  tags: string[];
+  flagged_by: VTFlaggedEngine[];
+}
+
+export interface AbuseIPDetails {
+  confidence: number;
+  total_reports: number;
+  num_distinct_users: number;
+  last_reported_at: string | null;
+  isp: string | null;
+  usage_type: string | null;
+  domain: string | null;
+  country_code: string | null;
+  hostnames: string[];
+  is_tor: boolean;
+  is_whitelisted: boolean | null;
+  max_age_days: number;
+}
+
+// ok = row with details; legacy = row cached before details were
+// collected; missing = no row from that provider.
+export type TIDetailStatus = 'ok' | 'legacy' | 'missing';
+
+export interface IPThreatIntel {
+  is_malicious: boolean;
+  // Latest real provider lookup (moves when a refresh completes).
+  checked_at: string | null;
+  vt: VTIPDetails | null;
+  abuse: AbuseIPDetails | null;
+  vt_status: TIDetailStatus;
+  abuse_status: TIDetailStatus;
+}
+
 export interface IPEntity {
   ip: string;
   roles: string[];
   is_malicious?: boolean | null;
   alert_count: number;
+  // Absent/null = no ti_cache row at all.
+  ti?: IPThreatIntel | null;
+  is_public?: boolean;
 }
 
 export interface UserEntity {

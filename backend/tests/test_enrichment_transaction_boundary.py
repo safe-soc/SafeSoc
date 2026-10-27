@@ -384,7 +384,7 @@ def test_the_soar_enrich_action_holds_no_transaction_across_the_provider():
 # of a ti_cache row — a genuinely clean verdict carries all-zero
 # counters, which is indistinguishable by value from "nothing
 # answered". These tests pin that distinction against a real database,
-# using the same definition incident_evidence.py::_ti_verdicts uses for
+# using the same definition ip_threat_intel.py::get_ip_threat_intel uses for
 # the Evidence panel's "Not checked".
 
 @requires_postgres

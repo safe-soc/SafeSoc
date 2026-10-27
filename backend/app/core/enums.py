@@ -76,6 +76,17 @@ class TIProvider(str, Enum):
     ABUSEIPDB = "abuseipdb"
 
 
+class TIDetailStatus(str, Enum):
+    """
+    What ti_cache holds for one (indicator, provider) pair, as shown on
+    the incident threat-intel card: OK = row with per-provider details,
+    LEGACY = row written before details were collected, MISSING = no row.
+    """
+    OK = "ok"
+    LEGACY = "legacy"
+    MISSING = "missing"
+
+
 class IndicatorType(str, Enum):
     """Types of threat indicators."""
     IP = "ip"

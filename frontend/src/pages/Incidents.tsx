@@ -9,6 +9,7 @@ import { Link } from 'react-router-dom';
 import Layout from '../components/Layout';
 import PageHeader from '../components/PageHeader';
 import LevelBadge from '../components/LevelBadge';
+import PriorityElevatedBadge from '../components/PriorityElevatedBadge';
 import StatusBadge from '../components/StatusBadge';
 import EmptyState from '../components/EmptyState';
 import TableSkeleton from '../components/TableSkeleton';
@@ -134,7 +135,10 @@ export default function Incidents() {
                       {hostsLabel(incident.hosts)}
                     </td>
                     <td className="px-4 py-3">
-                      {incident.severity ? <LevelBadge level={incident.severity} /> : <span className="text-slate-600">—</span>}
+                      <div className="flex items-center gap-1.5">
+                        {incident.severity ? <LevelBadge level={incident.severity} /> : <span className="text-slate-600">—</span>}
+                        <PriorityElevatedBadge tags={incident.tags} />
+                      </div>
                     </td>
                     <td className="px-4 py-3 tabular-nums text-slate-300">
                       {incident.confidence === null ? (

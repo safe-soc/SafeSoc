@@ -7,14 +7,29 @@
  * a neutral "not yet scored"/"not checked" state, never an error.
  */
 
+import { useState } from 'react';
+import IpIntelCard from './IpIntelCard';
 import LevelBadge from './LevelBadge';
+import { ipOwnerSummary } from '../lib/format';
 import type { IncidentEvidence } from '../lib/types';
 
 function EmptyRow({ label }: { label: string }) {
   return <p className="text-sm text-slate-500">{label}</p>;
 }
 
-export default function EvidenceExplorer({ evidence }: { evidence: IncidentEvidence }) {
+export default function EvidenceExplorer({
+  evidence,
+  incidentId,
+  onEvidenceChange,
+}: {
+  evidence: IncidentEvidence;
+  incidentId: string;
+  onEvidenceChange: (evidence: IncidentEvidence) => void;
+}) {
+  // Tracked by address, not entity, so an open card shows refreshed
+  // evidence as soon as the parent receives it.
+  const [intelIp, setIntelIp] = useState<string | null>(null);
+  const intelEntity = intelIp ? evidence.ips.find((ip) => ip.ip === intelIp) : undefined;
   const hasAnything =
     evidence.hosts.length > 0 ||
     evidence.ips.length > 0 ||
@@ -71,7 +86,19 @@ export default function EvidenceExplorer({ evidence }: { evidence: IncidentEvide
                   <span className="rounded-full bg-slate-800 px-2 py-0.5 text-xs text-slate-400">Clean</span>
                 )}
                 {(ip.is_malicious === null || ip.is_malicious === undefined) && (
-                  <span className="text-xs text-slate-600">Not checked</span>
+                  <span className="text-xs text-slate-600">
+                    {ip.is_public === false ? 'Private/reserved — not looked up' : 'Not checked'}
+                  </span>
+                )}
+                {ipOwnerSummary(ip.ti) && <span className="text-xs text-slate-500">{ipOwnerSummary(ip.ti)}</span>}
+                {ip.ti && (
+                  <button
+                    type="button"
+                    onClick={() => setIntelIp(ip.ip)}
+                    className="text-xs text-blue-400 hover:underline focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500"
+                  >
+                    View threat intel
+                  </button>
                 )}
                 <span className="ml-auto text-xs text-slate-600">{ip.alert_count} alert{ip.alert_count === 1 ? '' : 's'}</span>
               </li>
@@ -111,6 +138,17 @@ export default function EvidenceExplorer({ evidence }: { evidence: IncidentEvide
           </ul>
         )}
       </div>
+
+      {intelEntity?.ti && (
+        <IpIntelCard
+          ip={intelEntity.ip}
+          intel={intelEntity.ti}
+          isPublic={intelEntity.is_public ?? false}
+          incidentId={incidentId}
+          onEvidenceChange={onEvidenceChange}
+          onClose={() => setIntelIp(null)}
+        />
+      )}
     </div>
   );
 }

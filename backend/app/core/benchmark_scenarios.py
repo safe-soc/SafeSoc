@@ -170,9 +170,9 @@ BENCHMARK_SCENARIOS: list[BenchmarkScenario] = [
             SoarActionType.CREATE_INVESTIGATION_ACTION,
         ),
         expected_approval_actions=(SoarActionType.DISABLE_ACCOUNT,),
-        notes="INCREASE_INCIDENT_PRIORITY is classified AUTOMATIC but has no execution handler in "
-              "services/soar_execution.py, so it always FAILS and always fails its run. Recorded as a known "
-              "limitation, not smoothed over.",
+        notes="INCREASE_INCIDENT_PRIORITY has no severity column to raise, so it tags the incident "
+              "'priority:elevated' and adds an explanatory note; a repeat run confirms the tag without "
+              "adding a second note.",
     ),
     BenchmarkScenario(
         id="bm-d-lateral-movement",

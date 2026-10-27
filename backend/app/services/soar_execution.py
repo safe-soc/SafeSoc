@@ -6,7 +6,7 @@ trusts the stored autonomy_class snapshot alone), transitions the
 Phase 1 state machine (services/soar.py, UNCHANGED), routes to either
 a registered app/adapters/soar/*.py adapter (the 5 APPROVAL_REQUIRED
 action types — unreachable from PENDING in Phase 2, reachable from
-APPROVED since Phase 3's approve_action) or an internal handler (the 4
+APPROVED since Phase 3's approve_action) or an internal handler (the 5
 AUTOMATIC action types), persists the structured result, runs
 verification, and writes both an audit trail entry
 (services/audit.py, REUSED) and a real-time event
@@ -68,6 +68,13 @@ _SYSTEM_ACTOR_EMAIL = "soar-automation@safesoc.internal"
 # Trivial, self-verifying result for an internal (non-adapter) automatic
 # action that completed without raising — see execute_action's own docstring.
 _INTERNAL_VERIFIED = SoarVerificationResult(verified=True, message="Internal SafeSOC operation completed without error.")
+
+# Incident has no severity/priority column — INCREASE_INCIDENT_PRIORITY
+# expresses "elevated" as this free-form tag instead (no migration).
+PRIORITY_ELEVATED_TAG = "priority:elevated"
+
+# Parameter keys checked, in order, for the audit trail's "target" field.
+_AUDIT_TARGET_KEYS = ("indicator", "host_id", "user", "username", "process", "ip")
 
 
 # ── System actor (see module docstring for why this exists) ─────────
@@ -131,9 +138,9 @@ async def _get_or_create_soar_session(db: AsyncSession, tenant_id: uuid.UUID, in
     return await investigation_session_service.create_session(db, tenant_id, incident_id, actor_user_id)
 
 
-# ── Internal handlers for the 4 AUTOMATIC action types ───────────────
+# ── Internal handlers for the 5 AUTOMATIC action types ───────────────
 # Pure SafeSOC-internal operations (read evidence, write a note, look up
-# TI, create an investigation action) — no external-system boundary, so
+# TI, create an investigation action, tag the incident's priority) — no external-system boundary, so
 # no adapter is involved. See module docstring for the "internal
 # handlers are self-verifying" reasoning.
 
@@ -167,7 +174,7 @@ async def _execute_enrich_indicator(db: AsyncSession, tenant_id: uuid.UUID, inci
         # still showed as "Not checked".
         #
         # The cache row, not the verdict values, is the test — and it's
-        # the very same one incident_evidence.py::_ti_verdicts uses, so
+        # the very same one ip_threat_intel.py::get_ip_threat_intel uses, so
         # the two panels can't disagree. A genuinely clean indicator
         # (AbuseIPDB configured, IP never reported) has all-zero
         # counters yet WAS checked; judging by value alone called that
@@ -214,11 +221,34 @@ async def _execute_create_investigation_action(db: AsyncSession, tenant_id: uuid
     }
 
 
+async def _execute_increase_incident_priority(db: AsyncSession, tenant_id: uuid.UUID, incident_id: uuid.UUID, parameters: dict) -> dict:
+    incident = await incidents_service.get_incident(db, tenant_id, incident_id)
+    actor_user_id = await _get_or_create_system_actor(db, tenant_id)
+    if PRIORITY_ELEVATED_TAG in (incident.tags or []):
+        # Desired state already holds — confirmed, not skipped, and no
+        # duplicate note for a second run of the same playbook.
+        return {
+            "success": True, "message": "[SafeSOC] Incident priority was already elevated — no change.",
+            "already_elevated": True, "tag": PRIORITY_ELEVATED_TAG,
+        }
+
+    reason = parameters.get("reason") or "not specified"
+    # A new list, never an in-place append — the JSON column only
+    # detects a change on reassignment.
+    await incidents_service.set_tags(db, tenant_id, incident_id, [*(incident.tags or []), PRIORITY_ELEVATED_TAG], actor_user_id=actor_user_id)
+    note = await incidents_service.add_note(db, tenant_id, incident_id, actor_user_id, f"Priority elevated by SOAR automation. Reason: {reason}")
+    return {
+        "success": True, "message": f"[SafeSOC] Elevated incident priority (tagged '{PRIORITY_ELEVATED_TAG}'). Reason: {reason}",
+        "tag": PRIORITY_ELEVATED_TAG, "note_id": str(note.id),
+    }
+
+
 _AUTOMATIC_HANDLERS: dict[SoarActionType, Callable] = {
     SoarActionType.COLLECT_ADDITIONAL_EVIDENCE: _execute_collect_additional_evidence,
     SoarActionType.ENRICH_INDICATOR: _execute_enrich_indicator,
     SoarActionType.ADD_INCIDENT_NOTE: _execute_add_incident_note,
     SoarActionType.CREATE_INVESTIGATION_ACTION: _execute_create_investigation_action,
+    SoarActionType.INCREASE_INCIDENT_PRIORITY: _execute_increase_incident_priority,
 }
 
 
@@ -283,7 +313,11 @@ async def _record_audit_event(db: AsyncSession, tenant_id: uuid.UUID, action_nam
 
 
 async def _emit(db: AsyncSession, tenant_id: uuid.UUID, audit_action: str, realtime_event: str, action: SoarActionExecution, incident: Incident, extra: Optional[dict] = None) -> None:
-    details = {"action_type": action.action_type.value, "incident_id": str(incident.id), **(extra or {})}
+    details = {"action_id": str(action.id), "action_type": action.action_type.value, "incident_id": str(incident.id)}
+    target = next((v for k in _AUDIT_TARGET_KEYS if isinstance(v := (action.parameters or {}).get(k), str) and v), None)
+    if target is not None:
+        details["target"] = target
+    details.update(extra or {})
     await _record_audit_event(db, tenant_id, audit_action, action.id, details)
     await publish_event(str(tenant_id), realtime_event, {"action_id": str(action.id), "incident_id": str(incident.id), "action_type": action.action_type.value})
 

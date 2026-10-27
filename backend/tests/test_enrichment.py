@@ -235,3 +235,125 @@ async def test_malicious_result_applies_the_configured_risk_score_bonus(monkeypa
     enriched = await enrichment.enrich_log(session, log)
 
     assert enriched.risk_score == settings.RISK_SCORE_TI_MALICIOUS_BONUS
+
+
+# ── Per-provider IP details survive the merge ─────────────────────
+
+@pytest.mark.asyncio
+async def test_merge_keeps_vt_details_from_vt_and_abuse_details_from_abuseipdb(monkeypatch, _mock_opensearch_update):
+    from app.schemas.log import AbuseIPDetails, VTIPDetails
+
+    session = _FakeSession(cache_rows=[None, None])
+    monkeypatch.setattr(
+        enrichment.virustotal, "lookup_ip",
+        AsyncMock(return_value=TIResult(
+            source_ip="140.246.61.93", vt_malicious=2, vt_total=80, is_malicious=True,
+            vt=VTIPDetails(malicious=2, total=80, as_owner="Example AS"),
+        )),
+    )
+    monkeypatch.setattr(
+        enrichment.abuseipdb, "lookup_ip",
+        AsyncMock(return_value=TIResult(
+            source_ip="140.246.61.93", abuse_confidence=40, is_malicious=False,
+            abuse=AbuseIPDetails(confidence=40, isp="Example ISP"),
+        )),
+    )
+
+    enriched = await enrichment.enrich_log(session, _make_log(source_ip="140.246.61.93"))
+
+    assert enriched.ti_result.vt is not None and enriched.ti_result.vt.as_owner == "Example AS"
+    assert enriched.ti_result.abuse is not None and enriched.ti_result.abuse.isp == "Example ISP"
+    # Written to OpenSearch with both blocks too.
+    dumped = _mock_opensearch_update.call_args.kwargs["ti_result"]
+    assert dumped["vt"]["malicious"] == 2 and dumped["abuse"]["confidence"] == 40
+
+
+@pytest.mark.asyncio
+async def test_old_cache_rows_without_details_still_load(monkeypatch):
+    now = datetime.now(timezone.utc)
+    vt_row = _FakeCacheRow({"vt_malicious": 0, "vt_total": 70, "is_malicious": False}, False, now + timedelta(days=1))
+    abuse_row = _FakeCacheRow({"abuse_confidence": 0, "is_malicious": False}, False, now + timedelta(days=1))
+    session = _FakeSession(cache_rows=[vt_row, abuse_row])
+
+    enriched = await enrichment.enrich_log(session, _make_log(source_ip="140.246.61.93"))
+
+    assert enriched.ti_result.vt is None
+    assert enriched.ti_result.abuse is None
+    assert enriched.ti_result.vt_total == 70
+
+
+# ── fetched_at and forced refresh ─────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_successful_provider_call_stamps_fetched_at(monkeypatch):
+    from app.core.enums import TIProvider
+
+    session = _FakeSession(cache_rows=[None])
+    monkeypatch.setattr(enrichment, "_write_cache", AsyncMock())
+    before = datetime.now(timezone.utc)
+
+    result = await enrichment._get_or_fetch(session, "140.246.61.93", TIProvider.VIRUSTOTAL, AsyncMock(return_value=TIResult(vt_total=70)))
+
+    assert result.fetched_at is not None and result.fetched_at >= before
+    written = enrichment._write_cache.call_args.args[3]
+    assert written.fetched_at == result.fetched_at  # persisted with the row
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_keeps_the_stored_fetched_at(monkeypatch):
+    from app.core.enums import TIProvider
+
+    stored = "2026-10-01T12:00:00+00:00"
+    row = _FakeCacheRow({"vt_total": 70, "fetched_at": stored}, False, datetime.now(timezone.utc) + timedelta(days=1))
+    fetch = AsyncMock(side_effect=AssertionError("must not be called on a fresh cache hit"))
+
+    result = await enrichment._get_or_fetch(_FakeSession(cache_rows=[row]), "140.246.61.93", TIProvider.VIRUSTOTAL, fetch)
+
+    assert result.fetched_at == datetime(2026, 10, 1, 12, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_force_calls_the_provider_even_with_a_fresh_cache_row(monkeypatch):
+    from app.core.enums import TIProvider
+
+    row = _FakeCacheRow({"vt_total": 70}, False, datetime.now(timezone.utc) + timedelta(days=1))
+    monkeypatch.setattr(enrichment, "_write_cache", AsyncMock())
+    fetch = AsyncMock(return_value=TIResult(vt_total=90))
+
+    result = await enrichment._get_or_fetch(_FakeSession(cache_rows=[row]), "140.246.61.93", TIProvider.VIRUSTOTAL, fetch, force=True)
+
+    fetch.assert_awaited_once()
+    assert result.vt_total == 90
+    enrichment._write_cache.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_force_with_provider_failure_falls_back_to_the_stored_row(monkeypatch):
+    from app.core.enums import TIProvider
+
+    row = _FakeCacheRow({"vt_total": 70, "fetched_at": "2026-10-01T12:00:00+00:00"}, False, datetime.now(timezone.utc) + timedelta(days=1))
+    monkeypatch.setattr(enrichment, "_write_cache", AsyncMock())
+    fetch = AsyncMock(side_effect=VirusTotalError("down"))
+
+    result = await enrichment._get_or_fetch(_FakeSession(cache_rows=[row]), "140.246.61.93", TIProvider.VIRUSTOTAL, fetch, force=True)
+
+    assert result.vt_total == 70
+    assert result.fetched_at == datetime(2026, 10, 1, 12, tzinfo=timezone.utc)
+    enrichment._write_cache.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_refresh_ip_forces_both_providers(monkeypatch):
+    now = datetime.now(timezone.utc)
+    fresh = lambda r: _FakeCacheRow(r, False, now + timedelta(days=1))  # noqa: E731
+    session = _FakeSession(cache_rows=[fresh({"vt_total": 1}), None, fresh({"abuse_confidence": 1}), None])
+    vt_lookup = AsyncMock(return_value=TIResult(vt_total=70))
+    abuse_lookup = AsyncMock(return_value=TIResult(abuse_confidence=5))
+    monkeypatch.setattr(enrichment.virustotal, "lookup_ip", vt_lookup)
+    monkeypatch.setattr(enrichment.abuseipdb, "lookup_ip", abuse_lookup)
+
+    result = await enrichment.refresh_ip(session, "140.246.61.93")
+
+    vt_lookup.assert_awaited_once()
+    abuse_lookup.assert_awaited_once()
+    assert result.vt_total == 70 and result.abuse_confidence == 5

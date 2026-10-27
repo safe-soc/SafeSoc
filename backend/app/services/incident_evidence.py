@@ -28,8 +28,8 @@ from app.core.config import settings
 from app.core.enums import LogSource, RiskLevel
 from app.db.opensearch import get_alerts_by_ids
 from app.models.endpoint import Endpoint
-from app.models.ti_cache import TICache
 from app.services.incidents import get_incident
+from app.services.ip_threat_intel import IPThreatIntel, get_ip_threat_intel, is_public_ip
 
 
 class HostEntity(BaseModel):
@@ -55,6 +55,11 @@ class IPEntity(BaseModel):
     # flagged it.
     is_malicious: Optional[bool] = None
     alert_count: int
+    # None = no ti_cache row at all (same condition as is_malicious None).
+    ti: Optional[IPThreatIntel] = None
+    # Globally routable — False for private/reserved/documentation
+    # ranges (never looked up meaningfully) and for unparseable values.
+    is_public: bool = False
 
 
 class UserEntity(BaseModel):
@@ -80,19 +85,6 @@ async def _endpoint_risk_by_host(db: AsyncSession, tenant_id: uuid.UUID, host_id
         return {}
     result = await db.execute(select(Endpoint).where(Endpoint.tenant_id == tenant_id, Endpoint.host_id.in_(host_ids)))
     return {endpoint.host_id: endpoint for endpoint in result.scalars().all()}
-
-
-async def _ti_verdicts(db: AsyncSession, indicators: list[str]) -> dict[str, bool]:
-    if not indicators:
-        return {}
-    result = await db.execute(select(TICache).where(TICache.indicator.in_(indicators)))
-    verdicts: dict[str, bool] = {}
-    for row in result.scalars().all():
-        # If any cached provider says malicious, the indicator is
-        # malicious; otherwise clean, as long as at least one provider
-        # has actually checked it (rows for this indicator exist).
-        verdicts[row.indicator] = verdicts.get(row.indicator, False) or row.is_malicious
-    return verdicts
 
 
 async def get_incident_evidence(db: AsyncSession, tenant_id: uuid.UUID, incident_id: uuid.UUID) -> IncidentEvidence:
@@ -140,7 +132,7 @@ async def get_incident_evidence(db: AsyncSession, tenant_id: uuid.UUID, incident
             user_alert_counts[user] = user_alert_counts.get(user, 0) + 1
 
     endpoints = await _endpoint_risk_by_host(db, tenant_id, list(host_alert_counts))
-    ti_verdicts = await _ti_verdicts(db, list(ip_roles))
+    ti_intel = await get_ip_threat_intel(db, list(ip_roles))
 
     hosts = [
         HostEntity(
@@ -155,7 +147,14 @@ async def get_incident_evidence(db: AsyncSession, tenant_id: uuid.UUID, incident
     ]
 
     ips = [
-        IPEntity(ip=ip, roles=sorted(roles), is_malicious=ti_verdicts.get(ip), alert_count=ip_alert_counts[ip])
+        IPEntity(
+            ip=ip,
+            roles=sorted(roles),
+            is_malicious=ti_intel[ip].is_malicious if ip in ti_intel else None,
+            alert_count=ip_alert_counts[ip],
+            ti=ti_intel.get(ip),
+            is_public=is_public_ip(ip),
+        )
         for ip, roles in ip_roles.items()
     ]
 
