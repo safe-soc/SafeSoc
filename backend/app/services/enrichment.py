@@ -39,7 +39,7 @@ async def has_ti_data(db: AsyncSession, indicator: str) -> bool:
     not.
 
     This is deliberately the SAME definition of "checked" that
-    services/incident_evidence.py::_ti_verdicts uses to decide between
+    services/incident_evidence.py::_ti_intel uses to decide between
     a verdict and "Not checked" in the Evidence panel, so callers
     reporting enrichment coverage agree with what that panel shows.
     Note what it is NOT: a verdict-value test. A clean indicator that a
@@ -140,6 +140,10 @@ def _merge(
         abuse_confidence=abuse.abuse_confidence,
         abuse_total_reports=abuse.abuse_total_reports,
         is_malicious=vt.is_malicious or abuse.is_malicious,
+        # Each provider's details come only from its own result, so
+        # neither can blank the other out.
+        vt=vt.vt,
+        abuse=abuse.abuse,
     )
 
 

@@ -270,11 +270,60 @@ export interface HostEntity {
   has_anomalous_activity?: boolean;
 }
 
+// Per-provider IP details captured from the same VirusTotal / AbuseIPDB
+// calls enrichment already makes (backend schemas/log.py).
+export interface VTFlaggedEngine {
+  engine: string;
+  category: string;
+  result: string | null;
+}
+
+export interface VTIPDetails {
+  malicious: number;
+  suspicious: number;
+  harmless: number;
+  undetected: number;
+  total: number;
+  reputation: number | null;
+  asn: number | null;
+  as_owner: string | null;
+  network: string | null;
+  country: string | null;
+  last_analysis_date: string | null;
+  tags: string[];
+  flagged_by: VTFlaggedEngine[];
+}
+
+export interface AbuseIPDetails {
+  confidence: number;
+  total_reports: number;
+  num_distinct_users: number;
+  last_reported_at: string | null;
+  isp: string | null;
+  usage_type: string | null;
+  domain: string | null;
+  country_code: string | null;
+  hostnames: string[];
+  is_tor: boolean;
+  is_whitelisted: boolean | null;
+  max_age_days: number;
+}
+
+export interface IPThreatIntel {
+  is_malicious: boolean;
+  checked_at: string | null;
+  vt: VTIPDetails | null;
+  abuse: AbuseIPDetails | null;
+}
+
 export interface IPEntity {
   ip: string;
   roles: string[];
   is_malicious?: boolean | null;
   alert_count: number;
+  // Absent/null = no ti_cache row at all.
+  ti?: IPThreatIntel | null;
+  is_public?: boolean;
 }
 
 export interface UserEntity {

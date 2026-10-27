@@ -13,6 +13,51 @@ from pydantic import BaseModel, Field
 from app.core.enums import LogSource, LogType, Severity
 
 
+class VTFlaggedEngine(BaseModel):
+    """One VirusTotal engine that flagged an IP (malicious/suspicious only)."""
+    engine: str
+    category: str
+    result: Optional[str] = None
+
+
+class VTIPDetails(BaseModel):
+    """
+    VirusTotal's IP report beyond the headline counters, taken from the
+    same ip_addresses/{ip} response lookup_ip already fetches — no
+    extra API call. Every field is defaulted so a sparse response (or
+    an older cached row) never fails validation.
+    """
+    malicious: int = 0
+    suspicious: int = 0
+    harmless: int = 0
+    undetected: int = 0
+    total: int = 0
+    reputation: Optional[int] = None
+    asn: Optional[int] = None
+    as_owner: Optional[str] = None
+    network: Optional[str] = None
+    country: Optional[str] = None
+    last_analysis_date: Optional[datetime] = None
+    tags: list[str] = Field(default_factory=list)
+    flagged_by: list[VTFlaggedEngine] = Field(default_factory=list)
+
+
+class AbuseIPDetails(BaseModel):
+    """AbuseIPDB's /check report for an IP, from the call lookup_ip already makes."""
+    confidence: int = 0
+    total_reports: int = 0
+    num_distinct_users: int = 0
+    last_reported_at: Optional[datetime] = None
+    isp: Optional[str] = None
+    usage_type: Optional[str] = None
+    domain: Optional[str] = None
+    country_code: Optional[str] = None
+    hostnames: list[str] = Field(default_factory=list)
+    is_tor: bool = False
+    is_whitelisted: Optional[bool] = None
+    max_age_days: int = 90
+
+
 class TIResult(BaseModel):
     """Threat intelligence enrichment result for a single indicator."""
     source_ip: Optional[str] = None
@@ -24,6 +69,12 @@ class TIResult(BaseModel):
     abuse_total_reports: int = 0
     is_malicious: bool = False
     tags: list[str] = Field(default_factory=list)
+    # Per-provider IP details, kept separate so the enrichment merge can
+    # carry each one from its own provider. None for hash lookups, for a
+    # provider that returned nothing, and for ti_cache rows written
+    # before these fields existed.
+    vt: Optional[VTIPDetails] = None
+    abuse: Optional[AbuseIPDetails] = None
 
 
 class NormalizedLog(BaseModel):

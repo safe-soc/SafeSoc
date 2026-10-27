@@ -235,3 +235,48 @@ async def test_malicious_result_applies_the_configured_risk_score_bonus(monkeypa
     enriched = await enrichment.enrich_log(session, log)
 
     assert enriched.risk_score == settings.RISK_SCORE_TI_MALICIOUS_BONUS
+
+
+# ── Per-provider IP details survive the merge ─────────────────────
+
+@pytest.mark.asyncio
+async def test_merge_keeps_vt_details_from_vt_and_abuse_details_from_abuseipdb(monkeypatch, _mock_opensearch_update):
+    from app.schemas.log import AbuseIPDetails, VTIPDetails
+
+    session = _FakeSession(cache_rows=[None, None])
+    monkeypatch.setattr(
+        enrichment.virustotal, "lookup_ip",
+        AsyncMock(return_value=TIResult(
+            source_ip="140.246.61.93", vt_malicious=2, vt_total=80, is_malicious=True,
+            vt=VTIPDetails(malicious=2, total=80, as_owner="Example AS"),
+        )),
+    )
+    monkeypatch.setattr(
+        enrichment.abuseipdb, "lookup_ip",
+        AsyncMock(return_value=TIResult(
+            source_ip="140.246.61.93", abuse_confidence=40, is_malicious=False,
+            abuse=AbuseIPDetails(confidence=40, isp="Example ISP"),
+        )),
+    )
+
+    enriched = await enrichment.enrich_log(session, _make_log(source_ip="140.246.61.93"))
+
+    assert enriched.ti_result.vt is not None and enriched.ti_result.vt.as_owner == "Example AS"
+    assert enriched.ti_result.abuse is not None and enriched.ti_result.abuse.isp == "Example ISP"
+    # Written to OpenSearch with both blocks too.
+    dumped = _mock_opensearch_update.call_args.kwargs["ti_result"]
+    assert dumped["vt"]["malicious"] == 2 and dumped["abuse"]["confidence"] == 40
+
+
+@pytest.mark.asyncio
+async def test_old_cache_rows_without_details_still_load(monkeypatch):
+    now = datetime.now(timezone.utc)
+    vt_row = _FakeCacheRow({"vt_malicious": 0, "vt_total": 70, "is_malicious": False}, False, now + timedelta(days=1))
+    abuse_row = _FakeCacheRow({"abuse_confidence": 0, "is_malicious": False}, False, now + timedelta(days=1))
+    session = _FakeSession(cache_rows=[vt_row, abuse_row])
+
+    enriched = await enrichment.enrich_log(session, _make_log(source_ip="140.246.61.93"))
+
+    assert enriched.ti_result.vt is None
+    assert enriched.ti_result.abuse is None
+    assert enriched.ti_result.vt_total == 70

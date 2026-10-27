@@ -7,11 +7,13 @@ ABUSEIPDB_RATE_LIMIT_PER_DAY via an in-process sliding 24h counter
 
 import time
 from collections import deque
+from datetime import datetime
+from typing import Optional
 
 import requests
 
 from app.core.config import settings
-from app.schemas.log import TIResult
+from app.schemas.log import AbuseIPDetails, TIResult
 
 ABUSEIPDB_BASE_URL = "https://api.abuseipdb.com/api/v2"
 
@@ -20,6 +22,10 @@ ABUSEIPDB_BASE_URL = "https://api.abuseipdb.com/api/v2"
 # define a fixed cutoff and there's no existing config setting for one,
 # so this is a documented judgment call, not a value from the API/spec.
 MALICIOUS_CONFIDENCE_THRESHOLD = 50
+
+# The report window passed to /check — also recorded on AbuseIPDetails
+# so the UI can say "N reports in the last 90 days".
+MAX_AGE_IN_DAYS = 90
 
 # Timestamps (time.monotonic()) of recent requests, for the sliding
 # 24h rate-limit window.
@@ -64,10 +70,34 @@ def _get(path: str, params: dict) -> dict:
         raise AbuseIPDBError(f"AbuseIPDB request failed: {e}") from e
 
 
+def _parse_datetime(value) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
+
+
+def _ip_details(attributes: dict) -> AbuseIPDetails:
+    return AbuseIPDetails(
+        confidence=attributes.get("abuseConfidenceScore") or 0,
+        total_reports=attributes.get("totalReports") or 0,
+        num_distinct_users=attributes.get("numDistinctUsers") or 0,
+        last_reported_at=_parse_datetime(attributes.get("lastReportedAt")),
+        isp=attributes.get("isp"),
+        usage_type=attributes.get("usageType"),
+        domain=attributes.get("domain"),
+        country_code=attributes.get("countryCode"),
+        hostnames=[h for h in (attributes.get("hostnames") or []) if isinstance(h, str)],
+        is_tor=bool(attributes.get("isTor")),
+        is_whitelisted=attributes.get("isWhitelisted"),
+        max_age_days=MAX_AGE_IN_DAYS,
+    )
+
+
 async def lookup_ip(ip: str) -> TIResult:
     """Look up an IP address's reputation on AbuseIPDB."""
-    data = _get("check", {"ipAddress": ip, "maxAgeInDays": 90})
-    attributes = data.get("data", {})
+    data = _get("check", {"ipAddress": ip, "maxAgeInDays": MAX_AGE_IN_DAYS})
+    attributes = data.get("data") or {}
     confidence = attributes.get("abuseConfidenceScore", 0)
 
     return TIResult(
@@ -75,4 +105,5 @@ async def lookup_ip(ip: str) -> TIResult:
         abuse_confidence=confidence,
         abuse_total_reports=attributes.get("totalReports", 0),
         is_malicious=confidence >= MALICIOUS_CONFIDENCE_THRESHOLD,
+        abuse=_ip_details(attributes),
     )

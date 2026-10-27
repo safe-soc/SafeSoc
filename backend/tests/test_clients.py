@@ -183,3 +183,180 @@ def test_abuseipdb_network_failure_raises_typed_exception(monkeypatch):
 
     with pytest.raises(abuseipdb.AbuseIPDBError):
         abuseipdb._get("check", {"ipAddress": "45.33.32.156"})
+
+
+# ── Rich IP details (VTIPDetails / AbuseIPDetails) ─────────────────
+
+def _fake_json_response(payload: dict) -> Mock:
+    response = Mock()
+    response.raise_for_status = Mock()
+    response.json.return_value = payload
+    return response
+
+
+def _vt_engine(name: str, category: str, result: str) -> dict:
+    return {"method": "blacklist", "engine_name": name, "category": category, "result": result}
+
+
+# Trimmed but structurally faithful VirusTotal v3 ip_addresses/{ip} response.
+VT_IP_FIXTURE = {
+    "data": {
+        "id": "140.246.61.93",
+        "type": "ip_address",
+        "attributes": {
+            "network": "140.246.0.0/16",
+            "tags": ["suspicious-udp", "scanner"],
+            "country": "CN",
+            "as_owner": "Example Hosting Ltd",
+            "asn": 4134,
+            "continent": "AS",
+            "reputation": -11,
+            "last_analysis_date": 1767225600,  # 2026-01-01T00:00:00Z
+            "last_analysis_stats": {"malicious": 3, "suspicious": 1, "undetected": 25, "harmless": 60, "timeout": 0},
+            "last_analysis_results": {
+                "Zeta": _vt_engine("Zeta", "suspicious", "suspicious"),
+                "BitDefender": _vt_engine("BitDefender", "malicious", "malware"),
+                "Kaspersky": _vt_engine("Kaspersky", "harmless", "clean"),
+                "alphaMountain.ai": _vt_engine("alphaMountain.ai", "malicious", "malicious"),
+                "CRDF": _vt_engine("CRDF", "malicious", "malicious"),
+                "Avira": _vt_engine("Avira", "undetected", "unrated"),
+            },
+            "whois": "irrelevant",
+        },
+    }
+}
+
+# AbuseIPDB v2 /check response.
+ABUSE_CHECK_FIXTURE = {
+    "data": {
+        "ipAddress": "140.246.61.93",
+        "isPublic": True,
+        "ipVersion": 4,
+        "isWhitelisted": False,
+        "abuseConfidenceScore": 87,
+        "countryCode": "CN",
+        "usageType": "Data Center/Web Hosting/Transit",
+        "isp": "Example Hosting Ltd",
+        "domain": "example-hosting.cn",
+        "hostnames": ["scan-1.example-hosting.cn"],
+        "isTor": False,
+        "totalReports": 42,
+        "numDistinctUsers": 17,
+        "lastReportedAt": "2026-10-20T08:15:30+00:00",
+    }
+}
+
+
+@pytest.mark.asyncio
+async def test_vt_lookup_ip_maps_every_detail_field(monkeypatch):
+    from datetime import datetime, timezone
+
+    monkeypatch.setattr(virustotal.requests, "get", Mock(return_value=_fake_json_response(VT_IP_FIXTURE)))
+
+    result = await virustotal.lookup_ip("140.246.61.93")
+
+    vt = result.vt
+    assert (vt.malicious, vt.suspicious, vt.harmless, vt.undetected, vt.total) == (3, 1, 60, 25, 89)
+    assert vt.total == result.vt_total
+    assert vt.reputation == -11
+    assert vt.asn == 4134
+    assert vt.as_owner == "Example Hosting Ltd"
+    assert vt.network == "140.246.0.0/16"
+    assert vt.country == "CN"
+    assert vt.last_analysis_date == datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert vt.tags == ["suspicious-udp", "scanner"]
+    assert result.abuse is None
+    # Headline fields and verdict are unchanged by the richer parse.
+    assert result.vt_malicious == 3
+    assert result.is_malicious is True
+
+
+@pytest.mark.asyncio
+async def test_vt_flagged_by_keeps_only_malicious_and_suspicious_malicious_first(monkeypatch):
+    monkeypatch.setattr(virustotal.requests, "get", Mock(return_value=_fake_json_response(VT_IP_FIXTURE)))
+
+    result = await virustotal.lookup_ip("140.246.61.93")
+
+    flagged = [(f.engine, f.category, f.result) for f in result.vt.flagged_by]
+    assert flagged == [
+        ("alphaMountain.ai", "malicious", "malicious"),
+        ("BitDefender", "malicious", "malware"),
+        ("CRDF", "malicious", "malicious"),
+        ("Zeta", "suspicious", "suspicious"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_vt_flagged_by_is_capped_at_twenty(monkeypatch):
+    results = {f"S{i:02}": _vt_engine(f"S{i:02}", "suspicious", "suspicious") for i in range(10)}
+    results.update({f"M{i:02}": _vt_engine(f"M{i:02}", "malicious", "malware") for i in range(25)})
+    payload = {"data": {"attributes": {"last_analysis_stats": {"malicious": 25, "suspicious": 10}, "last_analysis_results": results}}}
+    monkeypatch.setattr(virustotal.requests, "get", Mock(return_value=_fake_json_response(payload)))
+
+    result = await virustotal.lookup_ip("140.246.61.93")
+
+    assert len(result.vt.flagged_by) == virustotal.FLAGGED_BY_LIMIT == 20
+    assert all(f.category == "malicious" for f in result.vt.flagged_by)
+
+
+@pytest.mark.asyncio
+async def test_vt_lookup_ip_with_missing_keys_defaults_instead_of_raising(monkeypatch):
+    payload = {"data": {"attributes": {"last_analysis_date": "not-a-number"}}}
+    monkeypatch.setattr(virustotal.requests, "get", Mock(return_value=_fake_json_response(payload)))
+
+    result = await virustotal.lookup_ip("140.246.61.93")
+
+    vt = result.vt
+    assert vt.reputation is None and vt.asn is None and vt.as_owner is None
+    assert vt.network is None and vt.country is None and vt.last_analysis_date is None
+    assert vt.tags == [] and vt.flagged_by == [] and vt.total == 0
+    assert result.is_malicious is False
+
+
+@pytest.mark.asyncio
+async def test_vt_hash_lookup_carries_no_ip_details(monkeypatch):
+    monkeypatch.setattr(virustotal.requests, "get", Mock(return_value=_fake_json_response(VT_IP_FIXTURE)))
+
+    result = await virustotal.lookup_hash("44d88612fea8a8f36de82e1278abb02f")
+
+    assert result.vt is None
+
+
+@pytest.mark.asyncio
+async def test_abuseipdb_lookup_ip_maps_every_detail_field(monkeypatch):
+    from datetime import datetime, timezone
+
+    monkeypatch.setattr(abuseipdb.requests, "get", Mock(return_value=_fake_json_response(ABUSE_CHECK_FIXTURE)))
+
+    result = await abuseipdb.lookup_ip("140.246.61.93")
+
+    abuse = result.abuse
+    assert abuse.confidence == 87
+    assert abuse.total_reports == 42
+    assert abuse.num_distinct_users == 17
+    assert abuse.last_reported_at == datetime(2026, 10, 20, 8, 15, 30, tzinfo=timezone.utc)
+    assert abuse.isp == "Example Hosting Ltd"
+    assert abuse.usage_type == "Data Center/Web Hosting/Transit"
+    assert abuse.domain == "example-hosting.cn"
+    assert abuse.country_code == "CN"
+    assert abuse.hostnames == ["scan-1.example-hosting.cn"]
+    assert abuse.is_tor is False
+    assert abuse.is_whitelisted is False
+    assert abuse.max_age_days == 90
+    assert result.vt is None
+    assert result.abuse_confidence == 87 and result.is_malicious is True
+
+
+@pytest.mark.asyncio
+async def test_abuseipdb_lookup_ip_with_missing_keys_defaults_instead_of_raising(monkeypatch):
+    payload = {"data": {"lastReportedAt": None, "hostnames": None}}
+    monkeypatch.setattr(abuseipdb.requests, "get", Mock(return_value=_fake_json_response(payload)))
+
+    result = await abuseipdb.lookup_ip("140.246.61.93")
+
+    abuse = result.abuse
+    assert (abuse.confidence, abuse.total_reports, abuse.num_distinct_users) == (0, 0, 0)
+    assert abuse.last_reported_at is None and abuse.isp is None and abuse.usage_type is None
+    assert abuse.domain is None and abuse.country_code is None and abuse.is_whitelisted is None
+    assert abuse.hostnames == [] and abuse.is_tor is False
+    assert result.is_malicious is False
