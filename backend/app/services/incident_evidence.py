@@ -17,22 +17,19 @@ IP with no ti_cache entry, simply carries a null annotation rather
 than failing extraction for the whole incident.
 """
 
-import ipaddress
 import uuid
-from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.enums import LogSource, RiskLevel, TIDetailStatus, TIProvider
+from app.core.enums import LogSource, RiskLevel
 from app.db.opensearch import get_alerts_by_ids
 from app.models.endpoint import Endpoint
-from app.models.ti_cache import TICache
-from app.schemas.log import AbuseIPDetails, TIResult, VTIPDetails
 from app.services.incidents import get_incident
+from app.services.ip_threat_intel import IPThreatIntel, get_ip_threat_intel, is_public_ip
 
 
 class HostEntity(BaseModel):
@@ -46,21 +43,6 @@ class HostEntity(BaseModel):
     # threshold services/anomaly.py itself uses to decide is_anomalous,
     # not a new one invented here.
     has_anomalous_activity: bool = False
-
-
-class IPThreatIntel(BaseModel):
-    """
-    Everything ti_cache holds for one IP: the combined verdict plus each
-    provider's own details, read only from that provider's row.
-    """
-    is_malicious: bool
-    # Latest real lookup across this IP's rows: each row's
-    # result.fetched_at, or its created_at for rows predating fetched_at.
-    checked_at: Optional[datetime] = None
-    vt: Optional[VTIPDetails] = None
-    abuse: Optional[AbuseIPDetails] = None
-    vt_status: TIDetailStatus = TIDetailStatus.MISSING
-    abuse_status: TIDetailStatus = TIDetailStatus.MISSING
 
 
 class IPEntity(BaseModel):
@@ -103,49 +85,6 @@ async def _endpoint_risk_by_host(db: AsyncSession, tenant_id: uuid.UUID, host_id
         return {}
     result = await db.execute(select(Endpoint).where(Endpoint.tenant_id == tenant_id, Endpoint.host_id.in_(host_ids)))
     return {endpoint.host_id: endpoint for endpoint in result.scalars().all()}
-
-
-def _is_public(ip: str) -> bool:
-    try:
-        return ipaddress.ip_address(ip).is_global
-    except ValueError:
-        return False
-
-
-def _cached_result(row: TICache) -> Optional[TIResult]:
-    try:
-        return TIResult(**(row.result or {}))
-    except (TypeError, ValidationError):
-        return None
-
-
-async def _ti_intel(db: AsyncSession, indicators: list[str]) -> dict[str, IPThreatIntel]:
-    """
-    Per-IP threat intel from ti_cache. "Checked" means at least one row
-    exists for the indicator, from any provider, expired or not — the
-    same rule as services/enrichment.py::has_ti_data, so this panel and
-    SOAR's ENRICH_INDICATOR never disagree about what was checked.
-    """
-    if not indicators:
-        return {}
-    result = await db.execute(select(TICache).where(TICache.indicator.in_(indicators)))
-    intel: dict[str, IPThreatIntel] = {}
-    for row in result.scalars().all():
-        entry = intel.setdefault(row.indicator, IPThreatIntel(is_malicious=False))
-        # If any cached provider says malicious, the indicator is
-        # malicious; otherwise clean.
-        entry.is_malicious = entry.is_malicious or row.is_malicious
-        cached = _cached_result(row)
-        looked_up_at = (cached.fetched_at if cached is not None else None) or row.created_at
-        if looked_up_at is not None and (entry.checked_at is None or looked_up_at > entry.checked_at):
-            entry.checked_at = looked_up_at
-        if row.provider == TIProvider.VIRUSTOTAL:
-            entry.vt = cached.vt if cached is not None else None
-            entry.vt_status = TIDetailStatus.OK if entry.vt is not None else TIDetailStatus.LEGACY
-        elif row.provider == TIProvider.ABUSEIPDB:
-            entry.abuse = cached.abuse if cached is not None else None
-            entry.abuse_status = TIDetailStatus.OK if entry.abuse is not None else TIDetailStatus.LEGACY
-    return intel
 
 
 async def get_incident_evidence(db: AsyncSession, tenant_id: uuid.UUID, incident_id: uuid.UUID) -> IncidentEvidence:
@@ -193,7 +132,7 @@ async def get_incident_evidence(db: AsyncSession, tenant_id: uuid.UUID, incident
             user_alert_counts[user] = user_alert_counts.get(user, 0) + 1
 
     endpoints = await _endpoint_risk_by_host(db, tenant_id, list(host_alert_counts))
-    ti_intel = await _ti_intel(db, list(ip_roles))
+    ti_intel = await get_ip_threat_intel(db, list(ip_roles))
 
     hosts = [
         HostEntity(
@@ -214,7 +153,7 @@ async def get_incident_evidence(db: AsyncSession, tenant_id: uuid.UUID, incident
             is_malicious=ti_intel[ip].is_malicious if ip in ti_intel else None,
             alert_count=ip_alert_counts[ip],
             ti=ti_intel.get(ip),
-            is_public=_is_public(ip),
+            is_public=is_public_ip(ip),
         )
         for ip, roles in ip_roles.items()
     ]

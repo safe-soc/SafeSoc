@@ -39,7 +39,7 @@ async def has_ti_data(db: AsyncSession, indicator: str) -> bool:
     not.
 
     This is deliberately the SAME definition of "checked" that
-    services/incident_evidence.py::_ti_intel uses to decide between
+    services/ip_threat_intel.py::get_ip_threat_intel uses to decide between
     a verdict and "Not checked" in the Evidence panel, so callers
     reporting enrichment coverage agree with what that panel shows.
     Note what it is NOT: a verdict-value test. A clean indicator that a

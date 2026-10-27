@@ -139,6 +139,18 @@ async def get_alert_ids_for_triage_status(
     return alert_ids, None
 
 
+def merge_triage_state(alert: dict, annotation: Optional[AlertAnnotation]) -> None:
+    """
+    Copy an alert's triage state onto its OpenSearch document in place —
+    defaults (not acknowledged/dismissed) for an alert with no row yet.
+    Shared by the alert list and the single-alert context endpoint.
+    """
+    alert["acknowledged"] = annotation.acknowledged if annotation else False
+    alert["dismissed"] = annotation.dismissed if annotation else False
+    alert["dismiss_reason"] = annotation.dismiss_reason.value if annotation and annotation.dismiss_reason else None
+    alert["dismiss_note"] = annotation.dismiss_note if annotation else None
+
+
 async def get_annotations_for_alert_ids(
     db: AsyncSession, tenant_id: uuid.UUID, alert_ids: list[str]
 ) -> dict[str, AlertAnnotation]:

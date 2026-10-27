@@ -197,6 +197,12 @@ class SoarPolicyViolationError(SafeSOCError):
         )
 
 
+class AlertNotFoundError(SafeSOCError):
+    """No alert with this id for the caller's tenant — another tenant's alert is reported the same way."""
+    def __init__(self, alert_id: str):
+        super().__init__(f"Alert '{alert_id}' not found.", status_code=404)
+
+
 class InvalidIndicatorError(SafeSOCError):
     """A threat-intel refresh was requested for a value that isn't a public (globally routable) IP."""
     def __init__(self, indicator: str):

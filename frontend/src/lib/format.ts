@@ -10,14 +10,20 @@
  * timestamp renders "—", never "Invalid Date".
  */
 
-import type { CorrelationPattern, DismissReason, Incident } from './types';
+import type { CorrelationPattern, DismissReason, Incident, IPThreatIntel } from './types';
 
 const PLACEHOLDER = '—';
 
-/** A Date for a usable timestamp, or null for empty/invalid input. */
+// An ISO date-time with no "Z" or ±hh:mm offset. The backend's naive
+// datetimes (e.g. ingested_at from datetime.utcnow()) are UTC, but
+// `new Date()` reads such a string as browser-local time — 5h30m early
+// in IST — so it gets an explicit "Z" before parsing.
+const ISO_WITHOUT_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/;
+
+/** A Date for a usable timestamp, or null for empty/invalid input. Offset-less ISO strings are read as UTC. */
 export function parseTimestamp(iso: string | null | undefined): Date | null {
   if (!iso) return null;
-  const date = new Date(iso);
+  const date = new Date(ISO_WITHOUT_OFFSET.test(iso) ? `${iso}Z` : iso);
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
@@ -196,6 +202,14 @@ export function hostsLabel(hosts: string[]): string {
 export function incidentTitle(incident: Pick<Incident, 'category' | 'hosts'>): string {
   const category = categoryLabel(incident.category);
   return incident.hosts.length > 0 ? `${category} on ${hostsLabel(incident.hosts)}` : category;
+}
+
+/** "{country} · {owner}" for a cached IP, from whichever provider supplied each part; null when neither did. */
+export function ipOwnerSummary(ti: IPThreatIntel | null | undefined): string | null {
+  if (!ti) return null;
+  const country = ti.vt?.country || ti.abuse?.country_code;
+  const owner = ti.vt?.as_owner || ti.abuse?.isp;
+  return [country, owner].filter(Boolean).join(' · ') || null;
 }
 
 const DISMISS_REASON_LABELS: Record<DismissReason, string> = {

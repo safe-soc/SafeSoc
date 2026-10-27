@@ -4,6 +4,8 @@ GET /api/v1/alerts — paginated alert search with filters, free-text
 search (`q`) and a triage-status filter.
 POST /api/v1/alerts/{alert_id}/acknowledge, .../dismiss (with a
 reason), .../restore — analyst triage actions (SS-107).
+GET /api/v1/alerts/{alert_id}/context — one alert's full details for the
+Alerts page's expandable row.
 Requires a valid JWT (SS-015); tenant_id is derived from the token,
 not the caller-supplied query parameter (SS-016).
 """
@@ -24,8 +26,10 @@ from app.services.alert_annotations import (
     dismiss_alert,
     get_alert_ids_for_triage_status,
     get_annotations_for_alert_ids,
+    merge_triage_state,
     restore_alert,
 )
+from app.services.alert_context import AlertContext, get_alert_context
 
 router = APIRouter(prefix="/api/v1", tags=["alerts"])
 
@@ -99,11 +103,7 @@ async def get_alerts(
     alert_ids = [alert["alert_id"] for alert in result["alerts"] if alert.get("alert_id")]
     annotations = await get_annotations_for_alert_ids(db, current_user.tenant_id, alert_ids)
     for alert in result["alerts"]:
-        annotation = annotations.get(alert.get("alert_id"))
-        alert["acknowledged"] = annotation.acknowledged if annotation else False
-        alert["dismissed"] = annotation.dismissed if annotation else False
-        alert["dismiss_reason"] = annotation.dismiss_reason.value if annotation and annotation.dismiss_reason else None
-        alert["dismiss_note"] = annotation.dismiss_note if annotation else None
+        merge_triage_state(alert, annotations.get(alert.get("alert_id")))
 
     return result
 
@@ -129,6 +129,16 @@ async def get_alerts_summary(
         timerange_hours=timerange_hours,
         host_id=host_id,
     )
+
+
+@router.get("/alerts/{alert_id}/context", response_model=AlertContext)
+async def get_context(
+    alert_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Full alert document + triage state, its incident (if any), and cached TI for its IPs — 404 for another tenant's alert."""
+    return await get_alert_context(db, current_user.tenant_id, alert_id)
 
 
 @router.post("/alerts/{alert_id}/acknowledge", response_model=AlertAnnotationResponse)

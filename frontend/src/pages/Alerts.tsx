@@ -16,8 +16,9 @@
  * applied server-side.
  */
 
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import AlertDetails from '../components/AlertDetails';
 import Layout from '../components/Layout';
 import PageHeader from '../components/PageHeader';
 import LevelBadge from '../components/LevelBadge';
@@ -35,11 +36,13 @@ import {
   TRIAGE_STATUSES,
   type Alert,
   type AlertAnnotation,
+  type AlertContext,
   type AlertSearchResponse,
   type DismissReason,
 } from '../lib/types';
 
 const PAGE_SIZE = 50;
+const COLUMN_COUNT = 10;
 const SEARCH_DEBOUNCE_MS = 300;
 const DISMISS_NOTE_MAX_LENGTH = 500;
 
@@ -71,6 +74,10 @@ export default function Alerts() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [triageAlertId, setTriageAlertId] = useState<string | null>(null);
+  // Expandable details rows: which are open, and each alert's context
+  // fetched on first expand and kept for the page's lifetime.
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
+  const [contexts, setContexts] = useState<Record<string, ContextState>>({});
 
   useEffect(() => {
     const next = searchInput.trim();
@@ -86,6 +93,7 @@ export default function Alerts() {
     let cancelled = false;
     setIsLoading(true);
     setError(null);
+    setExpandedIds(new Set());
 
     const params: Record<string, string | number> = { page, size: PAGE_SIZE, timerange_hours: timerangeHours };
     if (severity) params.severity = severity;
@@ -136,6 +144,26 @@ export default function Alerts() {
     } finally {
       setTriageAlertId(null);
     }
+  };
+
+  const loadContext = (alertId: string) => {
+    setContexts((prev) => ({ ...prev, [alertId]: { status: 'loading' } }));
+    api
+      .get<AlertContext>(`/api/v1/alerts/${encodeURIComponent(alertId)}/context`)
+      .then((response) => setContexts((prev) => ({ ...prev, [alertId]: { status: 'ok', data: response.data } })))
+      .catch(() => setContexts((prev) => ({ ...prev, [alertId]: { status: 'error' } })));
+  };
+
+  const toggleExpanded = (alertId: string) => {
+    const opening = !expandedIds.has(alertId);
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (opening) next.add(alertId);
+      else next.delete(alertId);
+      return next;
+    });
+    const cached = contexts[alertId];
+    if (opening && (!cached || cached.status === 'error')) loadContext(alertId);
   };
 
   const resetToFirstPage = (setter: (value: string) => void) => (value: string) => {
@@ -261,6 +289,9 @@ export default function Alerts() {
           <table className="w-full text-left text-sm">
             <thead className="bg-slate-900/80 text-xs uppercase tracking-wide text-slate-500">
               <tr>
+                <th className="w-8 py-3 pl-3 pr-0">
+                  <span className="sr-only">Details</span>
+                </th>
                 <th className="px-4 py-3 font-medium">Timestamp</th>
                 <th className="px-4 py-3 font-medium">Severity</th>
                 <th className="px-4 py-3 font-medium">Host</th>
@@ -274,10 +305,10 @@ export default function Alerts() {
             </thead>
             <tbody>
               {isLoading ? (
-                <TableSkeleton rows={10} columns={9} />
+                <TableSkeleton rows={10} columns={COLUMN_COUNT} />
               ) : alerts.length === 0 ? (
                 <tr>
-                  <td colSpan={9}>
+                  <td colSpan={COLUMN_COUNT}>
                     <EmptyState
                       icon={<AlertIcon className="h-10 w-10 text-slate-700" />}
                       title={q ? 'No alerts match your search' : 'No alerts match these filters'}
@@ -290,33 +321,72 @@ export default function Alerts() {
                   </td>
                 </tr>
               ) : (
-                alerts.map((alert) => (
-                  <tr key={alert.alert_id} className="border-t border-slate-800/70 transition-colors hover:bg-slate-900/50">
-                    <td className="whitespace-nowrap px-4 py-2.5 text-slate-400">
-                      <Timestamp iso={alert.timestamp} />
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <LevelBadge level={alert.severity} />
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-2.5 font-mono text-slate-300">{alert.host_id}</td>
-                    <td className="px-4 py-2.5 text-slate-400">{alert.source}</td>
-                    <td className="px-4 py-2.5 text-slate-400">{alert.log_type}</td>
-                    <td className="px-4 py-2.5 text-slate-300">{alert.action}</td>
-                    <td className="max-w-md truncate px-4 py-2.5 text-slate-300" title={alert.description}>
-                      {alert.description}
-                    </td>
-                    <td className="px-4 py-2.5 text-slate-400">{alert.user}</td>
-                    <td className="whitespace-nowrap px-4 py-2.5 align-top">
-                      <TriageCell
-                        alert={alert}
-                        isBusy={triageAlertId === alert.alert_id}
-                        onAcknowledge={() => handleTriage(alert.alert_id, 'acknowledge')}
-                        onDismiss={(reason, note) => handleTriage(alert.alert_id, 'dismiss', { reason, note })}
-                        onRestore={() => handleTriage(alert.alert_id, 'restore')}
-                      />
-                    </td>
-                  </tr>
-                ))
+                alerts.map((alert) => {
+                  const isExpanded = expandedIds.has(alert.alert_id);
+                  const context = contexts[alert.alert_id];
+                  return (
+                    <Fragment key={alert.alert_id}>
+                      <tr className="border-t border-slate-800/70 transition-colors hover:bg-slate-900/50">
+                        <td className="py-2.5 pl-3 pr-0 align-middle">
+                          <button
+                            type="button"
+                            onClick={() => toggleExpanded(alert.alert_id)}
+                            aria-expanded={isExpanded}
+                            aria-label={isExpanded ? 'Hide details' : 'Show details'}
+                            className="rounded p-0.5 text-slate-500 transition-colors hover:bg-slate-800 hover:text-slate-200 focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500"
+                          >
+                            <ChevronRightIcon className={`h-4 w-4 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                          </button>
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-2.5 text-slate-400">
+                          <Timestamp iso={alert.timestamp} />
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <LevelBadge level={alert.severity} />
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-2.5 font-mono text-slate-300">{alert.host_id}</td>
+                        <td className="px-4 py-2.5 text-slate-400">{alert.source}</td>
+                        <td className="px-4 py-2.5 text-slate-400">{alert.log_type}</td>
+                        <td className="px-4 py-2.5 text-slate-300">{alert.action}</td>
+                        <td className="max-w-md truncate px-4 py-2.5 text-slate-300" title={alert.description}>
+                          {alert.description}
+                        </td>
+                        <td className="px-4 py-2.5 text-slate-400">{alert.user}</td>
+                        <td className="whitespace-nowrap px-4 py-2.5 align-top">
+                          <TriageCell
+                            alert={alert}
+                            isBusy={triageAlertId === alert.alert_id}
+                            onAcknowledge={() => handleTriage(alert.alert_id, 'acknowledge')}
+                            onDismiss={(reason, note) => handleTriage(alert.alert_id, 'dismiss', { reason, note })}
+                            onRestore={() => handleTriage(alert.alert_id, 'restore')}
+                          />
+                        </td>
+                      </tr>
+                      {isExpanded && (
+                        <tr className="border-t border-slate-800/40 bg-slate-950/60">
+                          <td colSpan={COLUMN_COUNT}>
+                            {!context || context.status === 'loading' ? (
+                              <p className="px-4 py-3 text-sm text-slate-500">Loading alert details…</p>
+                            ) : context.status === 'error' ? (
+                              <p className="flex items-center gap-3 px-4 py-3 text-sm text-red-400">
+                                Couldn't load alert details
+                                <button
+                                  type="button"
+                                  onClick={() => loadContext(alert.alert_id)}
+                                  className="text-sm text-blue-400 hover:underline"
+                                >
+                                  Retry
+                                </button>
+                              </p>
+                            ) : (
+                              <AlertDetails context={context.data} />
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -354,6 +424,8 @@ export default function Alerts() {
     </Layout>
   );
 }
+
+type ContextState = { status: 'loading' } | { status: 'error' } | { status: 'ok'; data: AlertContext };
 
 const triageButtonClasses =
   'rounded-md border border-slate-700 px-2 py-1 text-xs transition-colors hover:bg-slate-800 focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-40';

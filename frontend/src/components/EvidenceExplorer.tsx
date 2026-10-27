@@ -10,18 +10,11 @@
 import { useState } from 'react';
 import IpIntelCard from './IpIntelCard';
 import LevelBadge from './LevelBadge';
-import type { IncidentEvidence, IPEntity } from '../lib/types';
+import { ipOwnerSummary } from '../lib/format';
+import type { IncidentEvidence } from '../lib/types';
 
 function EmptyRow({ label }: { label: string }) {
   return <p className="text-sm text-slate-500">{label}</p>;
-}
-
-/** "{country} · {owner}" from whichever provider supplied each part; null if neither did. */
-function ipContext(ip: IPEntity): string | null {
-  if (!ip.ti) return null;
-  const country = ip.ti.vt?.country || ip.ti.abuse?.country_code;
-  const owner = ip.ti.vt?.as_owner || ip.ti.abuse?.isp;
-  return [country, owner].filter(Boolean).join(' · ') || null;
 }
 
 export default function EvidenceExplorer({
@@ -97,7 +90,7 @@ export default function EvidenceExplorer({
                     {ip.is_public === false ? 'Private/reserved — not looked up' : 'Not checked'}
                   </span>
                 )}
-                {ipContext(ip) && <span className="text-xs text-slate-500">{ipContext(ip)}</span>}
+                {ipOwnerSummary(ip.ti) && <span className="text-xs text-slate-500">{ipOwnerSummary(ip.ti)}</span>}
                 {ip.ti && (
                   <button
                     type="button"

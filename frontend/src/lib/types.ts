@@ -46,6 +46,51 @@ export interface Alert {
   dismiss_note?: string | null;
 }
 
+// GET /api/v1/alerts/{id}/context — the full OpenSearch document, so
+// every NormalizedLog field may be present; unknown extras are allowed.
+export interface AlertDocument extends Alert {
+  ingested_at?: string | null;
+  rule_id?: string | null;
+  source_port?: number | null;
+  destination_ip?: string | null;
+  destination_port?: number | null;
+  protocol?: string | null;
+  file_path?: string | null;
+  file_hash?: string | null;
+  file_size?: number | null;
+  process_name?: string | null;
+  process_id?: number | null;
+  parent_process?: string | null;
+  command_line?: string | null;
+  raw_log?: string | null;
+  ti_enriched?: boolean | null;
+  ti_result?: Record<string, unknown> | null;
+  risk_score?: number | null;
+  anomaly_score?: number | null;
+  [key: string]: unknown;
+}
+
+export interface AlertContextIncident {
+  id: string;
+  category: CorrelationPattern | null;
+  hosts: string[];
+  status: IncidentStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AlertIPIntel {
+  // null = no ti_cache row for this IP.
+  ti: IPThreatIntel | null;
+  is_public: boolean;
+}
+
+export interface AlertContext {
+  alert: AlertDocument;
+  incident: AlertContextIncident | null;
+  ip_intel: Record<string, AlertIPIntel>;
+}
+
 // POST /api/v1/alerts/{id}/acknowledge, .../dismiss, .../restore (SS-107)
 export interface AlertAnnotation {
   alert_id: string;

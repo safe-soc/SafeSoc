@@ -186,13 +186,17 @@ export default function IpIntelCard({
   incidentId,
   onEvidenceChange,
   onClose,
+  allowRefresh = true,
 }: {
   ip: string;
   intel: IPThreatIntel;
   isPublic: boolean;
-  incidentId: string;
-  onEvidenceChange: (evidence: IncidentEvidence) => void;
+  // Refresh is incident-scoped: without an incident (e.g. the Alerts
+  // page's details row) pass allowRefresh={false} and omit these two.
+  incidentId?: string;
+  onEvidenceChange?: (evidence: IncidentEvidence) => void;
   onClose: () => void;
+  allowRefresh?: boolean;
 }) {
   const { claims } = useAuth();
   const [refresh, setRefresh] = useState<RefreshState>({ phase: 'idle' });
@@ -216,7 +220,8 @@ export default function IpIntelCard({
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [onClose]);
 
-  const canRefresh = isPublic && REFRESH_ROLES.includes(claims?.role ?? '');
+  const canRefresh =
+    allowRefresh && Boolean(incidentId && onEvidenceChange) && isPublic && REFRESH_ROLES.includes(claims?.role ?? '');
   const isRefreshing = refresh.phase === 'refreshing';
 
   const poll = (baseline: string | null, deadline: number) => {
@@ -227,7 +232,7 @@ export default function IpIntelCard({
         if (!isMounted.current) return;
         const entity = response.data.ips.find((candidate) => candidate.ip === ip);
         if (isNewer(entity?.ti?.checked_at, baseline)) {
-          onEvidenceChange(response.data);
+          onEvidenceChange?.(response.data);
           setRefresh({ phase: 'idle' });
           return;
         }

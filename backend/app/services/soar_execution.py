@@ -174,7 +174,7 @@ async def _execute_enrich_indicator(db: AsyncSession, tenant_id: uuid.UUID, inci
         # still showed as "Not checked".
         #
         # The cache row, not the verdict values, is the test — and it's
-        # the very same one incident_evidence.py::_ti_intel uses, so
+        # the very same one ip_threat_intel.py::get_ip_threat_intel uses, so
         # the two panels can't disagree. A genuinely clean indicator
         # (AbuseIPDB configured, IP never reported) has all-zero
         # counters yet WAS checked; judging by value alone called that
