@@ -5,6 +5,8 @@ Uses pydantic-settings for validation.
 """
 
 from pathlib import Path
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -120,6 +122,14 @@ class Settings(BaseSettings):
     # TI Cache TTLs (seconds)
     TI_CACHE_CLEAN_TTL: int = 86400       # 24 hours
     TI_CACHE_MALICIOUS_TTL: int = 604800  # 7 days
+
+    # Lowest alert severity whose file_hash is looked up on VirusTotal
+    # ("off" = never). Sysmon emits a hash on every process start and
+    # file delete — far more distinct hashes than VirusTotal's free tier
+    # (4 lookups/min, VT_RATE_LIMIT_PER_MINUTE) can absorb, and the
+    # client's rate limiter blocks the enrichment worker while it waits,
+    # starving IP lookups too. IP enrichment is not gated by this.
+    HASH_ENRICHMENT_MIN_SEVERITY: Literal["low", "medium", "high", "critical", "off"] = "high"
 
     # ──────────────────────────────────────────────
     # LLM Configuration

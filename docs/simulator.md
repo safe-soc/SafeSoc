@@ -11,11 +11,11 @@ Status legend: **Implemented** (working code in this repo) · **Partial** (works
 | Ingest engine (login, per-source batching) | **Implemented** | `injector/sim/engine.py` |
 | CLI (`org`, `org --diagram`, `samples`) | **Implemented** | `injector/sim/cli.py`, `python -m injector.sim` |
 | Generated network diagram | **Implemented** | `docs/simulator-network.mmd` (embedded below) |
-| Adapter field mapping for these sources | **Partial** | The current adapters map host, timestamp, rule and `data.srcip`, but not Windows `eventdata` users/IPs, semantic actions, or GuardDuty's `AwsApiCallAction` remote IP. Those are the next step; the adapters are unchanged here. |
+| Adapter field mapping for these sources | **Implemented** | `backend/app/adapters/mapping.py` maps every builder's output to a canonical `EventAction` (`failed_login`, `login_success`, `outbound_connection`, …) plus Windows `eventdata` users/IPs, Sysmon process/file/hash fields, Suricata `src_ip`/`dest_ip`, CloudTrail ConsoleLogin results and GuardDuty's `AwsApiCallAction` remote IP. It lives in the backend, so real Wazuh data gets it too (see `docs/decisions.md` ADR-012). Expected output per builder: `backend/tests/test_adapter_mapping.py`. One sample keeps the fallback on purpose: OpenVPN rule 100401 (address assigned) has no canonical action, so its action is the decoder name `openvpn`. |
 | Attack scenarios, default / random / story simulators | **Planned** | Not built yet (see [Planned](#planned)) |
 
 !!! note "Honesty note"
-    The company, its hosts, users, addresses, AWS account and every event are **100% synthetic**. Company public addresses use the RFC 5737 documentation range (203.0.113.0/24); the AWS access key is AWS's own documentation example (`AKIAIOSFODNN7EXAMPLE`). The only real data is the **attacker IPs**. They are real addresses that were publicly reported on AbuseIPDB as of 2026-10-27. Their reputation can change, and the simulator never records a country, ASN or owner for them: that comes from live threat intel when SafeSOC enriches the alerts.
+    The company, its hosts, users, addresses, AWS account and every event are **100% synthetic**. Company public addresses use the RFC 5737 documentation range (203.0.113.0/24); the AWS access key is AWS's own documentation example (`AKIAIOSFODNN7EXAMPLE`). The only real data is the **attacker IPs**. They are real addresses that were publicly reported on AbuseIPDB as of 2026-10-27. Their reputation can change, and the simulator never records a country, ASN or owner for them: that comes from live threat intel when SafeSOC enriches the alerts. SafeSOC only looks up globally routable IPs, so the company's documentation-range and private addresses are never sent to VirusTotal/AbuseIPDB and show as "not enriched".
 
 ## Architecture
 
@@ -427,4 +427,3 @@ Global flags (before or after the subcommand): `--org PATH` (default: the bundle
 - **Default simulator.** A steady background of normal business activity (logons, web traffic, VPN sessions, mail) so detections have noise to stand out from.
 - **Random simulator.** Randomised attacks drawn from the attacker pool.
 - **Story simulator.** A multi-stage incident across on-prem and cloud, told through the same hosts and users.
-- **Adapter mapping.** Semantic actions and Windows/GuardDuty field mapping in the backend adapters (see the **Partial** row above).

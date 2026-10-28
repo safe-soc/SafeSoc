@@ -188,9 +188,9 @@ async def test_skipped_action_succeeds_but_is_never_marked_verified(monkeypatch)
     incident = _incident(tenant_id)
     run = _run(incident.id)
     action = _action(run.id, action_type=SoarActionType.ENRICH_INDICATOR)
-    action.parameters = {"indicator": "203.0.113.5"}
+    action.parameters = {"indicator": "140.246.61.93"}
     db = _FakeExecutionSession(action, run, incident)
-    _mock_enrichment(monkeypatch, TIResult(source_ip="203.0.113.5"), has_ti_data=False)
+    _mock_enrichment(monkeypatch, TIResult(source_ip="140.246.61.93"), has_ti_data=False)
 
     result = await soar_execution.execute_action(db, action.id)
 
@@ -208,9 +208,9 @@ async def test_skipped_action_does_not_emit_a_verified_event(monkeypatch):
     incident = _incident(tenant_id)
     run = _run(incident.id)
     action = _action(run.id, action_type=SoarActionType.ENRICH_INDICATOR)
-    action.parameters = {"indicator": "203.0.113.5"}
+    action.parameters = {"indicator": "140.246.61.93"}
     db = _FakeExecutionSession(action, run, incident)
-    _mock_enrichment(monkeypatch, TIResult(source_ip="203.0.113.5"), has_ti_data=False)
+    _mock_enrichment(monkeypatch, TIResult(source_ip="140.246.61.93"), has_ti_data=False)
     emitted: list[str] = []
 
     async def _capture(db_, tenant, action_name, *args, **kwargs):
@@ -252,9 +252,9 @@ async def test_an_enrichment_with_real_provider_data_is_still_verified(monkeypat
     incident = _incident(tenant_id)
     run = _run(incident.id)
     action = _action(run.id, action_type=SoarActionType.ENRICH_INDICATOR)
-    action.parameters = {"indicator": "203.0.113.5"}
+    action.parameters = {"indicator": "140.246.61.93"}
     db = _FakeExecutionSession(action, run, incident)
-    _mock_enrichment(monkeypatch, TIResult(source_ip="203.0.113.5", is_malicious=True, vt_malicious=5, vt_total=70, abuse_confidence=93))
+    _mock_enrichment(monkeypatch, TIResult(source_ip="140.246.61.93", is_malicious=True, vt_malicious=5, vt_total=70, abuse_confidence=93))
 
     result = await soar_execution.execute_action(db, action.id)
 
@@ -493,7 +493,7 @@ async def test_enrich_indicator_handler_returns_ti_result(monkeypatch):
 
     _mock_enrichment(monkeypatch, TIResult(is_malicious=True, vt_malicious=5, vt_total=70))
 
-    result = await soar_execution._execute_enrich_indicator(None, uuid.uuid4(), uuid.uuid4(), {"indicator": "203.0.113.5"})
+    result = await soar_execution._execute_enrich_indicator(None, uuid.uuid4(), uuid.uuid4(), {"indicator": "140.246.61.93"})
 
     assert result["success"] is True
     assert result["is_malicious"] is True
@@ -527,9 +527,9 @@ async def test_enrich_indicator_handler_reports_skipped_when_no_provider_returne
     """
     from app.schemas.log import TIResult
 
-    _mock_enrichment(monkeypatch, TIResult(source_ip="203.0.113.5"), has_ti_data=False)
+    _mock_enrichment(monkeypatch, TIResult(source_ip="140.246.61.93"), has_ti_data=False)
 
-    result = await soar_execution._execute_enrich_indicator(None, uuid.uuid4(), uuid.uuid4(), {"indicator": "203.0.113.5"})
+    result = await soar_execution._execute_enrich_indicator(None, uuid.uuid4(), uuid.uuid4(), {"indicator": "140.246.61.93"})
 
     assert result["success"] is True
     assert result["skipped"] is True
@@ -547,9 +547,9 @@ async def test_enrich_indicator_handler_is_not_skipped_when_a_provider_returned_
     """
     from app.schemas.log import TIResult
 
-    _mock_enrichment(monkeypatch, TIResult(source_ip="203.0.113.5", vt_malicious=0, vt_total=0, abuse_confidence=0))
+    _mock_enrichment(monkeypatch, TIResult(source_ip="140.246.61.93", vt_malicious=0, vt_total=0, abuse_confidence=0))
 
-    result = await soar_execution._execute_enrich_indicator(None, uuid.uuid4(), uuid.uuid4(), {"indicator": "203.0.113.5"})
+    result = await soar_execution._execute_enrich_indicator(None, uuid.uuid4(), uuid.uuid4(), {"indicator": "140.246.61.93"})
 
     assert result["success"] is True
     assert "skipped" not in result
@@ -746,3 +746,18 @@ async def test_audit_details_omit_target_when_no_target_parameter(monkeypatch):
     await soar_execution._emit(None, incident.tenant_id, "soar.action.started", "soar_action_started", action, incident)
 
     assert "target" not in soar_execution.record_event.call_args.kwargs["details"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("indicator", ["10.10.10.23", "192.168.1.42", "203.0.113.5", "127.0.0.1"])
+async def test_enrich_indicator_handler_skips_a_non_public_ip_without_calling_ti_providers(monkeypatch, indicator):
+    _mock_enrichment(monkeypatch)
+    enrich_mock = soar_execution.enrichment_service.enrich_indicator
+
+    result = await soar_execution._execute_enrich_indicator(None, uuid.uuid4(), uuid.uuid4(), {"indicator": indicator})
+
+    assert result["success"] is True
+    assert result["skipped"] is True
+    assert result["is_malicious"] is None
+    assert result["message"] == f"[SafeSOC] Skipped — '{indicator}' is a private/reserved address, not looked up."
+    enrich_mock.assert_not_called()

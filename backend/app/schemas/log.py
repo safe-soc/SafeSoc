@@ -68,6 +68,10 @@ class TIResult(BaseModel):
     abuse_confidence: int = 0
     abuse_total_reports: int = 0
     is_malicious: bool = False
+    # VirusTotal answered 404: it has no report for this IP/hash at all
+    # ("not seen before"), as distinct from a clean 0-detection verdict.
+    # Cached like a clean result so it isn't looked up again until expiry.
+    not_found: bool = False
     tags: list[str] = Field(default_factory=list)
     # Per-provider IP details, kept separate so the enrichment merge can
     # carry each one from its own provider. None for hash lookups, for a

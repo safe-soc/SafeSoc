@@ -50,6 +50,7 @@ def _pinned_settings(monkeypatch) -> None:
         ("ABUSEIPDB_API_KEY", ""),
         ("TELEGRAM_BOT_TOKEN", ""),
         ("TELEGRAM_CHAT_ID", ""),
+        ("HASH_ENRICHMENT_MIN_SEVERITY", "high"),
     ):
         monkeypatch.setattr(settings, name, value)
 

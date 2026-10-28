@@ -165,7 +165,9 @@ def test_console_login_event_produces_a_valid_normalized_log():
     result = cloudtrail.transform(CLOUDTRAIL_CONSOLE_LOGIN_EVENT)
     log = NormalizedLog(tenant_id="acme-corp", **result)
 
-    assert log.log_type == LogType.CLOUD
+    # ConsoleLogin is an authentication event; with no
+    # responseElements.ConsoleLogin result to map, the action stays the eventName.
+    assert log.log_type == LogType.AUTHENTICATION
     assert log.source.value == "aws_cloudtrail"
     assert log.action == "ConsoleLogin"
     assert log.user == "alice"
@@ -180,8 +182,8 @@ def test_denied_event_maps_actor_ip_and_resource_into_description_and_is_high_se
     log = NormalizedLog(tenant_id="acme-corp", **result)
 
     assert log.log_type == LogType.CLOUD
-    # No userName on an assumed-role identity -> falls back to the ARN.
-    assert log.user == "arn:aws:sts::123456789012:assumed-role/dev-role/bob"
+    # No userName on an assumed-role identity -> the ARN's last path segment (the session name).
+    assert log.user == "bob"
     assert log.source_ip == "203.0.113.9"
     assert log.severity == Severity.HIGH
     assert "acme-secrets-bucket" in log.description

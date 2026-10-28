@@ -2,6 +2,9 @@
 SafeSOC — VirusTotal Client
 IP and file-hash reputation lookups against the VirusTotal API v3,
 rate-limited client-side per settings.VT_RATE_LIMIT_PER_MINUTE.
+A 404 means VirusTotal has never seen the indicator: that is an answer
+(TIResult.not_found), not an error, so it gets cached like a clean
+result instead of being retried on every alert.
 """
 
 import time
@@ -46,7 +49,8 @@ def _enforce_rate_limit() -> None:
     _call_timestamps.append(time.monotonic())
 
 
-def _get(path: str) -> dict:
+def _get(path: str) -> Optional[dict]:
+    """The JSON body, or None when VirusTotal has no such object (HTTP 404). Any other failure raises VirusTotalError."""
     _enforce_rate_limit()
     try:
         response = requests.get(
@@ -54,6 +58,8 @@ def _get(path: str) -> dict:
             headers={"x-apikey": settings.VT_API_KEY},
             timeout=10,
         )
+        if response.status_code == 404:
+            return None
         response.raise_for_status()
         return response.json()
     except requests.RequestException as e:
@@ -105,6 +111,8 @@ def _ip_details(attributes: dict, stats: dict, total: int) -> VTIPDetails:
 async def lookup_ip(ip: str) -> TIResult:
     """Look up an IP address's reputation on VirusTotal."""
     data = _get(f"ip_addresses/{ip}")
+    if data is None:
+        return TIResult(source_ip=ip, not_found=True)
     attributes = (data.get("data") or {}).get("attributes") or {}
     stats = attributes.get("last_analysis_stats") or {}
     result = _stats_to_result(stats, source_ip=ip)
@@ -115,5 +123,7 @@ async def lookup_ip(ip: str) -> TIResult:
 async def lookup_hash(file_hash: str) -> TIResult:
     """Look up a file hash's reputation on VirusTotal."""
     data = _get(f"files/{file_hash}")
+    if data is None:
+        return TIResult(file_hash=file_hash, not_found=True)
     stats = data.get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
     return _stats_to_result(stats, file_hash=file_hash)

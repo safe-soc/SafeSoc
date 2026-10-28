@@ -55,8 +55,14 @@ requires_postgres = pytest.mark.skipif(
 
 
 def _indicator() -> str:
-    """A unique documentation-range IP per test, so tests never share cache rows."""
-    return f"203.0.113.{uuid.uuid4().int % 200 + 20}"
+    """
+    A unique public IP per test, so tests never share cache rows. It
+    must be globally routable: services/enrichment.py never looks up a
+    private/reserved/documentation address, so 203.0.113.x no longer
+    reaches the provider path these tests exercise.
+    """
+    n = uuid.uuid4().int
+    return f"45.79.{n % 250 + 1}.{(n >> 8) % 250 + 1}"
 
 
 async def _clear(db, indicator: str) -> None:

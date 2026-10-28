@@ -204,6 +204,13 @@ export function incidentTitle(incident: Pick<Incident, 'category' | 'hosts'>): s
   return incident.hosts.length > 0 ? `${category} on ${hostsLabel(incident.hosts)}` : category;
 }
 
+/** Shown instead of "0/0" when VirusTotal answered 404: it has never seen this indicator, which is not a clean verdict. */
+export const VT_NOT_FOUND_LABEL = 'VirusTotal: not seen before (no report)';
+
+export function vtNotFound(ti: IPThreatIntel | null | undefined): boolean {
+  return ti?.vt_status === 'not_found';
+}
+
 /** "{country} · {owner}" for a cached IP, from whichever provider supplied each part; null when neither did. */
 export function ipOwnerSummary(ti: IPThreatIntel | null | undefined): string | null {
   if (!ti) return null;

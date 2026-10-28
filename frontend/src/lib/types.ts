@@ -355,8 +355,9 @@ export interface AbuseIPDetails {
 }
 
 // ok = row with details; legacy = row cached before details were
-// collected; missing = no row from that provider.
-export type TIDetailStatus = 'ok' | 'legacy' | 'missing';
+// collected; not_found = the provider has no report for the IP
+// (VirusTotal 404, "not seen before"); missing = no row from that provider.
+export type TIDetailStatus = 'ok' | 'legacy' | 'not_found' | 'missing';
 
 export interface IPThreatIntel {
   is_malicious: boolean;

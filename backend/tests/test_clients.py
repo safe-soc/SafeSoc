@@ -111,8 +111,9 @@ def test_network_failure_raises_typed_exception_not_requests_exception(monkeypat
 
 
 def test_http_error_status_raises_typed_exception(monkeypatch):
-    response = Mock()
-    response.raise_for_status.side_effect = requests.exceptions.HTTPError("404 Not Found")
+    # 404 is "not found", not an error (see the not_found tests below); any other HTTP error still raises.
+    response = Mock(status_code=500)
+    response.raise_for_status.side_effect = requests.exceptions.HTTPError("500 Server Error")
     monkeypatch.setattr(virustotal.requests, "get", Mock(return_value=response))
 
     with pytest.raises(virustotal.VirusTotalError):
@@ -360,3 +361,39 @@ async def test_abuseipdb_lookup_ip_with_missing_keys_defaults_instead_of_raising
     assert abuse.domain is None and abuse.country_code is None and abuse.is_whitelisted is None
     assert abuse.hostnames == [] and abuse.is_tor is False
     assert result.is_malicious is False
+
+
+# ── VirusTotal 404 = "not seen before", not an error ─────────────
+
+def _not_found_response() -> Mock:
+    response = Mock(status_code=404)
+    response.raise_for_status.side_effect = requests.exceptions.HTTPError("404 Not Found")
+    return response
+
+
+@pytest.mark.asyncio
+async def test_vt_lookup_hash_404_is_a_not_found_result_not_an_error(monkeypatch):
+    monkeypatch.setattr(virustotal.requests, "get", Mock(return_value=_not_found_response()))
+
+    result = await virustotal.lookup_hash("ab" * 32)
+
+    assert result.not_found is True
+    assert (result.is_malicious, result.vt_malicious, result.vt_total) == (False, 0, 0)
+    assert result.file_hash == "ab" * 32
+
+
+@pytest.mark.asyncio
+async def test_vt_lookup_ip_404_is_a_not_found_result_not_an_error(monkeypatch):
+    monkeypatch.setattr(virustotal.requests, "get", Mock(return_value=_not_found_response()))
+
+    result = await virustotal.lookup_ip("140.246.61.93")
+
+    assert result.not_found is True
+    assert (result.is_malicious, result.vt_malicious, result.vt_total) == (False, 0, 0)
+    assert result.source_ip == "140.246.61.93" and result.vt is None
+
+
+@pytest.mark.asyncio
+async def test_vt_found_result_is_not_marked_not_found(monkeypatch):
+    monkeypatch.setattr(virustotal.requests, "get", Mock(return_value=_fake_response({"harmless": 70})))
+    assert (await virustotal.lookup_hash("ab" * 32)).not_found is False

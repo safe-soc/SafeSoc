@@ -71,7 +71,10 @@ async def get_ip_threat_intel(db: AsyncSession, indicators: list[str]) -> dict[s
             entry.checked_at = looked_up_at
         if row.provider == TIProvider.VIRUSTOTAL:
             entry.vt = cached.vt if cached is not None else None
-            entry.vt_status = TIDetailStatus.OK if entry.vt is not None else TIDetailStatus.LEGACY
+            if cached is not None and cached.not_found:
+                entry.vt_status = TIDetailStatus.NOT_FOUND
+            else:
+                entry.vt_status = TIDetailStatus.OK if entry.vt is not None else TIDetailStatus.LEGACY
         elif row.provider == TIProvider.ABUSEIPDB:
             entry.abuse = cached.abuse if cached is not None else None
             entry.abuse_status = TIDetailStatus.OK if entry.abuse is not None else TIDetailStatus.LEGACY

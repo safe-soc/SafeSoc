@@ -32,6 +32,36 @@ class LogType(str, Enum):
     SYSTEM = "system"
 
 
+class EventAction(str, Enum):
+    """
+    Canonical NormalizedLog.action values the source adapters map
+    real-format events onto (adapters/mapping.py), and that the
+    correlation detectors key on (services/correlation.py). The field
+    itself stays a plain str: an event no mapping recognises keeps its
+    source-native action (a Wazuh decoder name, a CloudTrail eventName).
+    """
+    FAILED_LOGIN = "failed_login"
+    LOGIN_SUCCESS = "login_success"
+    LOGOUT = "logout"
+    OUTBOUND_CONNECTION = "outbound_connection"
+    INBOUND_CONNECTION = "inbound_connection"
+    CONNECTION_BLOCKED = "connection_blocked"
+    IDS_ALERT = "ids_alert"
+    WEB_REQUEST = "web_request"
+    WEB_ATTACK = "web_attack"
+    PROCESS_START = "process_start"
+    FILE_CREATE = "file_create"
+    FILE_MODIFY = "file_modify"
+    FILE_DELETE = "file_delete"
+    PRIVILEGE_ASSIGNED = "privilege_assigned"
+    GROUP_MEMBER_ADDED = "group_member_added"
+    ACCOUNT_CREATED = "account_created"
+    AUDIT_LOG_CLEARED = "audit_log_cleared"
+    USB_DEVICE_CONNECTED = "usb_device_connected"
+    EMAIL_RECEIVED = "email_received"
+    DB_EXPORT = "db_export"
+
+
 class Severity(str, Enum):
     """Alert severity level."""
     LOW = "low"
@@ -80,10 +110,13 @@ class TIDetailStatus(str, Enum):
     """
     What ti_cache holds for one (indicator, provider) pair, as shown on
     the incident threat-intel card: OK = row with per-provider details,
-    LEGACY = row written before details were collected, MISSING = no row.
+    LEGACY = row written before details were collected, NOT_FOUND = the
+    provider has no report for the indicator (VirusTotal 404), MISSING =
+    no row.
     """
     OK = "ok"
     LEGACY = "legacy"
+    NOT_FOUND = "not_found"
     MISSING = "missing"
 
 

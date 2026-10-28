@@ -163,11 +163,14 @@ def test_every_builder_output_validates_through_its_adapter(org):
             assert normalized.host_id == payload["agent"]["name"], name
             assert normalized.host_ip == payload["agent"]["ip"], name
             assert normalized.rule_id == payload["rule"]["id"], name
-            assert normalized.source_ip == payload.get("data", {}).get("srcip"), name
+            # Exact per-builder fields (incl. Windows/Suricata IPs that aren't data.srcip): test_adapter_mapping.py.
+            if "srcip" in payload.get("data", {}):
+                assert normalized.source_ip == payload["data"]["srcip"], name
         elif source == "aws_cloudtrail":
             assert normalized.host_id == org.cloud.account_id, name
             assert normalized.source_ip == payload["sourceIPAddress"], name
-            assert normalized.action == payload["eventName"], name
+            if payload["eventName"] != "ConsoleLogin":  # mapped to login_success / failed_login
+                assert normalized.action == payload["eventName"], name
         else:
             assert normalized.host_id == org.cloud.account_id, name
             assert normalized.rule_id == payload["Id"], name
