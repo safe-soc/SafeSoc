@@ -79,6 +79,9 @@ async def _evaluate_correlation_async(alert_id: str) -> None:
     tenant_id = doc["tenant_id"]
     host_id = doc["host_id"]
 
+    # Only what the detectors read. A field the alert lacks is stored as
+    # None, and events stored before a field was added simply don't have
+    # it: detectors read every field with .get(), so both mean "absent".
     await add_event(
         tenant_id,
         host_id,
@@ -88,6 +91,11 @@ async def _evaluate_correlation_async(alert_id: str) -> None:
             "action": doc.get("action"),
             "severity": doc.get("severity"),
             "destination_ip": doc.get("destination_ip"),
+            "source_ip": doc.get("source_ip"),
+            "user": doc.get("user"),
+            "process_name": doc.get("process_name"),
+            "command_line": doc.get("command_line"),
+            "file_path": doc.get("file_path"),
         },
         timestamp=_event_timestamp(doc, alert_id),
     )

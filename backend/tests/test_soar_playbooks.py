@@ -137,3 +137,25 @@ def test_resolve_step_parameters_never_evaluates_static_parameters_as_code():
     step = PlaybookStep(SoarActionType.ADD_INCIDENT_NOTE, EvidenceField.NONE, static_parameters={"note": "{hosts[0]}; rm -rf /"})
     params = resolve_step_parameters(step, {"hosts": ["real-host"], "ips": [], "users": []})
     assert params == {"note": "{hosts[0]}; rm -rf /"}
+
+
+# ── Ransomware precursor (ADR-013) ──────────────────────────────────
+
+def test_ransomware_precursor_playbook_collects_evidence_then_asks_to_isolate():
+    from app.core.soar_playbooks import match_playbook
+    from app.core.soar_policy import requires_approval
+
+    playbook = get_playbook("pb-ransomware-precursor")
+
+    assert playbook.trigger == PlaybookTrigger(CorrelationPattern.RANSOMWARE_PRECURSOR, 0.7)
+    assert [step.action_type for step in playbook.steps] == [
+        SoarActionType.COLLECT_ADDITIONAL_EVIDENCE,
+        SoarActionType.CREATE_INVESTIGATION_ACTION,
+        SoarActionType.ISOLATE_ENDPOINT,
+    ]
+    assert playbook.steps[0].parameter_field == playbook.steps[2].parameter_field == EvidenceField.PRIMARY_HOST
+    assert "patient zero" in playbook.steps[1].static_parameters["description"]
+    assert requires_approval(SoarActionType.ISOLATE_ENDPOINT)
+    # Every confidence the detector can produce (0.75 / 0.8 / 0.95) clears the trigger.
+    assert match_playbook(CorrelationPattern.RANSOMWARE_PRECURSOR, 0.75) is playbook
+    assert match_playbook(CorrelationPattern.RANSOMWARE_PRECURSOR, 0.69) is None

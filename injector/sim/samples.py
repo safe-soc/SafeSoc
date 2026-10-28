@@ -92,6 +92,9 @@ def sample_builders(org: Org) -> list[tuple[str, str, Callable[[datetime, Option
             org, dev, karthik, ts, src_ip="10.8.0.6", src_port=51544, simulation=s)),
         (linux.sudo_command, lambda ts, s: linux.sudo_command(
             org, dev, karthik, ts, command="/usr/bin/apt-get update", simulation=s)),
+        (linux.auditd_execve, lambda ts, s: linux.auditd_execve(
+            org, dev, ts, exe="/usr/bin/systemctl", argv=["systemctl", "restart", "nginx"], user="karthik.reddy",
+            uid=0, auid=1001, pid=48211, ppid=48207, cwd="/home/karthik.reddy", simulation=s)),
         # Web
         (web.access_log, lambda ts, s: web.access_log(
             org, web01, ts, src_ip=attackers["web_exploiter"], url="/login?user=admin%27%20OR%201%3D1--",

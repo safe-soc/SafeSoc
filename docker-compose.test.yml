@@ -47,8 +47,14 @@
 #
 #   docker compose up -d backend
 
+#
+# frontend/src is mounted the same way for test_pattern_coverage.py,
+# which checks the frontend's hand-written CorrelationPattern lists
+# (type, labels, chart colours) against the backend enum.
+
 services:
   backend:
     volumes:
       - ./injector:/injector:ro
       - ./ml:/ml:ro
+      - ./frontend/src:/frontend/src:ro

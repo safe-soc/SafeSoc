@@ -37,10 +37,11 @@ def _config(output_buffer=None) -> Config:
     return cfg
 
 
-def test_the_dismiss_migration_is_the_single_head_on_top_of_soar_phase_3():
+def test_the_dismiss_migration_sits_on_soar_phase_3_below_a_single_head():
     script = ScriptDirectory.from_config(_config())
 
-    assert script.get_heads() == [REVISION]
+    [head] = script.get_heads()
+    assert REVISION in {rev.revision for rev in script.iterate_revisions(head, "base")}
     assert script.get_revision(REVISION).down_revision == PREVIOUS
 
 

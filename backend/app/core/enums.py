@@ -154,6 +154,9 @@ class CorrelationPattern(str, Enum):
     PRIVILEGE_ESCALATION = "privilege_escalation"
     DATA_EXFILTRATION = "data_exfiltration"
     LATERAL_MOVEMENT = "lateral_movement"
+    # Also a value of the incident_category Postgres enum: adding a
+    # member needs an ALTER TYPE migration (see migrations/versions/e5f1a2b3c4d6).
+    RANSOMWARE_PRECURSOR = "ransomware_precursor"
 
 
 class RiskLevel(str, Enum):

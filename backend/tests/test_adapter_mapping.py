@@ -87,6 +87,10 @@ EXPECTED: dict[str, dict[str, Any]] = {
     "linux.ssh_invalid_user": _expect("authentication", "failed_login", "admin", "45.148.10.121"),
     "linux.ssh_accepted_password": _expect("authentication", "login_success", "karthik.reddy", "10.8.0.6"),
     "linux.sudo_command": _expect("privilege", "privilege_assigned", "karthik.reddy", command_line="/usr/bin/apt-get update"),
+    "linux.auditd_execve": _expect(
+        "process", "process_start", "karthik.reddy", process_name="systemctl", command_line="systemctl restart nginx",
+        process_id=48211,
+    ),
     # data.protocol is the HTTP method here (Wazuh's web-accesslog decoder) — not a transport protocol.
     "web.access_log": _expect("network", "web_attack", "unknown", "45.148.10.121", protocol=None),
     "vpn.auth_failed": _expect("authentication", "failed_login", "unknown", "2.57.121.25"),
@@ -102,8 +106,9 @@ EXPECTED: dict[str, dict[str, Any]] = {
         "network", "ids_alert", "unknown", "45.148.10.121", source_port=44512, destination_ip="10.10.30.10",
         destination_port=80, protocol="tcp",
     ),
-    "mail.attachment_warning": _expect("system", "email_received", "unknown", "140.246.61.93"),
-    "mail.content_filter_verdict": _expect("system", "email_received", "unknown", "140.246.61.93"),
+    # The recipient's mailbox is the user an inbound message concerns.
+    "mail.attachment_warning": _expect("system", "email_received", "neha.sharma", "140.246.61.93"),
+    "mail.content_filter_verdict": _expect("system", "email_received", "neha.sharma", "140.246.61.93"),
     "database.connection_authorized": _expect("authentication", "login_success", "svc-sql", "10.10.30.10"),
     "database.password_authentication_failed": _expect("authentication", "failed_login", "postgres", "10.10.10.41"),
     "database.copy_to_stdout": _expect("network", "db_export", "svc-sql", "10.10.30.10"),
@@ -358,3 +363,76 @@ def test_guardduty_api_call_finding_maps_remote_ip_and_user():
     result = guardduty.transform(finding)
     assert (result["source_ip"], result["user"]) == ("93.174.95.106", "svc-web-deploy")
     assert (result["log_type"], result["action"]) == ("cloud", "Recon:IAMUser/MaliciousIPCaller")
+
+
+# ── auditd command execution ────────────────────────────────────
+
+def _audit_alert(audit: dict, *, groups=("audit", "audit_command"), full_log: str = "") -> dict:
+    return {
+        "timestamp": "2026-10-27T10:15:30.000+0000",
+        "rule": {"level": 3, "id": "80792", "description": "Audit: Command: /usr/bin/id.", "groups": list(groups)},
+        "agent": {"id": "006", "name": "EB-DEV-LX01", "ip": "10.10.20.21"},
+        "decoder": {"name": "auditd"},
+        "data": {"audit": audit},
+        "full_log": full_log,
+        "location": "/var/log/audit/audit.log",
+    }
+
+
+def test_auditd_sample_is_a_real_80792_alert_with_the_enriched_auid():
+    _, payload = _samples()["linux.auditd_execve"]
+
+    assert payload["rule"]["id"] == "80792" and payload["rule"]["groups"] == ["audit", "audit_command"]
+    assert payload["rule"]["description"] == "Audit: Command: /usr/bin/systemctl."
+    assert payload["full_log"].startswith("type=SYSCALL msg=audit(")
+    assert 'key="audit-wazuh-c"' in payload["full_log"] and 'AUID="karthik.reddy"' in payload["full_log"]
+    assert payload["data"]["audit"]["type"] == "SYSCALL"  # the decoder takes the first record's type
+    assert payload["data"]["audit"]["execve"] == {"a0": "systemctl", "a1": "restart", "a2": "nginx"}
+
+
+def test_auditd_command_line_falls_back_to_comm_and_user_to_unknown():
+    log = _ingest_like("wazuh", _audit_alert({"exe": "/usr/bin/id", "command": "id", "pid": "4021"}))
+
+    assert (log.log_type, log.action) == ("process", "process_start")
+    assert (log.process_name, log.command_line, log.process_id, log.user) == ("id", "id", 4021, "unknown")
+
+
+def test_auditd_user_prefers_acct_then_the_enriched_auid_name():
+    audit = {"exe": "/usr/bin/id", "execve": {"a0": "id"}}
+    assert _ingest_like("wazuh", _audit_alert({**audit, "acct": "deploy"}, full_log='AUID="neha"')).user == "deploy"
+    assert _ingest_like("wazuh", _audit_alert(audit, full_log='x\x1dAUID="neha" UID="root"')).user == "neha"
+    assert _ingest_like("wazuh", _audit_alert(audit, full_log='x\x1dAUID="unset" UID="root"')).user == "unknown"
+
+
+def test_auditd_execve_args_are_joined_in_numeric_order():
+    execve = {f"a{i}": f"arg{i}" for i in range(11)}
+    log = _ingest_like("wazuh", _audit_alert({"exe": "/usr/bin/echo", "execve": execve}))
+
+    assert log.command_line == " ".join(f"arg{i}" for i in range(11))
+
+
+def test_audit_command_group_without_a_command_falls_through():
+    """80793 (passwd locked an account) shares the audit_command group but executes nothing."""
+    log = _ingest_like("wazuh", _audit_alert({"type": "ACCT_LOCK", "acct": "intern.tmp"}))
+
+    assert log.action != "process_start"
+
+
+# ── mail recipient ──────────────────────────────────────────────
+
+@pytest.mark.parametrize("to, expected", [
+    ("neha.sharma@emberbay.local", "neha.sharma"),
+    ("<Neha.Sharma@emberbay.local>", "neha.sharma"),
+    ("neha.sharma@emberbay.local, karthik.reddy@emberbay.local", "neha.sharma"),
+])
+def test_email_received_user_is_the_recipient_mailbox(to, expected):
+    alert = {
+        "timestamp": "2026-10-27T10:15:30.000+0000",
+        "rule": {"level": 4, "id": "100500", "description": "Postfix: inbound message", "groups": ["postfix", "mail"]},
+        "agent": {"id": "008", "name": "EB-MAIL01", "ip": "10.10.30.12"},
+        "decoder": {"name": "postfix"},
+        "data": {"srcip": "140.246.61.93", "to": to},
+        "location": "/var/log/mail.log",
+    }
+
+    assert _ingest_like("wazuh", alert).user == expected

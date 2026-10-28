@@ -57,6 +57,44 @@ async def test_evaluate_correlation_async_adds_the_event_then_evaluates_the_wind
     mock_evaluate_host.assert_called_once_with("acme-corp", "DESKTOP-042")
 
 
+@pytest.mark.asyncio
+async def test_the_window_event_carries_the_fields_the_detectors_read(monkeypatch):
+    doc = {
+        "alert_id": "abc-123", "tenant_id": "acme-corp", "host_id": "EB-FS01", "log_type": "process",
+        "action": "process_start", "severity": "high", "source_ip": "10.10.10.41", "user": "adm.rahul",
+        "process_name": "vssadmin.exe", "command_line": "vssadmin.exe delete shadows /all /quiet",
+        "file_path": r"C:\Windows\System32\vssadmin.exe", "timestamp": "2026-10-28T09:00:00Z",
+    }
+    monkeypatch.setattr(correlation_worker, "get_alert_by_id", AsyncMock(return_value=doc))
+    mock_add_event = AsyncMock()
+    monkeypatch.setattr(correlation_worker, "add_event", mock_add_event)
+    monkeypatch.setattr(correlation_worker, "evaluate_host", AsyncMock(return_value=[]))
+
+    await correlation_worker._evaluate_correlation_async("abc-123")
+
+    event = mock_add_event.call_args.args[2]
+    assert event["source_ip"] == "10.10.10.41"
+    assert event["user"] == "adm.rahul"
+    assert event["process_name"] == "vssadmin.exe"
+    assert event["command_line"] == "vssadmin.exe delete shadows /all /quiet"
+    assert event["file_path"] == r"C:\Windows\System32\vssadmin.exe"
+
+
+@pytest.mark.asyncio
+async def test_missing_window_fields_are_stored_as_none(monkeypatch):
+    doc = {"alert_id": "abc-123", "tenant_id": "acme-corp", "host_id": "H", "log_type": "authentication",
+           "action": "failed_login", "severity": "low", "timestamp": "2026-10-28T09:00:00Z"}
+    monkeypatch.setattr(correlation_worker, "get_alert_by_id", AsyncMock(return_value=doc))
+    mock_add_event = AsyncMock()
+    monkeypatch.setattr(correlation_worker, "add_event", mock_add_event)
+    monkeypatch.setattr(correlation_worker, "evaluate_host", AsyncMock(return_value=[]))
+
+    await correlation_worker._evaluate_correlation_async("abc-123")
+
+    event = mock_add_event.call_args.args[2]
+    assert all(event[k] is None for k in ("source_ip", "user", "process_name", "command_line", "file_path"))
+
+
 # ── Event-time scoring (ADR-011) ─────────────────────────────────────
 
 @pytest.mark.asyncio

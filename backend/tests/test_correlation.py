@@ -372,7 +372,7 @@ def test_successful_compromise_does_not_trigger_without_a_login_success():
 
 def test_recon_to_exploitation_triggers_on_scanning_then_process_activity():
     events = [
-        _event(f"a{i}", "network", "outbound_connection") for i in range(correlation.RECON_MIN_EVENTS)
+        _event(f"a{i}", "network", "web_attack") for i in range(correlation.RECON_MIN_EVENTS)
     ] + [_event("a-exploit", "process", "process_start")]
 
     chain = correlation.detect_recon_to_exploitation(events, "acme-corp", "DESKTOP-042")
@@ -511,3 +511,215 @@ async def test_evaluate_host_returns_no_chains_for_a_quiet_host(fake_redis):
     chains = await correlation.evaluate_host("acme-corp", "DESKTOP-042", now=now)
 
     assert chains == []
+
+
+# ── ADR-013: detector refinements for realistic telemetry ───────
+
+def _process(alert_id, process_name, command_line):
+    return {**_event(alert_id, "process", "process_start"), "process_name": process_name, "command_line": command_line}
+
+
+def _file_create(alert_id, file_path):
+    return {**_event(alert_id, "file", "file_create"), "file_path": file_path}
+
+
+def _cloud(alert_id, action, user="svc-web-deploy"):
+    return _event(alert_id, "cloud", action, user=user)
+
+
+def test_recon_ignores_ordinary_web_requests():
+    events = [_event(f"a{i}", "network", "web_request") for i in range(5)] + [_event("p", "process", "process_start")]
+
+    assert correlation.detect_recon_to_exploitation(events, "acme-corp", "WEB01") is None
+
+
+@pytest.mark.parametrize("action", ["outbound_connection", "inbound_connection"])
+def test_recon_ignores_plain_connections(action):
+    events = [_event(f"a{i}", "network", action) for i in range(5)] + [_event("p", "process", "process_start")]
+
+    assert correlation.detect_recon_to_exploitation(events, "acme-corp", "WEB01") is None
+
+
+def test_recon_detects_web_attacks_then_a_process():
+    events = [_event(f"a{i}", "network", "web_attack") for i in range(3)] + [_event("p", "process", "process_start")]
+
+    chain = correlation.detect_recon_to_exploitation(events, "acme-corp", "WEB01")
+
+    assert chain is not None and chain.alert_ids == ("a0", "a1", "a2", "p")
+
+
+def test_recon_still_detects_the_legacy_injector_port_scan():
+    events = [_event(f"a{i}", "network", "port_scan") for i in range(4)] + [_event("p", "process", "process_start")]
+
+    assert correlation.detect_recon_to_exploitation(events, "acme-corp", "DESKTOP-042") is not None
+
+
+@pytest.mark.parametrize("action", ["ids_alert", "connection_blocked", "suspicious_network_connection"])
+def test_recon_counts_every_recon_action(action):
+    events = [_event(f"a{i}", "network", action) for i in range(3)] + [_event("p", "process", "process_start")]
+
+    assert correlation.detect_recon_to_exploitation(events, "acme-corp", "WEB01") is not None
+
+
+def test_recon_fires_on_a_later_process_when_an_early_benign_process_came_first():
+    events = (
+        [_event("benign", "process", "process_start")]
+        + [_event(f"ids{i}", "network", "ids_alert") for i in range(3)]
+        + [_event("exploit", "process", "process_start")]
+    )
+
+    chain = correlation.detect_recon_to_exploitation(events, "acme-corp", "WEB01")
+
+    assert chain is not None
+    assert chain.alert_ids == ("ids0", "ids1", "ids2", "exploit")
+
+
+def test_recon_needs_the_minimum_before_the_process_not_after():
+    events = (
+        [_event(f"a{i}", "network", "web_attack") for i in range(2)]
+        + [_event("p1", "process", "process_start")]
+        + [_event("a2", "network", "web_attack")]
+    )
+
+    assert correlation.detect_recon_to_exploitation(events, "acme-corp", "WEB01") is None
+
+
+def test_recon_does_not_count_process_events_of_other_log_types_as_exploitation():
+    events = [_event(f"a{i}", "network", "web_attack") for i in range(3)] + [_event("f", "file", "file_create")]
+
+    assert correlation.detect_recon_to_exploitation(events, "acme-corp", "WEB01") is None
+
+
+def test_exfiltration_counts_cloud_object_reads():
+    events = [_cloud(f"g{i}", "GetObject") for i in range(12)]
+
+    chain = correlation.detect_data_exfiltration(events, "acme-corp", "svc-web-deploy")
+
+    assert chain is not None
+    assert chain.alert_ids == tuple(f"g{i}" for i in range(12))
+    assert chain.mitre_technique_ids == ("T1041",)  # static per pattern; T1530 noted in ADR-013
+
+
+def test_exfiltration_ignores_too_few_cloud_object_reads():
+    events = [_cloud(f"g{i}", "GetObject") for i in range(9)]
+
+    assert correlation.detect_data_exfiltration(events, "acme-corp", "svc-web-deploy") is None
+
+
+def test_exfiltration_does_not_pool_cloud_reads_across_users():
+    events = [_cloud(f"a{i}", "GetObject", user="svc-web-deploy") for i in range(6)] + [
+        _cloud(f"b{i}", "GetObject", user="svc-reporting") for i in range(6)
+    ]
+
+    assert correlation.detect_data_exfiltration(events, "acme-corp", "123456789012") is None
+
+
+def test_exfiltration_alert_ids_are_only_the_heavy_users_reads():
+    events = [_cloud(f"b{i}", "GetObject", user="svc-reporting") for i in range(4)] + [
+        _cloud(f"a{i}", "GetObject", user="svc-web-deploy") for i in range(12)
+    ]
+
+    chain = correlation.detect_data_exfiltration(events, "acme-corp", "123456789012")
+
+    assert chain is not None
+    assert chain.alert_ids == tuple(f"a{i}" for i in range(12))
+
+
+def test_exfiltration_does_not_mix_cloud_reads_with_network_connections():
+    events = [_cloud(f"g{i}", "GetObject") for i in range(6)] + [
+        _event(f"o{i}", "network", "outbound_connection") for i in range(5)
+    ]
+
+    assert correlation.detect_data_exfiltration(events, "acme-corp", "HOST") is None
+
+
+def test_exfiltration_network_connections_still_count_per_host_whoever_the_user():
+    events = [
+        _event(f"o{i}", "network", "outbound_connection", user=f"user{i % 3}") for i in range(10)
+    ]
+
+    chain = correlation.detect_data_exfiltration(events, "acme-corp", "HOST")
+
+    assert chain is not None and len(chain.alert_ids) == 10
+
+
+def test_exfiltration_ignores_other_cloud_api_calls():
+    events = [_cloud(f"l{i}", "ListBuckets") for i in range(15)] + [_event("g", "network", "GetObject")]
+
+    assert correlation.detect_data_exfiltration(events, "acme-corp", "svc-web-deploy") is None
+
+
+def test_ransomware_shadow_copy_deletion_alone():
+    events = [_process("v", "vssadmin.exe", "vssadmin.exe delete shadows /all /quiet")]
+
+    chain = correlation.detect_ransomware_precursor(events, "acme-corp", "EB-FS01")
+
+    assert chain is not None
+    assert chain.pattern == CorrelationPattern.RANSOMWARE_PRECURSOR
+    assert chain.confidence == pytest.approx(0.8)
+    assert chain.alert_ids == ("v",)
+    assert chain.mitre_technique_ids == ("T1490", "T1486") and chain.mitre_tactic == "Impact"
+
+
+def test_ransomware_mass_creation_of_an_unusual_extension_alone():
+    events = [_file_create(f"f{i}", rf"C:\Shares\Finance\report-{i}.xlsx.akira") for i in range(25)]
+
+    chain = correlation.detect_ransomware_precursor(events, "acme-corp", "EB-FS01")
+
+    assert chain is not None
+    assert chain.confidence == pytest.approx(0.75)
+    assert len(chain.alert_ids) == 25
+
+
+def test_ransomware_both_signals():
+    events = [_process("v", "vssadmin.exe", "vssadmin.exe delete shadows /all /quiet")] + [
+        _file_create(f"f{i}", f"/srv/share/doc-{i}.akira") for i in range(25)
+    ]
+
+    chain = correlation.detect_ransomware_precursor(events, "acme-corp", "EB-FS01")
+
+    assert chain is not None
+    assert chain.confidence == pytest.approx(0.95)
+    assert chain.alert_ids[0] == "v" and len(chain.alert_ids) == 26
+
+
+def test_ransomware_ignores_a_burst_of_common_documents():
+    events = [_file_create(f"f{i}", rf"C:\Users\neha\Documents\Budget-{i}.docx") for i in range(25)]
+
+    assert correlation.detect_ransomware_precursor(events, "acme-corp", "EB-FIN-WS07") is None
+
+
+def test_ransomware_ignores_listing_shadow_copies():
+    events = [_process("v", "vssadmin.exe", "vssadmin.exe list shadows")]
+
+    assert correlation.detect_ransomware_precursor(events, "acme-corp", "EB-FS01") is None
+
+
+def test_ransomware_needs_the_minimum_creates_per_extension():
+    events = [_file_create(f"f{i}", f"/srv/share/doc-{i}.akira") for i in range(19)] + [
+        _file_create(f"g{i}", f"/srv/share/doc-{i}.lockbit") for i in range(19)
+    ]
+
+    assert correlation.detect_ransomware_precursor(events, "acme-corp", "EB-FS01") is None
+
+
+@pytest.mark.parametrize("process_name, command_line", [
+    (r"C:\Windows\System32\wbem\WMIC.exe", "wmic shadowcopy delete"),
+    ("wbadmin.exe", "wbadmin DELETE CATALOG -quiet"),
+    ("bcdedit.exe", "bcdedit /set {default} recoveryenabled No"),
+    ("VSSADMIN.EXE", "vssadmin  Delete  Shadows /all"),
+])
+def test_ransomware_recognises_each_recovery_inhibiting_command(process_name, command_line):
+    chain = correlation.detect_ransomware_precursor([_process("p", process_name, command_line)], "acme-corp", "H")
+
+    assert chain is not None and chain.confidence == pytest.approx(0.8)
+
+
+def test_ransomware_ignores_the_command_from_an_unrelated_process():
+    events = [_process("p", "notepad.exe", "notepad.exe delete shadows.txt")]
+
+    assert correlation.detect_ransomware_precursor(events, "acme-corp", "H") is None
+
+
+def test_ransomware_detector_is_registered():
+    assert correlation.detect_ransomware_precursor in correlation.DETECTORS

@@ -56,11 +56,20 @@ MITRE_PATTERN_MAPPING: dict[CorrelationPattern, MitreTechnique] = {
     CorrelationPattern.PRIVILEGE_ESCALATION: MitreTechnique(
         technique_ids=("T1548",), tactic="Privilege Escalation"
     ),
+    # Also fires on cloud object reads (S3 GetObject). T1530 (Data from
+    # Cloud Storage) is the more precise technique for that evidence, but
+    # the mapping is per pattern, not per evidence type (ADR-013).
     CorrelationPattern.DATA_EXFILTRATION: MitreTechnique(
         technique_ids=("T1041",), tactic="Exfiltration"
     ),
     CorrelationPattern.LATERAL_MOVEMENT: MitreTechnique(
         technique_ids=("T1021",), tactic="Lateral Movement"
+    ),
+    # Shadow-copy/backup/recovery deletion (T1490, Inhibit System
+    # Recovery) and mass creation of files with an unusual extension
+    # (T1486, Data Encrypted for Impact).
+    CorrelationPattern.RANSOMWARE_PRECURSOR: MitreTechnique(
+        technique_ids=("T1490", "T1486"), tactic="Impact"
     ),
 }
 

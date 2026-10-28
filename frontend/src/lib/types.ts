@@ -140,7 +140,8 @@ export type CorrelationPattern =
   | 'recon_to_exploitation'
   | 'privilege_escalation'
   | 'data_exfiltration'
-  | 'lateral_movement';
+  | 'lateral_movement'
+  | 'ransomware_precursor';
 
 export interface Incident {
   id: string;

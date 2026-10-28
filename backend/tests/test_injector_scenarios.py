@@ -42,14 +42,17 @@ def _to_window_events(events: list[dict]) -> list[dict]:
     ]
 
 
-def test_all_six_correlation_patterns_have_a_scenario():
+def test_all_six_original_correlation_patterns_have_a_scenario():
     from app.core.enums import CorrelationPattern
 
     # Every detector in DETECTORS maps to exactly one CorrelationPattern
     # (see correlation.py) — the AC requires a scenario per pattern, so
-    # this asserts a scenario name exists for each of the 6, not just
-    # that *some* scenarios exist.
-    assert len(SCENARIOS) == len(CorrelationPattern) == 6
+    # this asserts a scenario name exists for each of the original 6,
+    # not just that *some* scenarios exist. RANSOMWARE_PRECURSOR
+    # (ADR-013) came later and is exercised by the network simulator
+    # (injector/sim), not this legacy CLI.
+    legacy_patterns = set(CorrelationPattern) - {CorrelationPattern.RANSOMWARE_PRECURSOR}
+    assert len(SCENARIOS) == len(legacy_patterns) == 6
 
 
 def test_brute_force_scenario_triggers_the_real_detector():

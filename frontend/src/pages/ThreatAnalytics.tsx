@@ -40,6 +40,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   privilege_escalation: '#a855f7',
   data_exfiltration: '#eab308',
   lateral_movement: '#22c55e',
+  ransomware_precursor: '#e11d48',
 };
 
 const SEVERITY_COLORS: Record<string, string> = {
@@ -161,8 +162,8 @@ function buildRecommendedActions(data: ThreatAnalyticsResponse): string[] {
 // a MITRE kill-chain-style ordering of the existing categories'
 // already-assigned tactics (Reconnaissance -> Initial Access ->
 // Credential Access -> Privilege Escalation -> Lateral Movement ->
-// Exfiltration). Only real counts are shown; categories absent from
-// the current window are simply omitted, not zero-padded.
+// Exfiltration -> Impact). Only real counts are shown; categories absent
+// from the current window are simply omitted, not zero-padded.
 const ATTACK_PROGRESSION_ORDER = [
   'recon_to_exploitation',
   'successful_compromise',
@@ -170,6 +171,7 @@ const ATTACK_PROGRESSION_ORDER = [
   'privilege_escalation',
   'lateral_movement',
   'data_exfiltration',
+  'ransomware_precursor',
 ];
 
 function DistributionBar({ label, count, total, color }: { label: string; count: number; total: number; color: string }) {

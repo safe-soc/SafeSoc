@@ -153,6 +153,19 @@ SOAR_PLAYBOOKS: list[Playbook] = [
             PlaybookStep(SoarActionType.REVOKE_CREDENTIALS, EvidenceField.PRIMARY_USER),
         ),
     ),
+    Playbook(
+        id="pb-ransomware-precursor",
+        title="Ransomware Precursor Response",
+        trigger=PlaybookTrigger(CorrelationPattern.RANSOMWARE_PRECURSOR, min_confidence=0.7),
+        steps=(
+            PlaybookStep(SoarActionType.COLLECT_ADDITIONAL_EVIDENCE, EvidenceField.PRIMARY_HOST),
+            PlaybookStep(
+                SoarActionType.CREATE_INVESTIGATION_ACTION, EvidenceField.NONE,
+                static_parameters={"description": "Confirm encryption scope, identify patient zero, verify backups are intact."},
+            ),
+            PlaybookStep(SoarActionType.ISOLATE_ENDPOINT, EvidenceField.PRIMARY_HOST),
+        ),
+    ),
 ]
 
 _PLAYBOOKS_BY_ID: dict[str, Playbook] = {playbook.id: playbook for playbook in SOAR_PLAYBOOKS}

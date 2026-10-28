@@ -7,11 +7,12 @@ Status legend: **Implemented** (working code in this repo) · **Partial** (works
 | Part | Status | Where |
 |---|---|---|
 | Company model + validation | **Implemented** | `injector/sim/org/emberbay.yaml`, `injector/sim/org.py` |
-| Source-native log builders | **Implemented** | `injector/sim/formats/` (Windows/Sysmon, Linux, nginx, OpenVPN, pfSense/Suricata, mail, PostgreSQL, CloudTrail, GuardDuty) |
+| Source-native log builders | **Implemented** | `injector/sim/formats/` (Windows/Sysmon, Linux sshd/sudo/auditd, nginx, OpenVPN, pfSense/Suricata, mail, PostgreSQL, CloudTrail, GuardDuty) |
 | Ingest engine (login, per-source batching) | **Implemented** | `injector/sim/engine.py` |
 | CLI (`org`, `org --diagram`, `samples`) | **Implemented** | `injector/sim/cli.py`, `python -m injector.sim` |
 | Generated network diagram | **Implemented** | `docs/simulator-network.mmd` (embedded below) |
-| Adapter field mapping for these sources | **Implemented** | `backend/app/adapters/mapping.py` maps every builder's output to a canonical `EventAction` (`failed_login`, `login_success`, `outbound_connection`, …) plus Windows `eventdata` users/IPs, Sysmon process/file/hash fields, Suricata `src_ip`/`dest_ip`, CloudTrail ConsoleLogin results and GuardDuty's `AwsApiCallAction` remote IP. It lives in the backend, so real Wazuh data gets it too (see `docs/decisions.md` ADR-012). Expected output per builder: `backend/tests/test_adapter_mapping.py`. One sample keeps the fallback on purpose: OpenVPN rule 100401 (address assigned) has no canonical action, so its action is the decoder name `openvpn`. |
+| Adapter field mapping for these sources | **Implemented** | `backend/app/adapters/mapping.py` maps every builder's output to a canonical `EventAction` (`failed_login`, `login_success`, `outbound_connection`, …) plus Windows `eventdata` users/IPs, Sysmon process/file/hash fields, auditd command execution (`process_start` with the executable and argv), the recipient mailbox as the user of inbound mail, Suricata `src_ip`/`dest_ip`, CloudTrail ConsoleLogin results and GuardDuty's `AwsApiCallAction` remote IP. It lives in the backend, so real Wazuh data gets it too (see `docs/decisions.md` ADR-012). Expected output per builder: `backend/tests/test_adapter_mapping.py`. One sample keeps the fallback on purpose: OpenVPN rule 100401 (address assigned) has no canonical action, so its action is the decoder name `openvpn`. |
+| Detectors tuned for this telemetry | **Implemented** | Recon counts only probing actions (`web_attack`, `ids_alert`, `connection_blocked`); exfiltration also counts S3 `GetObject`; new `ransomware_precursor` pattern (shadow-copy deletion, mass creation of files with an unusual extension). See `docs/decisions.md` ADR-013. |
 | Attack scenarios, default / random / story simulators | **Planned** | Not built yet (see [Planned](#planned)) |
 
 !!! note "Honesty note"
@@ -212,9 +213,25 @@ Decoder `windows_eventchannel`, location `EventChannel`, `data.win.system` + `da
 }
 ```
 
-### Linux sshd / sudo (`linux.py`)
+### Linux sshd / sudo / auditd (`linux.py`)
 
 `full_log` is the real `/var/log/auth.log` line (host-local time, hostname, `sshd[pid]`). sudo logs without a PID on Ubuntu 22.04, so its line has none. Builders: `ssh_failed_password` (data `srcip`, `srcport`, `dstuser`), `ssh_invalid_user` (`srcuser`), `ssh_accepted_password`, `sudo_command` (`srcuser`, `tty`, `pwd`, `dstuser`, `command`).
+
+`auditd_execve(org, asset, ts, *, exe, argv, user, uid, pid, ppid, cwd, auid=None, ...)` builds one `execve()` from `/var/log/audit/audit.log`, alerted by stock rule **80792** (`Audit: Command: $(audit.exe).`):
+
+- **The agent's audit rule.** It is Wazuh's documented one, `-a exit,always -F arch=b64 -S execve -k audit-wazuh-c`. The stock `etc/lists/audit-keys` maps that key to `command`, which is what 80792 checks.
+- **`full_log`.** Wazuh's audit collector joins the event's records into one line: SYSCALL, EXECVE, CWD, two PATH and PROCTITLE, all sharing one serial. The records use auditd's default ENRICHED format, so the SYSCALL record ends with `0x1d` and the resolved names (`AUID="karthik.reddy" UID="root" …`).
+- **`data.audit`.** These are the fields the v4.9.2 `auditd` decoder extracts:
+    - `type` is `SYSCALL`, because the decoder takes the first record's type;
+    - `id`, `arch`, `syscall`, `success`, `exit`, `ppid`, `pid`, `auid`, `uid`, `gid`, `euid`, …, `tty`, `session`;
+    - `command` (the comm name), `exe`, `key`, `cwd`, `file`;
+    - `execve.a0`–`a7`.
+- **Hex-encoded arguments.** auditd hex-encodes an argument that contains a space or a quote, and Wazuh's decoder doesn't extract those. They appear in `full_log` but not in `data.audit.execve`.
+- **Mapping.** The backend maps the alert to `process` / `process_start`:
+    - `process_name` is the basename of `exe`;
+    - `command_line` is a0…aN joined;
+    - `process_id` is `pid`;
+    - `user` is `audit.acct`, else the enriched `AUID` name, else `unknown`.
 
 ```json
 {
@@ -287,7 +304,7 @@ OpenVPN 2.6 lines via syslog (`openvpn[pid]`), decoder `openvpn`. Builders: `aut
 
 ### Mail gateway (`mail.py`)
 
-Two lines per inbound message, tied together by the Postfix queue ID. `attachment_warning` is Postfix cleanup's `mime_header_checks` WARN line for the attachment's `Content-Type` (file name + MIME type). `content_filter_verdict` is the content filter's amavis-style verdict line: Passed/Blocked, verdict, client, sender → recipient, Queue-ID, Message-ID, Subject. CLEAN/SPAMMY fire custom rule 100501; SPAM/BANNED/INFECTED fire 100502.
+Two lines per inbound message, tied together by the Postfix queue ID. `attachment_warning` is Postfix cleanup's `mime_header_checks` WARN line for the attachment's `Content-Type` (file name + MIME type). `content_filter_verdict` is the content filter's amavis-style verdict line: Passed/Blocked, verdict, client, sender → recipient, Queue-ID, Message-ID, Subject. CLEAN/SPAMMY fire custom rule 100501; SPAM/BANNED/INFECTED fire 100502. The backend takes the user from the recipient's mailbox (`data.to`, local part, lower-cased: `neha.sharma@emberbay.local` → `neha.sharma`).
 
 ```json
 {
@@ -385,6 +402,7 @@ Findings in the GetFindings shape (SchemaVersion 2.0, PascalCase): `AccountId`, 
 | 5715 | 3 | sshd: authentication success. | 0095-sshd_rules.xml | linux.ssh_accepted_password |
 | 5402 | 3 | Successful sudo to ROOT executed. | 0020-syslog_rules.xml | linux.sudo_command (USER=root) |
 | 5407 | 3 | Successful sudo executed. | 0020-syslog_rules.xml | linux.sudo_command (other users) |
+| 80792 | 3 | Audit: Command: $(audit.exe). | 0365-auditd_rules.xml | linux.auditd_execve |
 | 31101 | 5 | Web server 400 error code. | 0245-web_rules.xml | web.access_log (4xx) |
 | 31120 | 5 | Web server 500 error code (server error). | 0245-web_rules.xml | web.access_log (5xx other than 500) |
 | 31122 | 5 | Web server 500 error code (Internal Error). | 0245-web_rules.xml | web.access_log (500) |

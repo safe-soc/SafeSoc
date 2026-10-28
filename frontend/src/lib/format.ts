@@ -184,6 +184,7 @@ const CATEGORY_LABELS: Record<CorrelationPattern, string> = {
   privilege_escalation: 'Privilege escalation',
   data_exfiltration: 'Data exfiltration',
   lateral_movement: 'Lateral movement',
+  ransomware_precursor: 'Ransomware precursor',
 };
 
 /** Human label for an incident's detected chain; a null category means it was opened manually. */

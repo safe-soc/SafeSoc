@@ -16,6 +16,7 @@ import pytest
 
 from app.core.enums import (
     AutonomyClass,
+    CorrelationPattern,
     RecommendationSource,
     SoarActionStatus,
     SoarActionType,
@@ -77,7 +78,7 @@ def test_list_playbooks_is_readable_by_a_viewer(client, db_session, make_auth_he
     response = client.get("/api/v1/soar/playbooks", headers=headers)
     assert response.status_code == 200
     body = response.json()
-    assert len(body) == 6  # one per CorrelationPattern
+    assert len(body) == len(CorrelationPattern)  # one per CorrelationPattern
     assert {p["id"] for p in body} >= {"pb-successful-compromise", "pb-credential-brute-force"}
 
 

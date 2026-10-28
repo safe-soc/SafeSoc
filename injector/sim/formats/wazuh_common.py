@@ -95,12 +95,14 @@ RULES: dict[str, Rule] = {
     "sysmon_network_connect": _custom(100111, 3, "Sysmon - Event 3: Network connection", (*_SYSMON, "sysmon_event3")),
     "sysmon_file_create": _custom(100112, 3, "Sysmon - Event 11: File created", (*_SYSMON, "sysmon_event_11")),
     "sysmon_file_delete": _custom(100113, 3, "Sysmon - Event 23: File deleted and archived", (*_SYSMON, "sysmon_event_23")),
-    # Linux (0095-sshd_rules.xml, 0020-syslog_rules.xml)
+    # Linux (0095-sshd_rules.xml, 0020-syslog_rules.xml, 0365-auditd_rules.xml)
     "sshd_auth_failed": _stock(5716, 5, "sshd: authentication failed.", ("syslog", "sshd", "authentication_failed"), ("T1110",), file="0095-sshd_rules.xml"),
     "sshd_invalid_user": _stock(5710, 5, "sshd: Attempt to login using a non-existent user", ("syslog", "sshd", "authentication_failed", "invalid_login"), ("T1110.001", "T1021.004"), file="0095-sshd_rules.xml"),
     "sshd_auth_success": _stock(5715, 3, "sshd: authentication success.", ("syslog", "sshd", "authentication_success"), ("T1078", "T1021"), file="0095-sshd_rules.xml"),
     "sudo_to_root": _stock(5402, 3, "Successful sudo to ROOT executed.", ("syslog", "sudo"), ("T1548.003",), file="0020-syslog_rules.xml"),
     "sudo_executed": _stock(5407, 3, "Successful sudo executed.", ("syslog", "sudo"), ("T1548.003",), file="0020-syslog_rules.xml"),
+    # auditd (0365-auditd_rules.xml): fires for records whose audit.key maps to "command" in etc/lists/audit-keys.
+    "audit_command": _stock(80792, 3, "Audit: Command: $(audit.exe).", ("audit", "audit_command"), file="0365-auditd_rules.xml"),
     # Web access log (0245-web_rules.xml)
     "web_400": _stock(31101, 5, "Web server 400 error code.", ("web", "accesslog", "attack"), file="0245-web_rules.xml"),
     "web_500": _stock(31122, 5, "Web server 500 error code (Internal Error).", ("web", "accesslog", "system_error"), file="0245-web_rules.xml"),

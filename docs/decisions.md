@@ -107,3 +107,43 @@ Format: each entry records a decision, its rationale, and its current implementa
 **Trade-off (accepted):** The rule-group table matches the group names stock Wazuh rules (and the simulator's custom rules) use. A custom ruleset with different group names falls through to the fallback and correlates as before — ingested, but invisible to the action-keyed detectors — until a mapping entry is added. pfSense pass events are classified as inbound/outbound from `data.direction` when present, otherwise from the addresses (internal source to public destination = outbound), because Wazuh's `pf` decoder doesn't extract the filterlog direction.
 
 **Status: Implemented.** `backend/app/core/enums.py::EventAction`, `backend/app/adapters/mapping.py` (full table in its module docstring), `backend/app/adapters/wazuh.py`, `backend/app/adapters/cloudtrail.py`, `backend/app/adapters/guardduty.py`. Covered by `backend/tests/test_adapter_mapping.py` (every simulator sample through its real adapter, plus edge cases).
+
+---
+
+### ADR-013: Detector refinements for realistic telemetry
+
+**Decision:** Four changes to `services/correlation.py`, so that real-format telemetry (ADR-012) triggers the detectors it should and ordinary traffic doesn't:
+
+1. **Recon → exploitation counts probing only.** A recon event is `log_type = "network"` with an action in `RECON_ACTIONS` = `web_attack`, `ids_alert`, `connection_blocked`, plus the legacy injector actions `port_scan` (`injector/injector.py`) and `suspicious_network_connection` (`injector/simulate.py`). Plain `outbound_connection`/`inbound_connection` and `web_request` no longer count. The exploitation step is now the **first process event with at least `RECON_MIN_EVENTS` (3) recon events before it**. It used to be the window's first process event only, so one benign process early in the window blocked detection for as long as it stayed in the window. The alert ids are those recon events plus that process event.
+2. **Data exfiltration counts cloud object reads per principal.** `log_type = "cloud"` events whose action is in `CLOUD_DATA_READ_ACTIONS` = `GetObject` are counted **per `user`** (the CloudTrail principal). The pattern fires when one user has at least `EXFILTRATION_MIN_CONNECTIONS` (10) reads in the window, and the alert ids are that user's reads. Network `outbound_connection` events are still counted per host, as before. The two kinds of evidence are never added together. The window event now also stores `user` for this. The pattern's MITRE mapping stays its static `T1041`. `T1530` (Data from Cloud Storage) is the more precise technique for S3 reads, but `core/mitre_mapping.py` maps per pattern, not per piece of evidence, and that table is unchanged here.
+3. **New pattern `ransomware_precursor`** (`T1490` Inhibit System Recovery + `T1486` Data Encrypted for Impact; tactic Impact). It has two signals:
+    - **Shadow deletion:** a process event whose `process_name` (case-insensitive basename) is `vssadmin.exe`, `wmic.exe`, `wbadmin.exe` or `bcdedit.exe`, and whose `command_line` matches `delete shadows`, `shadowcopy delete`, `delete catalog` or `recoveryenabled no`.
+    - **Mass rename:** at least `RANSOMWARE_MIN_FILE_EVENTS` (20) `file_create` events with the same file extension, where that extension is not in a common-extension allowlist (docx, xlsx, pptx, pdf, txt, csv, log, tmp, jpg, png, zip, json, xml, ini, dll, exe, lnk).
+
+    Confidence is 0.95 when both signals are present, 0.8 for shadow deletion alone and 0.75 for mass rename alone. Playbook `pb-ransomware-precursor` (min confidence 0.7) collects evidence from the primary host, opens an investigation action ("Confirm encryption scope, identify patient zero, verify backups are intact.") and proposes `isolate_endpoint`, which needs approval under `core/soar_policy.py`. `incidents.category` is a native Postgres enum, so migration `e5f1a2b3c4d6` adds the value with `ALTER TYPE … ADD VALUE IF NOT EXISTS` in an autocommit block. Its downgrade is a documented no-op, because Postgres can't drop an enum value.
+4. **More fields per window event.** `workers/correlation_worker.py` also stores `source_ip`, `user`, `process_name`, `command_line` and `file_path` (None when the alert lacks them). Events already in Redis without these fields still work, because every detector reads with `.get()`.
+
+**Rationale:** With canonical actions in place, the detectors' old shortcuts misfired on realistic data. Every busy web server makes outbound connections and serves requests, so "any 3 network events, then a process" put recon → exploitation on most Linux servers. Cloud key abuse that drains an S3 bucket produced no exfiltration signal, because CloudTrail reads are `cloud` events, not `network` ones. Ransomware, the attack SMBs most need caught early, had no detector at all. The ransomware signals are behaviours the precursor stage actually shows: deleting recovery points, and rewriting files under a new extension. They aren't malware signatures.
+
+**Known limitations (accepted):**
+
+- **Windows are per host** (`tenant_id:host_id`, SS-027). A chain that spans hosts is seen only as the part on each host:
+    - phishing on a workstation, then lateral movement to a file server, then exfiltration from it;
+    - a VPN login, then a Domain Admins change on the DC.
+
+  Cloud events are windowed per **AWS account** (the CloudTrail adapter's `host_id` is `accountId`), so S3 reads correlate with the account's other API calls but not with the on-prem host that leaked the key. Cross-host correlation is future work.
+- **Cloud reads are counted per principal inside an account-wide window.** Because the window is the whole account, the detector groups `GetObject` calls by `user` so that several applications' routine reads can't add up to a false exfiltration. Two things are still not caught:
+    - **Reads spread across principals.** An attacker who spreads reads over several stolen keys, each staying under 10, isn't detected.
+    - **A single busy principal.** One principal that legitimately reads 10 or more objects within the window still fires.
+
+  Only principals with S3 data events enabled and ingested are affected; CloudTrail data events are off by default.
+- Counting events is still a proxy for volume. `NormalizedLog` has no bytes-transferred field, so 10 large downloads and 10 tiny ones look the same.
+- The mass-rename allowlist is deliberately short. A legitimate bulk job that writes 20+ files with an uncommon extension (for example `.bak` exports) fires at 0.75. It shows up as a real incident with the files listed, rather than being hidden.
+
+**Status: Implemented.** `backend/app/services/correlation.py` (`RECON_ACTIONS`, `CLOUD_DATA_READ_ACTIONS`, `detect_ransomware_precursor`), `backend/app/workers/correlation_worker.py`, `backend/app/core/enums.py::CorrelationPattern.RANSOMWARE_PRECURSOR`, `backend/app/core/mitre_mapping.py`, `backend/app/core/soar_playbooks.py`, `backend/migrations/versions/e5f1a2b3c4d6_incident_category_ransomware_precursor.py`, plus the label lists in `services/incident_summary.py` and the frontend (`lib/types.ts`, `lib/format.ts`, `pages/ThreatAnalytics.tsx`). Covered by:
+
+- `backend/tests/test_correlation.py`
+- `backend/tests/test_correlation_worker.py`
+- `backend/tests/test_incident_category_migration.py`
+- `backend/tests/test_pattern_coverage.py`: every pattern has a detector, backend and frontend labels, the frontend type, and a chart colour.
+- `backend/tests/test_soar_playbooks.py`

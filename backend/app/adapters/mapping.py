@@ -31,7 +31,15 @@ a) Windows eventchannel (decoder windows_eventchannel; data.win.system
    without its DOMAIN\\ prefix. Group changes append "member: <memberName>,
    group: <targetUserName>" to the description.
 
-b) Wazuh rule.groups
+b) auditd command execution (decoder auditd, rule group audit_command,
+   e.g. stock rule 80792 "Audit: Command")  -> process / process_start
+   process_name: basename of data.audit.exe; command_line: data.audit.execve
+   a0..aN joined with spaces (fallback data.audit.command, the comm name);
+   process_id: data.audit.pid; user: data.audit.acct, else the AUID="name"
+   auditd's ENRICHED log format appends to the record in full_log, else
+   "unknown" (Wazuh's decoder only extracts the numeric auid).
+
+c) Wazuh rule.groups
      authentication_failed | invalid_login      -> authentication / failed_login
      authentication_success                     -> authentication / login_success
      suricata | ids                             -> network / ids_alert
@@ -47,14 +55,15 @@ b) Wazuh rule.groups
      sudo, any other dstuser                    -> process / process_start
      data_export                                -> network / db_export
      mail | postfix | content_filter            -> system / email_received
+                                                   (user: local part of data.to)
      syscheck added / modified / deleted        -> file / file_create, file_modify,
                                                    file_delete (syscheck.event, or the
                                                    syscheck_entry_* group)
 
-c) Decoder-specific: openvpn "client disconnected" (rule 100402) ->
+d) Decoder-specific: openvpn "client disconnected" (rule 100402) ->
    authentication / logout.
 
-d) No match: no log_type/action is returned and the Wazuh adapter keeps
+e) No match: no log_type/action is returned and the Wazuh adapter keeps
    its fallback (action = decoder name, log_type from its keyword
    table), so unknown events still ingest.
 
@@ -67,6 +76,7 @@ with the adapter's rule.level mapping.
 
 import ipaddress
 import ntpath
+import re
 from typing import Any, Optional
 
 from app.core.enums import EventAction, LogType
@@ -214,7 +224,45 @@ def _windows(data: dict[str, Any], description: str) -> Optional[dict[str, Any]]
     return fields
 
 
-# ── b) Wazuh rule groups ───────────────────────────────────────
+# ── b) auditd command execution ────────────────────────────────
+
+_AUDIT_COMMAND_GROUP = "audit_command"
+# auditd's ENRICHED log format (the default since audit 2.6) appends the
+# resolved names to each record, e.g. AUID="karthik.reddy" UID="root".
+_ENRICHED_AUID = re.compile(r'\bAUID="([^"]+)"')
+_UNSET_AUID_NAMES = {"unset", "4294967295", "-1"}
+
+
+def _execve_command_line(audit: dict[str, Any]) -> Optional[str]:
+    """a0..aN in numeric order. Gaps are normal: auditd hex-encodes an argument holding a space, which Wazuh doesn't decode."""
+    execve = audit.get("execve") if isinstance(audit.get("execve"), dict) else {}
+    indexed = sorted(
+        (int(key[1:]), str(value)) for key, value in execve.items()
+        if str(key).startswith("a") and str(key)[1:].isdigit() and value not in (None, "")
+    )
+    return " ".join(value for _, value in indexed) or None
+
+
+def _auditd(raw: dict[str, Any], data: dict[str, Any], groups: set[str]) -> Optional[dict[str, Any]]:
+    if _AUDIT_COMMAND_GROUP not in groups:
+        return None
+    audit = data.get("audit") if isinstance(data.get("audit"), dict) else {}
+    exe = audit.get("exe")
+    if not exe and not audit.get("execve"):
+        return None  # e.g. 80793 (passwd account lock) shares the group but runs no command
+
+    enriched = _ENRICHED_AUID.search(str(raw.get("full_log") or ""))
+    auid_name = enriched.group(1) if enriched and enriched.group(1) not in _UNSET_AUID_NAMES else None
+    return {
+        "log_type": LogType.PROCESS, "action": EventAction.PROCESS_START,
+        "process_name": ntpath.basename(str(exe)) or None if exe else None,
+        "command_line": _execve_command_line(audit) or audit.get("command"),
+        "process_id": _to_int(audit.get("pid")),
+        "user": audit.get("acct") or auid_name or "unknown",
+    }
+
+
+# ── c) Wazuh rule groups ───────────────────────────────────────
 
 _WEB_GROUPS = {"web", "accesslog"}
 _WEB_ATTACK_GROUPS = {"attack", "sql_injection", "web_scan", "xss"}
@@ -275,7 +323,7 @@ def _by_groups(raw: dict[str, Any], groups: set[str], data: dict[str, Any], netw
     if "data_export" in groups:
         return {"log_type": LogType.NETWORK, "action": EventAction.DB_EXPORT}
     if groups & _MAIL_GROUPS:
-        return {"log_type": LogType.SYSTEM, "action": EventAction.EMAIL_RECEIVED}
+        return {"log_type": LogType.SYSTEM, "action": EventAction.EMAIL_RECEIVED, "user": _mailbox_user(data.get("to"))}
 
     syscheck = raw.get("syscheck") if isinstance(raw.get("syscheck"), dict) else {}
     syscheck_event = str(syscheck.get("event") or "").strip().lower()
@@ -289,7 +337,16 @@ def _by_groups(raw: dict[str, Any], groups: set[str], data: dict[str, Any], netw
     return None
 
 
-# ── c) Decoder-specific leftovers ──────────────────────────────
+def _mailbox_user(recipient: Any) -> Optional[str]:
+    """The local part of the (first) recipient: "<Neha.Sharma@emberbay.example>" -> "neha.sharma"."""
+    if not recipient:
+        return None
+    first = str(recipient).split(",")[0].strip().strip("<>").strip()
+    local = first.split("@", 1)[0].strip()
+    return local.lower() or None
+
+
+# ── d) Decoder-specific leftovers ──────────────────────────────
 
 _OPENVPN_DISCONNECTED_RULE = "100402"
 
@@ -335,7 +392,7 @@ def map_wazuh_event(raw: dict[str, Any]) -> dict[str, Any]:
     NormalizedLog fields resolved from a raw Wazuh alert. Only fields
     that could be resolved are returned (never a None value), so the
     caller merges this over its own defaults. "log_type"/"action" are
-    present only when one of rules a)-c) matched; the caller keeps its
+    present only when one of rules a)-d) matched; the caller keeps its
     fallback otherwise. Never raises for a sparse/malformed payload.
     """
     rule = raw.get("rule") if isinstance(raw.get("rule"), dict) else {}
@@ -351,6 +408,8 @@ def map_wazuh_event(raw: dict[str, Any]) -> dict[str, Any]:
     semantic = None
     if decoder_name == "windows_eventchannel":
         semantic = _windows(data, description)
+    if semantic is None and decoder_name == "auditd":
+        semantic = _auditd(raw, data, groups)
     if semantic is None:
         semantic = _by_groups(raw, groups, data, fields)
     if semantic is None:

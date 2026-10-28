@@ -42,6 +42,7 @@ _CATEGORY_LABELS: dict[CorrelationPattern, str] = {
     CorrelationPattern.PRIVILEGE_ESCALATION: "Privilege escalation",
     CorrelationPattern.DATA_EXFILTRATION: "Data exfiltration",
     CorrelationPattern.LATERAL_MOVEMENT: "Lateral movement",
+    CorrelationPattern.RANSOMWARE_PRECURSOR: "Ransomware precursor",
 }
 
 
