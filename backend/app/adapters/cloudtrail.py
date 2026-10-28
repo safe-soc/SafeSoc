@@ -1,14 +1,19 @@
 """
 SafeSOC — AWS CloudTrail Adapter
 Transforms a raw CloudTrail event record into NormalizedLog-shaped
-fields (log_type is always "cloud", source is always "aws_cloudtrail").
+fields (source is always "aws_cloudtrail"). ConsoleLogin maps to the
+canonical authentication actions (login_success / failed_login, from
+responseElements.ConsoleLogin) the correlation detectors key on; every
+other event keeps action = eventName and log_type "cloud".
 """
 
 import json
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from app.core.enums import LogType, Severity
+from app.core.enums import EventAction, LogType, Severity
+
+_CONSOLE_LOGIN_RESULTS = {"success": EventAction.LOGIN_SUCCESS, "failure": EventAction.FAILED_LOGIN}
 
 
 def _safe_timestamp(raw_timestamp: Optional[str]) -> str:
@@ -22,12 +27,22 @@ def _safe_timestamp(raw_timestamp: Optional[str]) -> str:
 
 
 def _describe_actor(user_identity: dict[str, Any]) -> str:
+    """userName, else the ARN's last path segment (an assumed-role session name, e.g. ".../dev-role/bob" -> "bob"), else type."""
+    arn = user_identity.get("arn") or ""
     return (
         user_identity.get("userName")
-        or user_identity.get("arn")
+        or (arn.rsplit("/", 1)[-1] if "/" in arn else None)
         or user_identity.get("type")
         or "unknown"
     )
+
+
+def _classify(event_name: str, raw: dict[str, Any]) -> tuple[LogType, str]:
+    if event_name != "ConsoleLogin":
+        return LogType.CLOUD, event_name
+    result = str((raw.get("responseElements") or {}).get("ConsoleLogin") or "").strip().lower()
+    action = _CONSOLE_LOGIN_RESULTS.get(result)
+    return LogType.AUTHENTICATION, action.value if action else event_name
 
 
 def _describe_event(event_name: str, event_source: str, actor: str, resources: list[dict[str, Any]]) -> str:
@@ -58,15 +73,16 @@ def transform(raw: dict[str, Any]) -> dict[str, Any]:
     # A failed/denied API call (errorCode present) is materially more
     # notable than routine, successful management-plane activity.
     severity = Severity.HIGH if raw.get("errorCode") else Severity.LOW
+    log_type, action = _classify(event_name, raw)
 
     return {
-        "log_type": LogType.CLOUD.value,
+        "log_type": log_type.value,
         "source": "aws_cloudtrail",
         "timestamp": _safe_timestamp(raw.get("eventTime")),
         "host_id": host_id,
         "host_ip": "0.0.0.0",
         "user": actor,
-        "action": event_name,
+        "action": action,
         "description": _describe_event(event_name, event_source, actor, resources),
         "severity": severity.value,
         "source_ip": raw.get("sourceIPAddress"),

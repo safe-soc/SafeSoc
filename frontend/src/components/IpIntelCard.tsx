@@ -105,6 +105,13 @@ function ProviderSection({
   refreshButton: ReactNode;
 }) {
   if (status === 'ok' && details) return <Section title={provider} rows={details} link={link} />;
+  if (status === 'not_found') {
+    return (
+      <ProviderNotice title={provider}>
+        <span>{provider}: not seen before (no report)</span>
+      </ProviderNotice>
+    );
+  }
   if (status === 'legacy') {
     return (
       <ProviderNotice title={provider}>

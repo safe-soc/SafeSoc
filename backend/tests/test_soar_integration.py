@@ -140,7 +140,7 @@ async def test_real_incident_to_playbook_to_action_to_verification_to_audit(monk
     evidence = IncidentEvidence(
         incident_id=incident.id,
         hosts=[HostEntity(host_id="DESKTOP-042", alert_count=3)],
-        ips=[IPEntity(ip="203.0.113.5", roles=["source"], alert_count=3)],
+        ips=[IPEntity(ip="140.246.61.93", roles=["source"], alert_count=3)],
         users=[UserEntity(user="tom.thompson", alert_count=3)],
         cloud_resources=[],
     )

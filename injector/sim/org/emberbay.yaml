@@ -1,0 +1,236 @@
+# SafeSOC network simulator: company definition (data only).
+#
+# EmberBay Financial Services is FICTIONAL. Every host, user, address and
+# account below is invented for the simulator, except the attacker IPs,
+# which are real, publicly reported addresses (see the `attackers` notes).
+# Public company addresses use the RFC 5737 documentation range
+# 203.0.113.0/24, and the AWS access key is AWS's own documentation example.
+#
+# Loaded and validated by injector/sim/org.py: `python -m injector.sim org`.
+
+company:
+  name: EmberBay Financial Services
+  fictional: true
+  domain: emberbay.local
+  netbios_domain: EMBERBAY
+  # Fictional AD domain SID. User SIDs are <domain_sid>-<rid>; well-known
+  # domain groups use their standard RIDs (Domain Admins = 512).
+  domain_sid: S-1-5-21-3623811015-3361044348-30300820
+  timezone: Asia/Kolkata
+
+public_ips:
+  edge_wan: 203.0.113.10   # EB-FW01 WAN interface
+  web01_nat: 203.0.113.20  # 1:1 NAT to EB-WEB01
+  vpn01_nat: 203.0.113.21  # 1:1 NAT to EB-VPN01
+
+zones:
+  - name: edge
+    vlan: null
+    subnet: null
+    purpose: pfSense EB-FW01 (firewall + Suricata IDS + NAT)
+    monitored: true
+  - name: users
+    vlan: 10
+    subnet: 10.10.10.0/24
+    purpose: Staff workstations and developer machines
+    monitored: true
+  - name: servers
+    vlan: 20
+    subnet: 10.10.20.0/24
+    purpose: Internal servers (AD, file shares, database)
+    monitored: true
+  - name: dmz
+    vlan: 30
+    subnet: 10.10.30.0/24
+    purpose: Internet-facing services (web portal, VPN, mail)
+    monitored: true
+  - name: security
+    vlan: 40
+    subnet: 10.10.40.0/24
+    purpose: Security tooling and log collectors (never an attack target)
+    monitored: false
+
+assets:
+  # ── Edge ──────────────────────────────────────────
+  - hostname: EB-FW01
+    zone: edge
+    ip: 10.10.40.1            # LAN side; WAN is public_ips.edge_wan
+    os: pfSense
+    os_version: "2.7"
+    role: firewall/ids
+    services: [filterlog, suricata, nat]
+    wazuh_agent_id: "007"     # Wazuh agent (FreeBSD package) reading filter.log and eve.json
+
+  # ── Users (Windows 11 23H2) ───────────────────────
+  - {hostname: EB-FIN-WS05, zone: users, ip: 10.10.10.21, os: Windows, os_version: 11 23H2, role: workstation, services: [], wazuh_agent_id: "010", primary_user: arjun.mehta}
+  - {hostname: EB-FIN-WS06, zone: users, ip: 10.10.10.22, os: Windows, os_version: 11 23H2, role: workstation, services: [], wazuh_agent_id: "011", primary_user: priya.nair}
+  - {hostname: EB-FIN-WS07, zone: users, ip: 10.10.10.23, os: Windows, os_version: 11 23H2, role: workstation, services: [], wazuh_agent_id: "012", primary_user: neha.sharma}
+  - {hostname: EB-HR-WS01, zone: users, ip: 10.10.10.24, os: Windows, os_version: 11 23H2, role: workstation, services: [], wazuh_agent_id: "013", primary_user: kavya.rao}
+  - {hostname: EB-HR-WS02, zone: users, ip: 10.10.10.25, os: Windows, os_version: 11 23H2, role: workstation, services: [], wazuh_agent_id: "014", primary_user: rohan.das}
+  - {hostname: EB-IT-WS01, zone: users, ip: 10.10.10.26, os: Windows, os_version: 11 23H2, role: workstation, services: [], wazuh_agent_id: "015", primary_user: adm.rahul}
+  - {hostname: EB-IT-WS02, zone: users, ip: 10.10.10.27, os: Windows, os_version: 11 23H2, role: workstation, services: [], wazuh_agent_id: "016", primary_user: sneha.kulkarni}
+  - {hostname: EB-SAL-WS01, zone: users, ip: 10.10.10.28, os: Windows, os_version: 11 23H2, role: workstation, services: [], wazuh_agent_id: "017", primary_user: vikram.singh}
+  - {hostname: EB-SAL-WS02, zone: users, ip: 10.10.10.29, os: Windows, os_version: 11 23H2, role: workstation, services: [], wazuh_agent_id: "018", primary_user: ananya.iyer}
+
+  # ── Dev (Ubuntu 22.04) ────────────────────────────
+  - {hostname: EB-DEV-LX01, zone: users, ip: 10.10.10.41, os: Ubuntu, os_version: "22.04", role: developer workstation, services: [sshd], wazuh_agent_id: "020", primary_user: karthik.reddy}
+  - {hostname: EB-DEV-LX02, zone: users, ip: 10.10.10.42, os: Ubuntu, os_version: "22.04", role: developer workstation, services: [sshd], wazuh_agent_id: "021", primary_user: meera.joshi}
+
+  # ── Servers ───────────────────────────────────────
+  - hostname: EB-DC01
+    zone: servers
+    ip: 10.10.20.10
+    os: Windows Server
+    os_version: "2022"
+    role: domain controller
+    services: [AD DS, DNS]
+    wazuh_agent_id: "001"
+    owner: adm.rahul
+  - hostname: EB-FS01
+    zone: servers
+    ip: 10.10.20.20
+    os: Windows Server
+    os_version: "2022"
+    role: file server
+    services: [SMB]
+    shares: ['\\EB-FS01\Finance', '\\EB-FS01\HR', '\\EB-FS01\Shared']
+    wazuh_agent_id: "002"
+    owner: adm.rahul
+  - hostname: EB-DB01
+    zone: servers
+    ip: 10.10.20.30
+    os: Ubuntu
+    os_version: "22.04"
+    role: database server
+    services: [PostgreSQL 15, sshd]
+    databases: [finance_core]
+    wazuh_agent_id: "003"
+    owner: adm.rahul
+
+  # ── DMZ ───────────────────────────────────────────
+  - hostname: EB-WEB01
+    zone: dmz
+    ip: 10.10.30.10
+    public_ip: 203.0.113.20
+    os: Ubuntu
+    os_version: "22.04"
+    role: customer portal web server
+    services: [nginx 1.24, customer portal app, sshd]
+    web_paths: [/, /login, /admin, /api/*, /uploads/]
+    wazuh_agent_id: "004"
+    owner: karthik.reddy
+  - hostname: EB-VPN01
+    zone: dmz
+    ip: 10.10.30.20
+    public_ip: 203.0.113.21
+    os: Ubuntu
+    os_version: "22.04"
+    role: remote-access VPN
+    services: [OpenVPN 2.6 udp/1194]
+    vpn_pool: 10.8.0.0/24
+    wazuh_agent_id: "005"
+    owner: adm.rahul
+  - hostname: EB-MAIL01
+    zone: dmz
+    ip: 10.10.30.30
+    os: Ubuntu
+    os_version: "22.04"
+    role: mail gateway
+    services: [Postfix, content filter]
+    wazuh_agent_id: "006"
+    owner: adm.rahul
+
+  # ── Security (collectors; never targets) ──────────
+  - hostname: EB-WAZUH01
+    zone: security
+    ip: 10.10.40.10
+    os: Ubuntu
+    os_version: "22.04"
+    role: Wazuh manager 4.x
+    services: [wazuh-manager]
+    wazuh_agent_id: "000"     # the manager's own built-in agent
+
+users:
+  # Finance
+  - {username: neha.sharma, display_name: Neha Sharma, department: Finance, title: Senior Accountant, primary_host: EB-FIN-WS07, groups: [Domain Users, Finance, VPN-Users], vpn_access: true, aws_access: false, rid: 1104}
+  - {username: arjun.mehta, display_name: Arjun Mehta, department: Finance, title: Accounts Payable Analyst, primary_host: EB-FIN-WS05, groups: [Domain Users, Finance], vpn_access: false, aws_access: false, rid: 1105}
+  - {username: priya.nair, display_name: Priya Nair, department: Finance, title: Financial Analyst, primary_host: EB-FIN-WS06, groups: [Domain Users, Finance], vpn_access: false, aws_access: false, rid: 1106}
+  # HR
+  - {username: kavya.rao, display_name: Kavya Rao, department: HR, title: HR Manager, primary_host: EB-HR-WS01, groups: [Domain Users, HR], vpn_access: false, aws_access: false, rid: 1107}
+  - {username: rohan.das, display_name: Rohan Das, department: HR, title: HR Executive, primary_host: EB-HR-WS02, groups: [Domain Users, HR], vpn_access: false, aws_access: false, rid: 1108}
+  # Sales
+  - {username: vikram.singh, display_name: Vikram Singh, department: Sales, title: Regional Sales Manager, primary_host: EB-SAL-WS01, groups: [Domain Users, Sales, VPN-Users], vpn_access: true, aws_access: false, rid: 1109}
+  - {username: ananya.iyer, display_name: Ananya Iyer, department: Sales, title: Account Executive, primary_host: EB-SAL-WS02, groups: [Domain Users, Sales, VPN-Users], vpn_access: true, aws_access: false, rid: 1110}
+  # IT
+  - {username: adm.rahul, display_name: Rahul Menon (admin), department: IT, title: IT Systems Administrator, primary_host: EB-IT-WS01, groups: [Domain Users, Domain Admins, IT, VPN-Users], vpn_access: true, aws_access: true, rid: 1111}
+  - {username: sneha.kulkarni, display_name: Sneha Kulkarni, department: IT, title: IT Helpdesk Technician, primary_host: EB-IT-WS02, groups: [Domain Users, IT, IT Helpdesk], vpn_access: false, aws_access: false, rid: 1112}
+  # Dev
+  - {username: karthik.reddy, display_name: Karthik Reddy, department: Engineering, title: Senior Software Engineer, primary_host: EB-DEV-LX01, groups: [Domain Users, Developers, VPN-Users], vpn_access: true, aws_access: true, rid: 1113}
+  - {username: meera.joshi, display_name: Meera Joshi, department: Engineering, title: Software Engineer, primary_host: EB-DEV-LX02, groups: [Domain Users, Developers], vpn_access: false, aws_access: false, rid: 1114}
+  # Service accounts
+  - {username: svc-backup, display_name: Backup service, department: IT, title: Service account, primary_host: EB-FS01, groups: [Domain Users, Backup Operators], vpn_access: false, aws_access: false, service_account: true, rid: 1120}
+  - {username: svc-webapp, display_name: Customer portal app user, department: Engineering, title: Service account, primary_host: EB-WEB01, groups: [], vpn_access: false, aws_access: false, service_account: true, rid: 1121}
+  - {username: svc-sql, display_name: Finance DB service, department: Finance, title: Service account, primary_host: EB-DB01, groups: [], vpn_access: false, aws_access: false, service_account: true, rid: 1122}
+
+cloud:
+  provider: aws
+  account_id: "111122223333"
+  region: ap-south-1
+  guardduty_detector_id: 4ab8c1e2d3f405162738495a6b7c8d9e   # fictional
+  s3_buckets:
+    - {name: eb-finance-backups, sensitivity: sensitive, note: Nightly finance_core and file-share backups}
+    - {name: eb-web-assets, sensitivity: public-read, note: Customer portal static assets}
+  iam_users:
+    - name: svc-web-deploy
+      access_key_id: AKIAIOSFODNN7EXAMPLE   # AWS's documentation example key
+      key_location: EB-WEB01:/var/www/portal/.env
+      console_access: false
+    - {name: karthik.reddy, access_key_id: null, console_access: true}
+    - {name: adm.rahul, access_key_id: null, console_access: true}
+  services:
+    cloudtrail: all regions
+    guardduty: enabled
+
+# Real, publicly reported IPs used by later attack scenarios. Keep these
+# exact values. Country/ASN/owner are deliberately NOT recorded here:
+# they come from live threat intel at run time.
+attackers:
+  vpn_bruteforcer:
+    role: Password spraying / brute force against the VPN
+    ip: 2.57.121.25
+    targets: [EB-VPN01]
+    note: publicly reported on AbuseIPDB as of 2026-10-27; reputation can change
+  phishing_c2:
+    role: Phishing sender and command-and-control for the dropped payload
+    ip: 140.246.61.93
+    targets: [EB-MAIL01, EB-FIN-WS07]
+    note: publicly reported on AbuseIPDB as of 2026-10-27; reputation can change
+  web_exploiter:
+    role: Scanning and exploiting the customer portal
+    ip: 45.148.10.121
+    targets: [EB-WEB01]
+    note: publicly reported on AbuseIPDB as of 2026-10-27; reputation can change
+  vpn_intruder:
+    role: Logs in to the VPN with stolen credentials
+    ip: 101.36.104.242
+    targets: [EB-VPN01, EB-FS01, EB-DC01]
+    note: publicly reported on AbuseIPDB as of 2026-10-27; reputation can change
+  cloud_key_abuser:
+    role: Uses the leaked svc-web-deploy AWS access key
+    ip: 93.174.95.106
+    targets: []
+    note: publicly reported on AbuseIPDB as of 2026-10-27; reputation can change
+  ransomware_c2:
+    role: Ransomware operator infrastructure
+    ip: 216.150.16.129
+    secondary_ips: [216.150.1.193]
+    label_group: Akira (reported)
+    targets: [EB-FS01, EB-DC01, EB-FIN-WS07]
+    note: publicly reported on AbuseIPDB as of 2026-10-27; reputation can change
+
+# Spare attacker IPs for the random simulator.
+attacker_pool:
+  - {ip: 61.245.11.87, note: publicly reported on AbuseIPDB as of 2026-10-27; reputation can change}
+  - {ip: 92.27.101.99, note: publicly reported on AbuseIPDB as of 2026-10-27; reputation can change}
+  - {ip: 103.49.238.251, note: publicly reported on AbuseIPDB as of 2026-10-27; reputation can change}
+  - {ip: 120.48.154.88, note: publicly reported on AbuseIPDB as of 2026-10-27; reputation can change}

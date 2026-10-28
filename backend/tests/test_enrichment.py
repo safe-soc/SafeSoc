@@ -3,14 +3,18 @@ SafeSOC — Enrichment Service Tests
 """
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
+import requests
 
 from app.clients.abuseipdb import AbuseIPDBError
 from app.clients.virustotal import VirusTotalError
+from app.core.config import Settings, settings
+from app.core.enums import TIDetailStatus, TIProvider
 from app.schemas.log import NormalizedLog, TIResult
 from app.services import enrichment
+from app.services.ip_threat_intel import get_ip_threat_intel
 
 
 def _make_log(**overrides) -> NormalizedLog:
@@ -137,7 +141,7 @@ async def test_hash_indicator_only_queries_virustotal(monkeypatch):
     monkeypatch.setattr(enrichment.virustotal, "lookup_hash", vt_lookup)
     monkeypatch.setattr(enrichment.abuseipdb, "lookup_ip", abuse_lookup)
 
-    log = _make_log(file_hash="abc123")
+    log = _make_log(file_hash="abc123", severity="high")  # at HASH_ENRICHMENT_MIN_SEVERITY
     enriched = await enrichment.enrich_log(session, log)
 
     vt_lookup.assert_called_once_with("abc123")
@@ -357,3 +361,224 @@ async def test_refresh_ip_forces_both_providers(monkeypatch):
     vt_lookup.assert_awaited_once()
     abuse_lookup.assert_awaited_once()
     assert result.vt_total == 70 and result.abuse_confidence == 5
+
+
+# ── Non-public IPs are never looked up ───────────────────────────
+
+def _mock_providers(monkeypatch) -> tuple[AsyncMock, AsyncMock, AsyncMock]:
+    vt_lookup = AsyncMock(return_value=TIResult(vt_total=70))
+    abuse_lookup = AsyncMock(return_value=TIResult(abuse_confidence=5))
+    write_cache = AsyncMock()
+    monkeypatch.setattr(enrichment.virustotal, "lookup_ip", vt_lookup)
+    monkeypatch.setattr(enrichment.abuseipdb, "lookup_ip", abuse_lookup)
+    monkeypatch.setattr(enrichment, "_write_cache", write_cache)
+    return vt_lookup, abuse_lookup, write_cache
+
+
+NON_PUBLIC_IPS = [
+    "10.10.10.23",      # private
+    "192.168.1.42",     # private
+    "203.0.113.5",      # documentation (TEST-NET-3)
+    "198.51.100.23",    # documentation (TEST-NET-2)
+    "127.0.0.1",        # loopback
+    "0.0.0.0",          # unspecified
+    "not-an-ip",        # invalid
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ip", NON_PUBLIC_IPS)
+async def test_enrich_log_never_looks_up_a_non_public_ip(monkeypatch, _mock_opensearch_update, ip):
+    vt_lookup, abuse_lookup, write_cache = _mock_providers(monkeypatch)
+    session = _FakeSession()
+    log = _make_log(source_ip=ip)
+
+    result = await enrichment.enrich_log(session, log)
+
+    vt_lookup.assert_not_awaited()
+    abuse_lookup.assert_not_awaited()
+    write_cache.assert_not_awaited()
+    assert session.added == []
+    _mock_opensearch_update.assert_not_awaited()
+    assert result.ti_enriched is False and result.ti_result is None
+
+
+@pytest.mark.asyncio
+async def test_enrich_log_with_a_private_ip_falls_through_to_its_file_hash(monkeypatch):
+    vt_lookup, abuse_lookup, _ = _mock_providers(monkeypatch)
+    hash_lookup = AsyncMock(return_value=TIResult(vt_malicious=0, vt_total=70))
+    monkeypatch.setattr(enrichment.virustotal, "lookup_hash", hash_lookup)
+
+    result = await enrichment.enrich_log(_FakeSession(), _make_log(source_ip="10.10.10.23", file_hash="ab" * 32, severity="high"))
+
+    vt_lookup.assert_not_awaited()
+    abuse_lookup.assert_not_awaited()
+    hash_lookup.assert_awaited_once_with("ab" * 32)
+    assert result.ti_enriched is True and result.ti_result.file_hash == "ab" * 32
+
+
+@pytest.mark.asyncio
+async def test_enrich_log_looks_up_a_public_ip(monkeypatch):
+    vt_lookup, abuse_lookup, write_cache = _mock_providers(monkeypatch)
+
+    result = await enrichment.enrich_log(_FakeSession(), _make_log(source_ip="140.246.61.93"))
+
+    vt_lookup.assert_awaited_once_with("140.246.61.93")
+    abuse_lookup.assert_awaited_once_with("140.246.61.93")
+    assert write_cache.await_count == 2
+    assert result.ti_enriched is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ip", NON_PUBLIC_IPS)
+async def test_enrich_indicator_and_refresh_never_look_up_a_non_public_ip(monkeypatch, ip):
+    vt_lookup, abuse_lookup, write_cache = _mock_providers(monkeypatch)
+
+    await enrichment.enrich_indicator(_FakeSession(), ip)
+    await enrichment.refresh_ip(_FakeSession(), ip)
+
+    vt_lookup.assert_not_awaited()
+    abuse_lookup.assert_not_awaited()
+    write_cache.assert_not_awaited()
+
+
+# ── VirusTotal 404 is cached like a clean result ─────────────────
+
+def _vt_status(monkeypatch, status_code: int) -> Mock:
+    response = Mock(status_code=status_code)
+    response.raise_for_status.side_effect = requests.exceptions.HTTPError(f"{status_code} error")
+    get = Mock(return_value=response)
+    monkeypatch.setattr(enrichment.virustotal.requests, "get", get)
+    monkeypatch.setattr(enrichment.virustotal, "_enforce_rate_limit", lambda: None)
+    return get
+
+
+def _fetch_hash():
+    return enrichment.virustotal.lookup_hash("ab" * 32)
+
+
+@pytest.mark.asyncio
+async def test_a_vt_404_is_cached_as_not_found_and_the_next_lookup_hits_the_cache(monkeypatch):
+    get = _vt_status(monkeypatch, 404)
+    first_session = _FakeSession()
+
+    first = await enrichment._get_or_fetch(first_session, "ab" * 32, TIProvider.VIRUSTOTAL, _fetch_hash)
+
+    assert first.not_found is True and first.is_malicious is False
+    assert get.call_count == 1
+    [row] = first_session.added
+    assert row.result["not_found"] is True and row.is_malicious is False
+    clean_expiry = datetime.now(timezone.utc) + timedelta(seconds=settings.TI_CACHE_CLEAN_TTL)
+    assert abs((row.expires_at - clean_expiry).total_seconds()) < 60
+
+    second = await enrichment._get_or_fetch(_FakeSession(cache_rows=[row]), "ab" * 32, TIProvider.VIRUSTOTAL, _fetch_hash)
+
+    assert get.call_count == 1  # served from ti_cache: VirusTotal not called again
+    assert second.not_found is True
+
+
+@pytest.mark.asyncio
+async def test_a_vt_500_still_fails_and_falls_back(monkeypatch):
+    _vt_status(monkeypatch, 500)
+
+    with pytest.raises(VirusTotalError):
+        await _fetch_hash()
+
+    nothing_cached = _FakeSession()
+    assert await enrichment._get_or_fetch(nothing_cached, "ab" * 32, TIProvider.VIRUSTOTAL, _fetch_hash) is None
+    assert nothing_cached.added == []
+
+    stale = _FakeCacheRow({"vt_malicious": 2, "vt_total": 70, "is_malicious": True}, True, datetime.now(timezone.utc) - timedelta(days=1))
+    fallback = await enrichment._get_or_fetch(_FakeSession(cache_rows=[stale]), "ab" * 32, TIProvider.VIRUSTOTAL, _fetch_hash)
+    assert fallback.vt_malicious == 2 and fallback.not_found is False
+
+
+@pytest.mark.asyncio
+async def test_merged_alert_result_carries_vt_not_found(monkeypatch):
+    monkeypatch.setattr(enrichment.virustotal, "lookup_hash", AsyncMock(return_value=TIResult(file_hash="ab" * 32, not_found=True)))
+
+    enriched = await enrichment.enrich_log(_FakeSession(), _make_log(file_hash="ab" * 32, severity="critical"))
+
+    assert enriched.ti_result.not_found is True
+
+
+# ── HASH_ENRICHMENT_MIN_SEVERITY gate ────────────────────────────
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("minimum, severity, looked_up", [
+    ("high", "low", False),
+    ("high", "medium", False),
+    ("high", "high", True),
+    ("high", "critical", True),
+    ("low", "low", True),
+    ("critical", "high", False),
+    ("critical", "critical", True),
+    ("off", "low", False),
+    ("off", "critical", False),
+])
+async def test_hash_enrichment_respects_the_minimum_severity(monkeypatch, _mock_opensearch_update, minimum, severity, looked_up):
+    monkeypatch.setattr(enrichment.settings, "HASH_ENRICHMENT_MIN_SEVERITY", minimum)
+    hash_lookup = AsyncMock(return_value=TIResult(vt_total=70))
+    monkeypatch.setattr(enrichment.virustotal, "lookup_hash", hash_lookup)
+
+    result = await enrichment.enrich_log(_FakeSession(), _make_log(file_hash="ab" * 32, severity=severity))
+
+    assert hash_lookup.await_count == (1 if looked_up else 0)
+    assert result.ti_enriched is looked_up
+    assert _mock_opensearch_update.await_count == (1 if looked_up else 0)
+
+
+@pytest.mark.asyncio
+async def test_the_hash_gate_does_not_affect_ip_enrichment(monkeypatch):
+    monkeypatch.setattr(enrichment.settings, "HASH_ENRICHMENT_MIN_SEVERITY", "off")
+    vt_lookup, abuse_lookup, _ = _mock_providers(monkeypatch)
+
+    result = await enrichment.enrich_log(_FakeSession(), _make_log(source_ip="140.246.61.93", severity="low"))
+
+    vt_lookup.assert_awaited_once()
+    abuse_lookup.assert_awaited_once()
+    assert result.ti_enriched is True
+
+
+def test_hash_enrichment_min_severity_rejects_unknown_values():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Settings(HASH_ENRICHMENT_MIN_SEVERITY="sometimes")
+
+
+# ── Threat-intel card status for a VirusTotal "not found" row ────
+
+class _IntelRow:
+    def __init__(self, provider: TIProvider, result: TIResult):
+        self.indicator, self.provider = "140.246.61.93", provider
+        self.result = result.model_dump(mode="json")
+        self.is_malicious, self.created_at = False, datetime.now(timezone.utc)
+
+
+class _IntelDb:
+    def __init__(self, rows):
+        self._rows = rows
+
+    async def execute(self, stmt):
+        return self
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return self._rows
+
+
+@pytest.mark.asyncio
+async def test_ip_threat_intel_reports_vt_not_found_rather_than_legacy():
+    db = _IntelDb([
+        _IntelRow(TIProvider.VIRUSTOTAL, TIResult(source_ip="140.246.61.93", not_found=True)),
+        _IntelRow(TIProvider.ABUSEIPDB, TIResult(source_ip="140.246.61.93")),
+    ])
+
+    intel = (await get_ip_threat_intel(db, ["140.246.61.93"]))["140.246.61.93"]
+
+    assert intel.vt_status == TIDetailStatus.NOT_FOUND
+    assert intel.vt is None
+    assert intel.abuse_status == TIDetailStatus.LEGACY

@@ -63,7 +63,13 @@ def transform(raw: dict[str, Any]) -> dict[str, Any]:
 
     action = (raw.get("Service") or {}).get("Action") or {}
     network_action = action.get("NetworkConnectionAction") or {}
-    remote_ip = (network_action.get("RemoteIpDetails") or {}).get("IpAddressV4")
+    api_call_action = action.get("AwsApiCallAction") or {}
+    # Network findings carry the remote IP on NetworkConnectionAction;
+    # IAM/API findings (e.g. Recon:IAMUser/*) on AwsApiCallAction.
+    remote_ip = (
+        (network_action.get("RemoteIpDetails") or {}).get("IpAddressV4")
+        or (api_call_action.get("RemoteIpDetails") or {}).get("IpAddressV4")
+    )
     remote_port = (network_action.get("RemotePortDetails") or {}).get("Port")
     local_port = (network_action.get("LocalPortDetails") or {}).get("Port")
 

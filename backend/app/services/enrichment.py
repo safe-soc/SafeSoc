@@ -4,6 +4,11 @@ Given a NormalizedLog with an IP or file-hash indicator, checks
 ti_cache first (SS-024), calls the matching client(s) (SS-022/023) on
 a miss, writes the result back to the cache and to the OpenSearch
 document's ti_result/ti_enriched/risk_score fields (SRS §3.3/§3.4).
+
+Only globally routable IPs are ever looked up: a private, reserved,
+loopback, documentation or unparseable address gets no provider call
+and no ti_cache row — no third party could say anything about it, and
+sending internal addresses out would leak network layout for nothing.
 """
 
 from datetime import datetime, timezone
@@ -16,10 +21,11 @@ from app.clients import abuseipdb, virustotal
 from app.clients.abuseipdb import AbuseIPDBError
 from app.clients.virustotal import VirusTotalError
 from app.core.config import settings
-from app.core.enums import TIProvider
+from app.core.enums import Severity, TIProvider
 from app.db.opensearch import update_alert_ti_fields
 from app.models.ti_cache import TICache, compute_expiry
 from app.schemas.log import NormalizedLog, TIResult
+from app.services.ip_threat_intel import is_public_ip
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -144,6 +150,7 @@ def _merge(
         abuse_confidence=abuse.abuse_confidence,
         abuse_total_reports=abuse.abuse_total_reports,
         is_malicious=vt.is_malicious or abuse.is_malicious,
+        not_found=vt.not_found,
         # Each provider's details come only from its own result, so
         # neither can blank the other out.
         vt=vt.vt,
@@ -163,11 +170,31 @@ async def refresh_ip(db: AsyncSession, ip: str) -> TIResult:
     (each still falls back to its stale row if its call fails). Blocking
     provider clients (VirusTotal's rate limiter sleeps) — call only from
     the Celery worker (tasks/enrichment.py::refresh_indicator), never
-    from a request handler.
+    from a request handler. A non-public IP is never looked up.
     """
+    if not is_public_ip(ip):
+        return TIResult(source_ip=ip)
     vt = await _get_or_fetch(db, ip, TIProvider.VIRUSTOTAL, lambda: virustotal.lookup_ip(ip), force=True)
     abuse = await _get_or_fetch(db, ip, TIProvider.ABUSEIPDB, lambda: abuseipdb.lookup_ip(ip), force=True)
     return _merge(source_ip=ip, vt=vt, abuse=abuse)
+
+
+_SEVERITY_RANK = {Severity.LOW: 0, Severity.MEDIUM: 1, Severity.HIGH: 2, Severity.CRITICAL: 3}
+
+
+def hash_lookup_allowed(severity: Severity) -> bool:
+    """
+    Whether a log of this severity may have its file_hash looked up
+    (settings.HASH_ENRICHMENT_MIN_SEVERITY; "off" = never). Hashes are
+    gated and IPs are not because Sysmon attaches a hash to every
+    process start/file delete: looking all of them up would exhaust
+    VirusTotal's free tier (4/min) almost immediately and leave the
+    enrichment worker blocked in the rate limiter.
+    """
+    minimum = settings.HASH_ENRICHMENT_MIN_SEVERITY
+    if minimum == "off":
+        return False
+    return _SEVERITY_RANK[Severity(severity)] >= _SEVERITY_RANK[Severity(minimum)]
 
 
 async def _get_hash_result(db: AsyncSession, file_hash: str) -> TIResult:
@@ -182,32 +209,32 @@ async def enrich_indicator(db: AsyncSession, indicator: str) -> TIResult:
     path enrich_log() already uses per-alert, reused here for a
     standalone indicator rather than duplicating the provider-lookup
     orchestration. Domain indicators aren't looked up (VirusTotal/
-    AbuseIPDB clients here are IP/hash-oriented) — a non-IP indicator
-    returns an empty (all-None) TIResult rather than raising.
+    AbuseIPDB clients here are IP/hash-oriented) — a non-IP indicator,
+    like a non-public IP, returns an empty (all-None) TIResult rather
+    than raising.
     """
-    import ipaddress
-
-    try:
-        ipaddress.ip_address(indicator)
-    except ValueError:
+    if not is_public_ip(indicator):
         return TIResult()
     return await _get_ip_result(db, indicator)
 
 
 async def enrich_log(db: AsyncSession, log: NormalizedLog) -> NormalizedLog:
     """
-    Enrich a NormalizedLog against its primary indicator — source_ip
-    takes priority over file_hash if a log somehow carries both, since
-    IP reputation is the more common first SOC signal. A log with
-    neither is a no-op: returned unchanged, no cache/OpenSearch writes.
+    Enrich a NormalizedLog against its primary indicator — a public
+    source_ip takes priority over file_hash if a log carries both, since
+    IP reputation is the more common first SOC signal. A non-public
+    source_ip is never looked up, so such a log falls through to its
+    file_hash — looked up only at or above HASH_ENRICHMENT_MIN_SEVERITY
+    (see hash_lookup_allowed) — or, with neither, is a no-op: returned unchanged ("not
+    enriched"), no cache/OpenSearch writes.
 
     Returns a new NormalizedLog with ti_result/ti_enriched/risk_score
     set, after also writing those fields back to the OpenSearch
     document (update-by-id) and to ti_cache.
     """
-    if log.source_ip:
+    if log.source_ip and is_public_ip(log.source_ip):
         ti_result = await _get_ip_result(db, log.source_ip)
-    elif log.file_hash:
+    elif log.file_hash and hash_lookup_allowed(log.severity):
         ti_result = await _get_hash_result(db, log.file_hash)
     else:
         return log

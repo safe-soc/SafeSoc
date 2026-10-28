@@ -57,6 +57,7 @@ from app.services import incidents as incidents_service
 from app.services import investigation_session as investigation_session_service
 from app.services.audit import record_event
 from app.services.incident_evidence import get_incident_evidence
+from app.services.ip_threat_intel import is_public_ip
 from app.services.realtime import publish_event
 from app.services.soar import _maybe_complete_run, transition_action_status
 from app.utils.logger import get_logger
@@ -163,6 +164,8 @@ async def _execute_enrich_indicator(db: AsyncSession, tenant_id: uuid.UUID, inci
         ipaddress.ip_address(indicator)
     except ValueError:
         return {"success": True, "skipped": True, "message": f"[SafeSOC] Skipped — indicator '{indicator}' is not an IP, so no enrichment provider is available for it.", "indicator": indicator, "is_malicious": None}
+    if not is_public_ip(indicator):
+        return {"success": True, "skipped": True, "message": f"[SafeSOC] Skipped — '{indicator}' is a private/reserved address, not looked up.", "indicator": indicator, "is_malicious": None}
 
     ti_result = await enrichment_service.enrich_indicator(db, indicator)
     if not await enrichment_service.has_ti_data(db, indicator):

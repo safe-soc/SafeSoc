@@ -13,7 +13,7 @@ import LevelBadge from './LevelBadge';
 import MitreBadge from './MitreBadge';
 import StatusBadge from './StatusBadge';
 import Timestamp from './Timestamp';
-import { dismissReasonLabel, incidentTitle, ipOwnerSummary } from '../lib/format';
+import { dismissReasonLabel, incidentTitle, ipOwnerSummary, VT_NOT_FOUND_LABEL, vtNotFound } from '../lib/format';
 import type { AlertContext, AlertDocument } from '../lib/types';
 
 type Row = [label: string, value: ReactNode];
@@ -231,6 +231,7 @@ export default function AlertDetails({ context }: { context: AlertContext }) {
                       <span className="text-slate-500">·</span>
                       {entry.ti.is_malicious ? <span className="text-red-400">Malicious</span> : <span className="text-slate-300">Clean</span>}
                       {ipOwnerSummary(entry.ti) && <span className="text-xs text-slate-500">· {ipOwnerSummary(entry.ti)}</span>}
+                      {vtNotFound(entry.ti) && <span className="text-xs text-slate-500">· {VT_NOT_FOUND_LABEL}</span>}
                       <button type="button" onClick={() => setIntelIp(ip)} className="text-xs text-blue-400 hover:underline">
                         View threat intel
                       </button>

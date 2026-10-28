@@ -10,7 +10,7 @@
 import { useState } from 'react';
 import IpIntelCard from './IpIntelCard';
 import LevelBadge from './LevelBadge';
-import { ipOwnerSummary } from '../lib/format';
+import { ipOwnerSummary, VT_NOT_FOUND_LABEL, vtNotFound } from '../lib/format';
 import type { IncidentEvidence } from '../lib/types';
 
 function EmptyRow({ label }: { label: string }) {
@@ -91,6 +91,7 @@ export default function EvidenceExplorer({
                   </span>
                 )}
                 {ipOwnerSummary(ip.ti) && <span className="text-xs text-slate-500">{ipOwnerSummary(ip.ti)}</span>}
+                {vtNotFound(ip.ti) && <span className="text-xs text-slate-500">{VT_NOT_FOUND_LABEL}</span>}
                 {ip.ti && (
                   <button
                     type="button"
